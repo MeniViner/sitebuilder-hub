@@ -1,0 +1,30 @@
+
+> sitebuilder-hub@0.1.1 dev
+> concurrently -n server,client -c blue,green "npm run dev:server" "npm run dev:client"
+
+[server] 
+[server] > sitebuilder-hub@0.1.1 dev:server
+[server] > npm --prefix server run dev
+[server] 
+[client] 
+[client] > sitebuilder-hub@0.1.1 dev:client
+[client] > npm --prefix client run dev
+[client] 
+[server] 
+[server] > sitebuilder-hub-server@0.1.0 dev
+[server] > tsx watch src/index.ts
+[server] 
+[client] 
+[client] > sitebuilder-hub-client@0.1.0 dev
+[client] > vite --port 5177
+[client] 
+[client] 
+[client]   [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m450[22m[2m[0m ms[22m
+[client] 
+[client]   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5177[22m/[39m
+[client] [2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[server] {"timestamp":"2026-05-14T10:51:25.287Z","level":"info","category":"env","message":"Runtime configuration loaded","nodeEnv":"development","serverPort":4100,"clientOrigin":"http://localhost:5177","authEnabled":false,"jobWorkerEnabled":true,"jobWorkerPollMs":3000,"maintenanceSchedulerEnabled":true,"maintenanceSchedulerPollMs":60000,"rateLimitWindowMs":60000,"rateLimitMax":180,"sharePoint":{"writeEnabled":true,"unauthenticatedWriteAllowed":true,"hasAuthCookie":"[REDACTED]","hasBearerToken":"[REDACTED]","requestTimeoutMs":15000},"logging":{"all":false,"format":"json","verbosePayloads":true,"showSensitive":false,"categories":{"server":true,"http":true,"auth":true,"rateLimit":true,"db":true,"jobs":true,"audit":true,"sites":true,"releases":true,"backups":true,"monitoring":false,"admins":true,"operations":true,"sharepoint":true,"security":true,"errors":true,"performance":true}}}
+[server] {"timestamp":"2026-05-14T10:51:25.288Z","level":"info","category":"db","message":"MongoDB connect requested","mongoUri":"[REDACTED]"}
+[server] {"timestamp":"2026-05-14T10:51:25.289Z","level":"info","category":"db","message":"MongoDB connecting"}
+[server] {"timestamp":"2026-05-14T10:51:55.313Z","level":"warn","category":"db","message":"MongoDB connection event: disconnected"}
+[server] {"timestamp":"2026-05-14T10:51:55.315Z","level":"error","category":"errors","message":"Failed to start server","error":{"name":"MongooseServerSelectionError","message":"connect ECONNREFUSED 127.0.0.1:27017","stack":"MongooseServerSelectionError: connect ECONNREFUSED 127.0.0.1:27017\n    at _handleConnectionErrors (C:\\Users\\MeniV\\OneDrive - click\\Desktop\\personal\\projects\\idf\\siteBuilder\\sitebuilder-hub\\server\\node_modules\\mongoose\\lib\\connection.js:1169:11)\n    at NativeConnection.openUri (C:\\Users\\MeniV\\OneDrive - click\\Desktop\\personal\\projects\\idf\\siteBuilder\\sitebuilder-hub\\server\\node_modules\\mongoose\\lib\\connection.js:1100:11)\n    at async connectMongo (C:\\Users\\MeniV\\OneDrive - click\\Desktop\\personal\\projects\\idf\\siteBuilder\\sitebuilder-hub\\server\\src\\db\\mongo.ts:21:3)\n    at async bootstrap (C:\\Users\\MeniV\\OneDrive - click\\Desktop\\personal\\projects\\idf\\siteBuilder\\sitebuilder-hub\\server\\src\\index.ts:72:3)"}}

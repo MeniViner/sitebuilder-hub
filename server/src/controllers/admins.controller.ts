@@ -1,0 +1,196 @@
+import { Request, Response } from "express";
+import { ZodError } from "zod";
+import { fail, ok } from "../utils/http";
+import { normalizeError } from "../utils/errors";
+import { logger } from "../utils/logger";
+import { writeAuditLog } from "../services/audit.service";
+import {
+  addSiteAdmin,
+  buildAdminTxtRepairPlan,
+  enqueueAdminSync,
+  enqueueAdminTxtRepair,
+  getAdminsDiff,
+  getSiteAdmins,
+  removeSiteAdmin
+} from "../services/admins.service";
+import { readLiveAdminSources } from "../services/liveAdminSources.service";
+import { addAdminSchema, adminTxtRepairSchema, removeAdminSchema, syncAdminsSchema } from "../validators/admin.schema";
+
+const handleError = (error: unknown, res: Response) => {
+  if (error instanceof ZodError) {
+    logger.warn("admins", "Admins request validation failed", { issues: error.issues.length });
+    return fail(res, "VALIDATION_ERROR", "נתוני הבקשה אינם תקינים", error.flatten(), 400);
+  }
+  const normalized = normalizeError(error);
+  logger.error("admins", "Admins request failed", {
+    code: normalized.code,
+    error: normalized.message
+  });
+  return fail(res, normalized.code, normalized.message, normalized.details, normalized.status);
+};
+
+export const getAdmins = async (req: Request, res: Response) => {
+  try {
+    const data = await getSiteAdmins(req.params.id);
+    return ok(res, data);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const syncAdmins = async (req: Request, res: Response) => {
+  try {
+    const payload = syncAdminsSchema.parse(req.body || {});
+    const result = await enqueueAdminSync({
+      siteId: req.params.id,
+      createdBy: req.user?.name || "system",
+      mode: payload.mode
+    });
+
+    await writeAuditLog({
+      req,
+      action: "admins.sync",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: { mode: payload.mode, jobId: result.job._id.toString() }
+    });
+
+    return ok(res, result, undefined, 202);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const addAdmin = async (req: Request, res: Response) => {
+  try {
+    const payload = addAdminSchema.parse(req.body);
+    const site = await addSiteAdmin({
+      siteId: req.params.id,
+      admin: payload.admin
+    });
+
+    await writeAuditLog({
+      req,
+      action: "admins.add",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: { admin: payload.admin }
+    });
+
+    return ok(res, site);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const deleteAdmin = async (req: Request, res: Response) => {
+  try {
+    const payload = removeAdminSchema.parse({ source: req.query.source });
+    const site = await removeSiteAdmin({
+      siteId: req.params.id,
+      adminId: req.params.adminId,
+      source: payload.source
+    });
+
+    await writeAuditLog({
+      req,
+      action: "admins.remove",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: { adminId: req.params.adminId, source: payload.source }
+    });
+
+    return ok(res, site);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const getAdminsDiffEndpoint = async (req: Request, res: Response) => {
+  try {
+    const data = await getAdminsDiff(req.params.id);
+    return ok(res, data);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const readLiveAdminsEndpoint = async (req: Request, res: Response) => {
+  try {
+    const data = await readLiveAdminSources(req.params.id, { persist: false, capturedBy: req.user?.name || "system" });
+
+    await writeAuditLog({
+      req,
+      action: "admins.live-read",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: {
+        sourceStatus: data.sourceStatus,
+        adminsCount: data.adminsCount
+      }
+    });
+
+    return ok(res, data);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const planTxtAdminRepair = async (req: Request, res: Response) => {
+  try {
+    const payload = adminTxtRepairSchema.parse(req.body || {});
+    const reason = payload.reason || payload.notes || "";
+    const data = await buildAdminTxtRepairPlan(req.params.id, {
+      capturedBy: req.user?.name || "system",
+      reason
+    });
+
+    await writeAuditLog({
+      req,
+      action: "admins.repair-txt-plan",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: {
+        targetPath: data.targetPath,
+        readyForRepair: data.summary.readyForRepair,
+        missingInTxtCount: data.summary.missingInTxtCount,
+        reason
+      }
+    });
+
+    return ok(res, data);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const queueTxtAdminRepair = async (req: Request, res: Response) => {
+  try {
+    const payload = adminTxtRepairSchema.parse(req.body || {});
+    const reason = payload.reason || payload.notes || "";
+    const result = await enqueueAdminTxtRepair({
+      siteId: req.params.id,
+      createdBy: req.user?.name || "system",
+      reason
+    });
+
+    await writeAuditLog({
+      req,
+      action: "admins.repair-txt-queue",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: {
+        jobId: result.job._id.toString(),
+        targetPath: result.plan.targetPath,
+        missingInTxtCount: result.plan.summary.missingInTxtCount,
+        requiresApproval: result.requiresApproval,
+        approvalStatus: result.approvalStatus,
+        reason
+      }
+    });
+
+    return ok(res, result, undefined, 202);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
