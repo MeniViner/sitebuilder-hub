@@ -9,3 +9,6 @@ client/dist
 *.zip
 *.zip
 artifacts/
+*.zip
+*.7z
+artifacts/
