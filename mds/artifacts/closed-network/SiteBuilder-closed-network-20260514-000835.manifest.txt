@@ -1,0 +1,33 @@
+﻿Site Builder closed-network bundle
+Created: 2026-05-14T00:20:40
+Source: C:\Users\MeniV\OneDrive - click\Desktop\personal\projects\idf\siteBuilder
+Archive: C:\Users\MeniV\OneDrive - click\Desktop\personal\projects\idf\siteBuilder\sitebuilder-hub\artifacts\closed-network\SiteBuilder-closed-network-20260514-000835.zip
+Compression: NoCompression
+
+Included: source, lockfiles, dist outputs, node_modules, env examples, docs, scripts.
+Excluded: .git folders, .env secrets, existing archives, logs, temp files, and sitebuilder-hub/artifacts.
+
+Readiness results:
+[INFO] Project root - C:\Users\MeniV\OneDrive - click\Desktop\personal\projects\idf\siteBuilder
+[PASS] Lockfile: . - . has package-lock.json
+[PASS] Dependencies: . - . has node_modules (492.02 MB).
+[PASS] Lockfile: sitebuilder-hub - sitebuilder-hub has package-lock.json
+[PASS] Dependencies: sitebuilder-hub - sitebuilder-hub has node_modules (5.48 MB).
+[PASS] Lockfile: sitebuilder-hub\client - sitebuilder-hub\client has package-lock.json
+[PASS] Dependencies: sitebuilder-hub\client - sitebuilder-hub\client has node_modules (117.42 MB).
+[PASS] Lockfile: sitebuilder-hub\server - sitebuilder-hub\server has package-lock.json
+[PASS] Dependencies: sitebuilder-hub\server - sitebuilder-hub\server has node_modules (53.25 MB).
+[PASS] Lockfile: newAlphaAIBackend\newAlphaAIBackend - newAlphaAIBackend\newAlphaAIBackend has package-lock.json
+[PASS] Dependencies: newAlphaAIBackend\newAlphaAIBackend - newAlphaAIBackend\newAlphaAIBackend has node_modules (11.12 MB).
+[PASS] Build output: main app - dist exists (19.88 MB).
+[PASS] Build output: hub client - sitebuilder-hub\client\dist exists (336.85 KB).
+[PASS] Build output: hub server - sitebuilder-hub\server\dist exists (222.78 KB).
+[PASS] Env example - .env.example exists.
+[PASS] Env example - sitebuilder-hub\.env.example exists.
+[PASS] Env example - sitebuilder-hub\client\.env.example exists.
+[PASS] Env example - sitebuilder-hub\server\.env.example exists.
+[PASS] Env example - newAlphaAIBackend\newAlphaAIBackend\.env.example exists.
+[PASS] Node.js version - Node 22.12.0 found; minimum is 20.0.0.
+[PASS] npm version - npm 11.1.0 found; minimum is 10.0.0.
+[WARN] MongoDB version - mongosh 2.5.9 found, but no local MongoDB server version was verified on 127.0.0.1:27017. Include a MongoDB 7.0.0+ installer, portable runtime, Docker image, or internal service details with the handoff.
+[INFO] Archive exclusions - Secret env files will not be included by -CreateArchive: .env, .env.production, newAlphaAIBackend\newAlphaAIBackend\.env, sitebuilder-hub\.env, sitebuilder-hub\client\.env, sitebuilder-hub\server\.env
