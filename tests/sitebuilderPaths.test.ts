@@ -80,7 +80,8 @@ describe("server Site Builder path resolver", () => {
       siteContent: "/sites/bihs7134/siteDB/siteAssets/site_content_data.txt",
       theme: "/sites/bihs7134/siteDB/siteAssets/theme_data.txt",
       widgets: "/sites/bihs7134/siteUsersDb/widgets_data.txt",
-      externalLinks: "/sites/bihs7134/siteDB/siteAssets/external_links_data.txt"
+      externalLinks: "/sites/bihs7134/siteDB/siteAssets/external_links_data.txt",
+      gantt: "/sites/bihs7134/siteDB/siteAssets/gantt_data.txt"
     });
   });
 

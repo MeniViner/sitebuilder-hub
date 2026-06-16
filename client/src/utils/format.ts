@@ -57,7 +57,7 @@ export const versionStatusLabel = (status?: string) => {
 
 export const jobStatusLabel = (status?: string) => {
   const labels: Record<string, string> = {
-    "awaiting-approval": "ממתין לאישור",
+    "awaiting-approval": "אישור מתקדם",
     queued: "בתור",
     preflight: "בדיקה מקדימה",
     running: "רץ",

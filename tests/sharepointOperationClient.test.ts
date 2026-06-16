@@ -31,7 +31,8 @@ const testPaths = {
     siteContent: "/sites/alpha/siteDB/siteAssets/site_content_data.txt",
     theme: "/sites/alpha/siteDB/siteAssets/theme_data.txt",
     widgets: "/sites/alpha/siteUsersDb/widgets_data.txt",
-    externalLinks: "/sites/alpha/siteDB/siteAssets/external_links_data.txt"
+    externalLinks: "/sites/alpha/siteDB/siteAssets/external_links_data.txt",
+    gantt: "/sites/alpha/siteDB/siteAssets/gantt_data.txt"
   }
 } as const;
 
@@ -112,7 +113,7 @@ describe("SharePoint operation capabilities", () => {
     });
   });
 
-  it("can explicitly allow unauthenticated writes for closed-network operation", async () => {
+  it("does not treat unauthenticated write bypass as proof that SharePoint writes work", async () => {
     const client = await importSharePointClient({
       SHAREPOINT_WRITE_ENABLED: "true",
       SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE: "true"
@@ -122,14 +123,14 @@ describe("SharePoint operation capabilities", () => {
       writeEnabled: true,
       hasAuthMaterial: false,
       unauthenticatedWriteAllowed: true,
-      writeAvailable: true,
+      writeAvailable: false,
       authMode: "none",
       authModes: [],
       digest: {
-        canRequest: true
-      },
-      reason: undefined
+        canRequest: false
+      }
     });
+    expect(client.getSharePointOperationCapabilities().reason).toContain("unauthenticated write bypass is not proof");
   });
 
   it("blocks write operations before any network call when capability is unavailable", async () => {
@@ -166,7 +167,7 @@ describe("SharePoint operation capabilities", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const client = await importSharePointClient({
       SHAREPOINT_WRITE_ENABLED: "true",
-      SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE: "true"
+      SHAREPOINT_BEARER_TOKEN: "test-token"
     });
 
     await expect(client.getRequestDigest(testPaths)).resolves.toBe("digest-value");
@@ -177,7 +178,8 @@ describe("SharePoint operation capabilities", () => {
         method: "POST",
         headers: {
           Accept: "application/json;odata=verbose",
-          "Content-Type": "application/json;odata=verbose"
+          "Content-Type": "application/json;odata=verbose",
+          Authorization: "Bearer test-token"
         }
       })
     );
@@ -212,7 +214,7 @@ describe("SharePoint operation capabilities", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const client = await importSharePointClient({
       SHAREPOINT_WRITE_ENABLED: "true",
-      SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE: "true",
+      SHAREPOINT_BEARER_TOKEN: "test-token",
       SHAREPOINT_SITE_CREATE_POLL_ATTEMPTS: "2",
       SHAREPOINT_SITE_CREATE_POLL_INTERVAL_MS: "1"
     });
@@ -275,7 +277,7 @@ describe("SharePoint operation capabilities", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const client = await importSharePointClient({
       SHAREPOINT_WRITE_ENABLED: "true",
-      SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE: "true"
+      SHAREPOINT_BEARER_TOKEN: "test-token"
     });
 
     const result = await client.ensureSharePointSiteCollection(testPaths, {
@@ -312,7 +314,7 @@ describe("SharePoint operation capabilities", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const client = await importSharePointClient({
       SHAREPOINT_WRITE_ENABLED: "true",
-      SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE: "true"
+      SHAREPOINT_BEARER_TOKEN: "test-token"
     });
 
     await expect(client.ensureSharePointUser(testPaths, "bob@example.test", "digest-value")).resolves.toMatchObject({
@@ -340,7 +342,7 @@ describe("SharePoint operation capabilities", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const client = await importSharePointClient({
       SHAREPOINT_WRITE_ENABLED: "true",
-      SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE: "true"
+      SHAREPOINT_BEARER_TOKEN: "test-token"
     });
 
     await client.setSharePointSiteCollectionAdmin(
@@ -373,7 +375,7 @@ describe("SharePoint operation capabilities", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const client = await importSharePointClient({
       SHAREPOINT_WRITE_ENABLED: "true",
-      SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE: "true"
+      SHAREPOINT_BEARER_TOKEN: "test-token"
     });
 
     await client.removeSharePointUserFromGroup(

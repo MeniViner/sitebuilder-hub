@@ -148,7 +148,8 @@ export const getCanonicalBackupSourcePaths = (paths: SiteBuilderResolvedPaths) =
   paths.txtFiles.siteContent,
   paths.txtFiles.theme,
   paths.txtFiles.widgets,
-  paths.txtFiles.externalLinks
+  paths.txtFiles.externalLinks,
+  paths.txtFiles.gantt
 ];
 
 const getPathsForSite = (site: {

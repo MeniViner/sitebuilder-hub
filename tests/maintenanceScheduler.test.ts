@@ -32,7 +32,8 @@ vi.mock("../server/src/config/env", () => ({
     MAINTENANCE_SCHEDULER_ENABLED: true,
     MAINTENANCE_SCHEDULER_POLL_MS: 60000,
     MAINTENANCE_SCHEDULER_MAX_SITES_PER_TICK: 25
-  }
+  },
+  ownerDirectModeEnabled: () => false
 }));
 vi.mock("../server/src/utils/logger", () => ({ logger: mocks.logger }));
 

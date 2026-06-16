@@ -5,7 +5,10 @@ export type AuthUser = {
   name: string;
   role: UserRole;
   personalNumber?: string;
-  source?: "dev" | "api-key" | "hardcoded" | "bootstrap" | "site-admin";
+  source?: "dev" | "api-key" | "owner" | "bootstrap" | "site-admin" | "sharepoint";
+  loginName?: string;
+  email?: string;
+  identityMode?: "sharepoint-user" | "explicit-owner" | "local-fallback" | "api-key";
   isBootstrapAdmin?: boolean;
 };
 

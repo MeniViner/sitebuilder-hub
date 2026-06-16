@@ -29,6 +29,16 @@ export type SharePointReadOnlyHealthResult = {
   note?: string;
 };
 
+export type BrowserSharePointHealthRecordInput = {
+  checkedAt?: string;
+  connectorMode?: "browser-sharepoint";
+  targetSharePointSiteUrl?: string;
+  health?: Partial<SiteHealth>;
+  derivedHealthStatus?: ReturnType<typeof deriveHealthStatus> | string;
+  evidence?: HealthEvidence[];
+  note?: string;
+};
+
 export type FinalAppUrlHealthEvidence = HealthEvidence & {
   checkedAt: string;
 };
@@ -211,6 +221,71 @@ export async function runReadOnlySharePointHealthCheck(siteId: string): Promise<
     note: evidence.some((item) => item.authBlocked)
       ? "חלק מהבדיקות נחסמו על ידי SharePoint בגלל authentication/permissions; ערכים אלה לא עודכנו ככשל."
       : undefined
+  };
+}
+
+export async function recordBrowserSharePointHealthCheck(
+  siteId: string,
+  input: BrowserSharePointHealthRecordInput
+): Promise<SharePointReadOnlyHealthResult & { connectorMode: "browser-sharepoint"; source: "Browser SharePoint"; targetSharePointSiteUrl?: string }> {
+  logger.info("sites", "Browser SharePoint health evidence record started", { siteId });
+  const site = await Site.findById(siteId);
+  if (!site) throw new Error("site-not-found");
+
+  const resolvedPaths = resolveSiteBuilderPaths({
+    siteCode: site.siteCode,
+    sharePointHost: site.sharePointHost,
+    sharePointSiteUrl: site.sharePointSiteUrl,
+    siteDbLibrary: site.siteDbLibrary,
+    usersDbLibrary: site.usersDbLibrary,
+    bootstrapLibrary: site.bootstrapLibrary,
+    bootstrapFolder: site.bootstrapFolder,
+    widgetsDbTarget: site.widgetsDbTarget
+  });
+
+  const checkedAt = input.checkedAt ? new Date(input.checkedAt) : new Date();
+  const nextHealth = Object.fromEntries(
+    Object.entries(input.health || {}).filter(([, value]) => typeof value === "boolean")
+  ) as Partial<SiteHealth>;
+  const evidence = Array.isArray(input.evidence) ? input.evidence : [];
+
+  site.health = { ...(site.health as Partial<SiteHealth>), ...nextHealth } as any;
+  site.lastHealthCheckAt = Number.isNaN(checkedAt.getTime()) ? new Date() : checkedAt;
+  site.resolvedPaths = resolvedPaths as any;
+  site.sharePointStatus.documentLibrariesStatus =
+    nextHealth.siteDbExists === true && nextHealth.usersDbExists === true
+      ? "ok"
+      : nextHealth.siteDbExists === false || nextHealth.usersDbExists === false
+        ? "failed"
+        : site.sharePointStatus.documentLibrariesStatus || "unknown";
+  site.sharePointStatus.permissionsStatus =
+    nextHealth.permissionsOk === true ? "ok" : nextHealth.permissionsOk === false ? "warning" : site.sharePointStatus.permissionsStatus || "unknown";
+
+  await site.save();
+
+  const derivedHealthStatus = deriveHealthStatus(site.health, site.lastHealthCheckAt);
+  logger.info("sites", "Browser SharePoint health evidence recorded", {
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    derivedHealthStatus,
+    evidenceCount: evidence.length,
+    failedChecks: evidence.filter((item) => !item.ok).length,
+    authBlockedChecks: evidence.filter((item) => item.authBlocked).length
+  });
+
+  return {
+    checkedAt: site.lastHealthCheckAt.toISOString(),
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    connectorMode: "browser-sharepoint",
+    source: "Browser SharePoint",
+    targetSharePointSiteUrl: input.targetSharePointSiteUrl,
+    resolvedPaths,
+    capabilities: getSharePointOperationCapabilities(),
+    health: nextHealth,
+    derivedHealthStatus,
+    evidence,
+    note: input.note
   };
 }
 

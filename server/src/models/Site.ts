@@ -85,7 +85,8 @@ const txtFilePathsSchema = new Schema(
     siteContent: { type: String, default: "" },
     theme: { type: String, default: "" },
     widgets: { type: String, default: "" },
-    externalLinks: { type: String, default: "" }
+    externalLinks: { type: String, default: "" },
+    gantt: { type: String, default: "" }
   },
   { _id: false }
 );
@@ -123,6 +124,11 @@ const siteSchema = new Schema(
     siteCode: { type: String, required: true, unique: true, trim: true },
     displayName: { type: String, required: true, trim: true },
     description: { type: String, default: "" },
+    environment: {
+      type: String,
+      enum: ["unknown", "local", "dev", "test", "staging", "production"],
+      default: "unknown"
+    },
 
     sharePointHost: { type: String, default: "portal.army.idf" },
     sharePointSiteUrl: { type: String, required: true },

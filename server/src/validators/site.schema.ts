@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const statusEnum = z.enum(["active", "warning", "failed", "draft", "archived"]);
+const environmentEnum = z.enum(["unknown", "local", "dev", "test", "staging", "production"]);
 
 const optionalUrl = z
   .string()
@@ -47,6 +48,7 @@ export const createSiteSchema = z.object({
   siteCode: z.string().trim().min(1, "קוד אתר הוא שדה חובה"),
   displayName: z.string().trim().min(1, "שם אתר הוא שדה חובה"),
   description: z.string().optional(),
+  environment: environmentEnum.optional(),
 
   sharePointHost: z.string().optional(),
   sharePointSiteUrl: z.string().trim().url("יש להזין כתובת SharePoint תקינה"),

@@ -11,6 +11,7 @@ import {
   queueSiteBootstrap,
   queueSiteProvision,
   queuePermissionsSetup,
+  browserSharePointHealthCheckEvidence,
   readOnlySharePointHealthCheck,
   updateSite
 } from "../controllers/sites.controller";
@@ -19,6 +20,7 @@ import {
   getSiteDeployments,
   planRollbackSiteVersion,
   planSiteDeployVersion,
+  recordBrowserDeploymentEvidence,
   rollbackSiteVersion
 } from "../controllers/releases.controller";
 import {
@@ -48,6 +50,7 @@ router.patch("/:id", requireRole("operator"), updateSite);
 router.delete("/:id", requireRole("operator"), deleteSite);
 router.post("/:id/health-check/manual", requireRole("operator"), manualHealthCheck);
 router.post("/:id/health-check/sharepoint-readonly", requireRole("operator"), readOnlySharePointHealthCheck);
+router.post("/:id/health-check/browser-sharepoint", requireRole("operator"), browserSharePointHealthCheckEvidence);
 router.get("/:id/bootstrap/plan", requireRole("operator"), getSiteBootstrapPlan);
 router.post("/:id/bootstrap", requireRole("admin"), queueSiteBootstrap);
 router.get("/:id/provision/plan", requireRole("operator"), getSiteProvisionPlan);
@@ -57,6 +60,7 @@ router.post("/:id/permissions/setup", requireRole("admin"), queuePermissionsSetu
 
 router.post("/:id/deploy-version/plan", requireRole("operator"), planSiteDeployVersion);
 router.post("/:id/deploy-version", requireRole("admin"), deploySiteVersion);
+router.post("/:id/deployments/browser-evidence", requireRole("admin"), recordBrowserDeploymentEvidence);
 router.post("/:id/rollback-version/plan", requireRole("operator"), planRollbackSiteVersion);
 router.post("/:id/rollback-version", requireRole("admin"), rollbackSiteVersion);
 router.get("/:id/deployments", getSiteDeployments);

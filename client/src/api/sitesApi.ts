@@ -1,7 +1,8 @@
 import { Site, SitesStats, SiteHealth } from "../types/site";
 import { clientLogger } from "../utils/logger";
+import { normalizePersonalNumber as normalizeHubPersonalNumber } from "../utils/personalNumber";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4100/api";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4100/api";
 export const HUB_PERSONAL_NUMBER_STORAGE_KEY = "sitebuilderHubPersonalNumber";
 
 type ApiSuccess<T> = { ok: true; data: T; meta?: Record<string, unknown> };
@@ -11,7 +12,7 @@ export type AuthLoginResult = {
   authenticated: boolean;
   personalNumber: string;
   role: "admin";
-  source: "hardcoded" | "bootstrap" | "site-admin";
+  source: "owner" | "bootstrap" | "site-admin";
   isBootstrapAdmin: boolean;
   matchedSite: null | {
     siteId: string;
@@ -22,7 +23,7 @@ export type AuthLoginResult = {
 
 export type AuthBootstrapStatus = {
   personalNumberLoginEnabled: boolean;
-  hardcodedAdminsConfigured: number;
+  ownerPersonalNumberConfigured: number;
   envBootstrapAdminsConfigured: number;
   bootstrapAdminsConfigured: number;
   bootstrapPersonalNumberAuthAvailable: boolean;
@@ -35,8 +36,28 @@ export type WhoAmIResult = {
     name: string;
     role: "viewer" | "operator" | "admin";
     personalNumber?: string;
-    source?: "dev" | "api-key" | "hardcoded" | "bootstrap" | "site-admin";
+    source?: "dev" | "api-key" | "owner" | "bootstrap" | "site-admin" | "sharepoint";
+    loginName?: string;
+    email?: string;
+    identityMode?: "sharepoint-user" | "explicit-owner" | "local-fallback" | "api-key";
     isBootstrapAdmin?: boolean;
+  };
+};
+
+export type SharePointCurrentUserResult = {
+  mode: "sharepoint-hosted" | "local-dev" | "unknown";
+  attempted: boolean;
+  ok: boolean;
+  url: string;
+  status?: number;
+  statusText?: string;
+  error?: string;
+  user?: {
+    id?: number | string;
+    title: string;
+    loginName: string;
+    email?: string;
+    personalNumber?: string;
   };
 };
 
@@ -46,6 +67,17 @@ export type Release = {
   releaseType: "patch" | "minor" | "major" | "hotfix";
   notes?: string;
   artifactRef?: string;
+  artifactValidation?: {
+    artifactRef?: string;
+    artifactRoot?: string;
+    filesCount?: number;
+    totalSizeBytes?: number;
+    hasIndexHtml?: boolean;
+    hasManifest?: boolean;
+    readyForDeploy?: boolean;
+    validatedAt?: string;
+    validationError?: string;
+  };
   status: "active" | "deprecated";
   createdBy?: string;
   createdAt: string;
@@ -256,6 +288,10 @@ export type SharePointHealthResult = {
   health: SiteHealth;
   derivedHealthStatus: string;
   evidence: SharePointHealthEvidence[];
+  connectorMode?: "browser-sharepoint" | "backend-sharepoint";
+  targetSharePointSiteUrl?: string;
+  source?: string;
+  resolvedPaths?: Record<string, unknown>;
   note?: string;
 };
 
@@ -443,9 +479,16 @@ export type OperationCapabilities = {
   sharePoint: {
     readAvailable: boolean;
     writeEnabled: boolean;
+    configured?: {
+      writeEnabled: boolean;
+      authCookieConfigured: boolean;
+      bearerTokenConfigured: boolean;
+      unauthenticatedWriteBypassEnabled: boolean;
+    };
     hasAuthMaterial: boolean;
     unauthenticatedWriteAllowed: boolean;
     writeAvailable: boolean;
+    writeVerified?: boolean;
     authMode: "bearer" | "cookie" | "none";
     reason?: string;
   };
@@ -461,14 +504,51 @@ export type PermissionsSetupPlan = {
   capabilities: OperationCapabilities["sharePoint"];
 };
 
+export type DeployMode = "local-dev-owner" | "production-safe";
+export type SharePointConnectorMode = "backend-sharepoint" | "browser-sharepoint";
+
+export type DeployPolicy = {
+  mode: DeployMode;
+  label: string;
+  productionSafeMode: boolean;
+  localDevOwnerMode: boolean;
+  requiresApproval: boolean;
+  requiresRecentVerifiedBackup: boolean;
+  ownerOverrideAllowed: boolean;
+  checkedAt: string;
+  warning: string;
+  blockers: string[];
+};
+
 export type DeployPlan = {
   generatedAt: string;
+  deployMode?: DeployMode;
+  connectorMode?: SharePointConnectorMode;
+  deployPolicy?: DeployPolicy;
   releaseId: string;
   releaseVersion: string;
   artifactRef: string;
   artifactRoot: string;
   siteId: string;
   siteCode: string;
+  target?: {
+    siteId: string;
+    siteCode: string;
+    siteDisplayName: string;
+    environment: string;
+    sharePointSiteUrl: string;
+    finalAppUrl: string;
+    currentKnownVersion: string;
+    currentVersionSource: "hub-metadata" | "unknown";
+    releaseVersion: string;
+    artifactPath: string;
+    targetDistPath: string;
+    sharePointWriteConfigured: boolean;
+    backupRequired: boolean;
+    mode: DeployMode;
+    productionSafeMode: boolean;
+    localDevOwnerMode: boolean;
+  };
   files: Array<{
     relativePath: string;
     sourcePath: string;
@@ -483,6 +563,8 @@ export type DeployPlan = {
     hasManifest: boolean;
     readyForDeploy: boolean;
     readyForDeployExecution?: boolean;
+    targetInventoryReadOk?: boolean;
+    staleTargetFilesCount?: number;
   };
   capabilities: {
     readAvailable: boolean;
@@ -493,11 +575,71 @@ export type DeployPlan = {
     authMode: "bearer" | "cookie" | "none";
     reason?: string;
   };
+  blockers?: string[];
+  missingRequirements?: string[];
   notes: string[];
   targetInventory?: DeployTargetInventory;
   staleTargetFiles?: DeployTargetInventoryFile[];
   approvalSummary?: string | Record<string, unknown>;
   approvalSnapshot?: unknown;
+};
+
+export type BatchDeployTargetMode = "single" | "selected" | "all";
+export type BatchDeployTargetStatus = "ready" | "warning" | "blocked" | "up_to_date";
+
+export type BatchDeployPlanRow = {
+  siteId: string;
+  siteCode: string;
+  displayName: string;
+  environment: string;
+  currentVersion: string;
+  targetVersion: string;
+  alreadyUpToDate: boolean;
+  included: boolean;
+  status: BatchDeployTargetStatus;
+  blockers: string[];
+  warnings: string[];
+  plan?: DeployPlan;
+};
+
+export type BatchDeployPlan = {
+  generatedAt: string;
+  dryRun: true;
+  releaseId: string;
+  releaseVersion: string;
+  targetMode: BatchDeployTargetMode;
+  targetSiteIds: string[];
+  deployMode: DeployMode;
+  connectorMode?: SharePointConnectorMode;
+  summary: {
+    totalSelectedSites: number;
+    readySites: number;
+    blockedSites: number;
+    warningSites: number;
+    alreadyUpToDateSites: number;
+    executionReady: boolean;
+  };
+  results: BatchDeployPlanRow[];
+  blockers: string[];
+  warnings: string[];
+};
+
+export type BatchDeployRequest = {
+  targetMode: BatchDeployTargetMode;
+  targetSiteIds?: string[];
+  deployMode?: DeployMode;
+  connectorMode?: SharePointConnectorMode;
+};
+
+export type BatchDeployResult = {
+  plan: BatchDeployPlan;
+  queued: number;
+  skippedUpToDate: number;
+  jobs: Job[];
+  deployments: SiteDeployment[];
+  requiresApproval: boolean;
+  approvalStatus: string;
+  message: string;
 };
 
 export type DeployTargetInventoryFile = {
@@ -523,6 +665,14 @@ export type DeployTargetInventoryFile = {
 };
 
 export type DeployTargetInventory = {
+  checkedAt?: string;
+  root?: string;
+  readOk?: boolean;
+  filesCount?: number;
+  staleFilesCount?: number;
+  filesSample?: DeployTargetInventoryFile[];
+  staleFiles?: DeployTargetInventoryFile[];
+  failedFolders?: Array<{ path: string; error?: string; status?: number; statusText?: string; authBlocked?: boolean }>;
   generatedAt?: string;
   targetRoot?: string;
   distRoot?: string;
@@ -627,6 +777,63 @@ export type ReleaseArtifactValidation = {
   };
   sampleFiles: Array<{ relativePath: string; sourcePath: string; sizeBytes: number; sha256: string }>;
   notes: string[];
+};
+
+export type ReleaseArtifactManifestFile = {
+  relativePath: string;
+  targetRelativePath: string;
+  sizeBytes: number;
+  contentType: string;
+  sha256: string;
+  deployable: boolean;
+};
+
+export type ReleaseArtifactManifest = {
+  generatedAt: string;
+  releaseId: string;
+  version: string;
+  artifactRef: string;
+  artifactRoot: string;
+  files: ReleaseArtifactManifestFile[];
+  summary: {
+    filesCount: number;
+    deployableFilesCount: number;
+    totalSizeBytes: number;
+    hasIndexHtml: boolean;
+    hasManifest: boolean;
+    readyForDeploy: boolean;
+  };
+};
+
+export type ReleaseArtifactFileResponse = {
+  blob: Blob;
+  relativePath: string;
+  sizeBytes: number;
+  sha256: string;
+  contentType: string;
+};
+
+export type BrowserDeployEvidencePayload = {
+  releaseId: string;
+  deployMode?: DeployMode;
+  connectorMode: "browser-sharepoint";
+  targetSite?: {
+    siteId?: string;
+    siteCode?: string;
+    sharePointSiteUrl?: string;
+  };
+  targetPaths?: {
+    targetDistPath?: string;
+    finalAppUrl?: string;
+  };
+  uploadedFilesEvidence?: DeploymentVerificationEvidence[];
+  readBackEvidence?: DeploymentVerificationEvidence[];
+  errors?: Array<{ relativePath?: string; targetPath?: string; error: string; status?: number } | string>;
+  startedAt?: string;
+  completedAt?: string;
+  finalStatus: "success" | "failed";
+  versionBefore?: string;
+  versionAfter?: string;
 };
 
 export type AllBackupPlans = {
@@ -748,9 +955,183 @@ export type MonitoringRefreshResult = {
   fingerprints: string[];
 };
 
-const normalizePersonalNumber = (value: string) => String(value || "").replace(/\D/g, "");
+export type DiagnosticsResult = {
+  generatedAt: string;
+  appMode: string;
+  frontendOrigin: string;
+  configuredClientOrigin: string;
+  configuredClientOrigins: string[];
+  currentApiBaseUrl: string;
+  mongo: string;
+  auth: {
+    authEnabled: boolean;
+    activeBackendUser: WhoAmIResult["user"];
+    ownerDirectMode: boolean;
+    localFallbackActive: boolean;
+    currentUserDetectionResult: string;
+  };
+  sharePoint: {
+    targetSiteUrl: string;
+    preferredConnectorMode?: "browser-sharepoint" | "backend-sharepoint";
+    writeEnabled: boolean;
+    authCookieConfigured: boolean;
+    authCookieNames?: string[];
+    bearerTokenConfigured: boolean;
+    unauthenticatedWriteBypassEnabled: boolean;
+    capabilities: OperationCapabilities["sharePoint"] & {
+      configured?: {
+        writeEnabled: boolean;
+        authCookieConfigured: boolean;
+        bearerTokenConfigured: boolean;
+        unauthenticatedWriteBypassEnabled: boolean;
+      };
+      writeVerified?: boolean;
+    };
+  };
+  selectedSite?: Partial<Site> | null;
+  paths?: {
+    siteBaseUrl: string;
+    siteRoot: string;
+    libraryName: string;
+    folderPath: string;
+    finalRestUrl: string;
+    resolvedPaths: Record<string, unknown>;
+    checks: Array<Record<string, string>>;
+  } | null;
+  envWarnings: string[];
+};
+
+export type SharePointDiagnosticsCheck = {
+  generatedAt: string;
+  connectorMode?: "backend-sharepoint";
+  appMode?: string;
+  targetSharePointSiteUrl?: string;
+  site?: Partial<Site> | null;
+  configured?: Record<string, boolean | string[]>;
+  currentUser?: Record<string, unknown>;
+  readTest?: Record<string, unknown>;
+  digestTest?: Record<string, unknown>;
+  writeCapability?: Record<string, unknown>;
+  paths?: { siteBaseUrl: string; checks: Array<Record<string, string>> };
+  overall?: {
+    reachable: boolean;
+    authenticated: boolean;
+    digestWorks: boolean;
+    writeVerified: boolean;
+    failedUrl?: string;
+    failedStatus?: number;
+    failedBackendErrorCode?: string;
+    humanExplanation?: string;
+    suggestedFix?: string;
+  };
+  ok?: boolean;
+  errorCode?: string;
+  humanExplanation?: string;
+  suggestedFix?: string;
+};
+
+export const normalizePersonalNumber = (value: string) => normalizeHubPersonalNumber(value);
+let sharePointCurrentUser: SharePointCurrentUserResult["user"] | null = null;
 
 const canUseStorage = () => typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+
+const isLocalHostName = (host: string) =>
+  ["localhost", "127.0.0.1", "::1"].includes(host) || host.endsWith(".localhost");
+
+export const getClientRuntimeMode = () => {
+  if (typeof window === "undefined") return "unknown" as const;
+  return isLocalHostName(window.location.hostname) ? "local-dev" as const : "sharepoint-hosted" as const;
+};
+
+export function setSharePointCurrentUserForApi(user?: SharePointCurrentUserResult["user"] | null) {
+  sharePointCurrentUser = user ?? null;
+  clientLogger.info("auth", "SharePoint current user set for API headers", {
+    hasUser: Boolean(sharePointCurrentUser),
+    loginName: sharePointCurrentUser?.loginName,
+    hasTitle: Boolean(sharePointCurrentUser?.title)
+  });
+}
+
+const payloadData = (payload: any) => payload?.d || payload;
+
+export function extractPersonalNumberFromSharePointCurrentUser(
+  user?: SharePointCurrentUserResult["user"] | null
+): string | null {
+  const raw = [user?.loginName, user?.email]
+    .filter(Boolean)
+    .join(" ");
+
+  const match = raw.match(/s?\d{6,8}/i);
+  if (!match) return null;
+
+  const digits = match[0].replace(/\D/g, "");
+  if (!digits) return null;
+
+  return `s${digits}`;
+}
+
+export async function detectSharePointCurrentUser(): Promise<SharePointCurrentUserResult> {
+  const mode = getClientRuntimeMode();
+  const url = "/_api/web/currentuser";
+
+  if (mode === "local-dev") {
+    return {
+      mode,
+      attempted: false,
+      ok: false,
+      url,
+      error: "local-dev"
+    };
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json;odata=verbose" },
+      credentials: "include",
+      redirect: "follow"
+    });
+    const result: SharePointCurrentUserResult = {
+      mode,
+      attempted: true,
+      ok: response.ok,
+      url,
+      status: response.status,
+      statusText: response.statusText
+    };
+
+    if (!response.ok) {
+      result.error = `sharepoint-current-user-failed:${response.status}`;
+      setSharePointCurrentUserForApi(null);
+      return result;
+    }
+
+    const payload = payloadData(await response.json());
+    const user = {
+      id: payload?.Id ?? payload?.id,
+      title: String(payload?.Title || payload?.title || payload?.LoginName || payload?.loginName || "").trim(),
+      loginName: String(payload?.LoginName || payload?.loginName || "").trim(),
+      email: String(payload?.Email || payload?.email || "").trim()
+    };
+    result.user = user;
+    setSharePointCurrentUserForApi(user);
+    const detectedPersonalNumber = extractPersonalNumberFromSharePointCurrentUser(user);
+    if (detectedPersonalNumber) {
+      setHubPersonalNumber(detectedPersonalNumber);
+    }
+    return result;
+  } catch (error) {
+    const result = {
+      mode,
+      attempted: true,
+      ok: false,
+      url,
+      error: error instanceof Error ? error.message : String(error)
+    };
+    setSharePointCurrentUserForApi(null);
+    return result;
+  }
+}
 
 export function getHubPersonalNumber() {
   if (!canUseStorage()) {
@@ -791,9 +1172,23 @@ function withAuthHeaders(headersInit?: HeadersInit, requestId?: string) {
   if (requestId && !headers.has("x-request-id")) {
     headers.set("x-request-id", requestId);
   }
-  const personalNumber = getHubPersonalNumber();
+  const personalNumber =
+    getHubPersonalNumber() ||
+    extractPersonalNumberFromSharePointCurrentUser(sharePointCurrentUser) ||
+    "";
   if (personalNumber && !headers.has("x-personal-number")) {
     headers.set("x-personal-number", personalNumber);
+  }
+  if (sharePointCurrentUser) {
+    if (sharePointCurrentUser.id !== undefined && !headers.has("x-sharepoint-user-id")) {
+      headers.set("x-sharepoint-user-id", String(sharePointCurrentUser.id));
+    }
+    if (sharePointCurrentUser.loginName && !headers.has("x-sharepoint-login-name")) {
+      headers.set("x-sharepoint-login-name", sharePointCurrentUser.loginName);
+    }
+    if (sharePointCurrentUser.email && !headers.has("x-sharepoint-email")) {
+      headers.set("x-sharepoint-email", sharePointCurrentUser.email);
+    }
   }
   return headers;
 }
@@ -955,6 +1350,14 @@ export const sitesApi = {
       })
     ),
   archive: async (id: string) => parseResponse<Site>(await apiFetch(`${API_BASE_URL}/sites/${id}`, { method: "DELETE" })),
+  restoreFromArchive: async (id: string) =>
+    parseResponse<Site>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}`, {
+        method: "PATCH",
+        ...asJson({ status: "active" })
+      })
+    ),
+  deletePermanently: async (id: string) => parseResponse<Site>(await apiFetch(`${API_BASE_URL}/sites/${id}?force=true`, { method: "DELETE" })),
   updateManualHealth: async (id: string, health: SiteHealth) =>
     parseResponse<Site>(
       await apiFetch(`${API_BASE_URL}/sites/${id}/health-check/manual`, {
@@ -967,6 +1370,13 @@ export const sitesApi = {
       await apiFetch(`${API_BASE_URL}/sites/${id}/health-check/sharepoint-readonly`, {
         method: "POST",
         ...asJson({})
+      })
+    ),
+  recordBrowserSharePointHealth: async (id: string, result: SharePointHealthResult) =>
+    parseResponse<SharePointHealthResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/health-check/browser-sharepoint`, {
+        method: "POST",
+        ...asJson(result)
       })
     ),
   siteProvisionPlan: async (id: string) => parseResponse<SiteProvisionPlan>(await apiFetch(`${API_BASE_URL}/sites/${id}/provision/plan`)),
@@ -1002,34 +1412,71 @@ export const sitesApi = {
     ),
 
   releases: async () => parseResponse<Release[]>(await apiFetch(`${API_BASE_URL}/releases`)),
-  createRelease: async (payload: { version?: string; releaseType: string; notes?: string; artifactRef?: string }) =>
+  createRelease: async (payload: { version?: string; releaseType: Release["releaseType"]; notes?: string; artifactRef?: string }) =>
     parseResponse<Release>(
       await apiFetch(`${API_BASE_URL}/releases`, {
         method: "POST",
         ...asJson(payload)
       })
     ),
-  deployReleaseAll: async (releaseId: string, onlyOutdated = false) =>
+  deployReleaseAll: async (releaseId: string, onlyOutdated = false, deployMode: DeployMode = "production-safe") =>
     parseResponse<{ queuedJobs: number }>(
       await apiFetch(`${API_BASE_URL}/releases/${releaseId}/deploy-all`, {
         method: "POST",
-        ...asJson({ onlyOutdated })
+        ...asJson({ onlyOutdated, deployMode })
+      })
+    ),
+  deploymentPlan: async (releaseId: string, payload: BatchDeployRequest) =>
+    parseResponse<BatchDeployPlan>(
+      await apiFetch(`${API_BASE_URL}/releases/${releaseId}/deployment-plan`, {
+        method: "POST",
+        ...asJson(payload)
+      })
+    ),
+  deployBatch: async (releaseId: string, payload: BatchDeployRequest & { confirmNoPartial?: boolean }) =>
+    parseResponse<BatchDeployResult>(
+      await apiFetch(`${API_BASE_URL}/releases/${releaseId}/deploy-batch`, {
+        method: "POST",
+        ...asJson({ confirmNoPartial: true, ...payload })
       })
     ),
   validateReleaseArtifact: async (releaseId: string) =>
     parseResponse<ReleaseArtifactValidation>(await apiFetch(`${API_BASE_URL}/releases/${releaseId}/artifact/validate`)),
-  deploySiteVersion: async (siteId: string, releaseId: string) =>
-    parseResponse<{ job: Job; deployment?: SiteDeployment; requiresApproval?: boolean; approvalStatus?: string; message?: string }>(
+  releaseArtifactManifest: async (releaseId: string) =>
+    parseResponse<ReleaseArtifactManifest>(await apiFetch(`${API_BASE_URL}/releases/${releaseId}/artifact/manifest`)),
+  releaseArtifactFile: async (releaseId: string, relativePath: string): Promise<ReleaseArtifactFileResponse> => {
+    const response = await apiFetch(`${API_BASE_URL}/releases/${releaseId}/artifact/file?path=${encodeURIComponent(relativePath)}`);
+    if (!response.ok) {
+      await parseResponse<never>(response);
+    }
+    const blob = await response.blob();
+    return {
+      blob,
+      relativePath: decodeURIComponent(response.headers.get("x-artifact-relative-path") || encodeURIComponent(relativePath)),
+      sizeBytes: Number(response.headers.get("x-artifact-size") || blob.size || 0),
+      sha256: response.headers.get("x-artifact-sha256") || "",
+      contentType: response.headers.get("content-type") || blob.type || "application/octet-stream"
+    };
+  },
+  deploySiteVersion: async (siteId: string, releaseId: string, deployMode: DeployMode = "production-safe") =>
+    parseResponse<{ job: Job; deployment?: SiteDeployment; requiresApproval?: boolean; approvalStatus?: string; message?: string; deployMode?: DeployMode; deployPolicy?: DeployPolicy }>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/deploy-version`, {
         method: "POST",
-        ...asJson({ releaseId })
+        ...asJson({ releaseId, deployMode })
       })
     ),
-  deploySiteVersionPlan: async (siteId: string, releaseId: string) =>
+  deploySiteVersionPlan: async (siteId: string, releaseId: string, deployMode: DeployMode = "production-safe", connectorMode: SharePointConnectorMode = "backend-sharepoint") =>
     parseResponse<DeployPlan>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/deploy-version/plan`, {
         method: "POST",
-        ...asJson({ releaseId })
+        ...asJson({ releaseId, deployMode, connectorMode })
+      })
+    ),
+  recordBrowserDeployEvidence: async (siteId: string, payload: BrowserDeployEvidencePayload) =>
+    parseResponse<{ deployment: SiteDeployment; site: Site; summary: Record<string, unknown> }>(
+      await apiFetch(`${API_BASE_URL}/sites/${siteId}/deployments/browser-evidence`, {
+        method: "POST",
+        ...asJson(payload)
       })
     ),
   rollbackSiteVersionPlan: async (siteId: string, releaseId: string, reason = "") =>
@@ -1048,11 +1495,11 @@ export const sitesApi = {
     ),
   siteDeployments: async (siteId: string) => parseResponse<SiteDeployment[]>(await apiFetch(`${API_BASE_URL}/sites/${siteId}/deployments`)),
   versionStatus: async () => parseResponse<any>(await apiFetch(`${API_BASE_URL}/version/status`)),
-  nextVersion: async (fromVersion: string) =>
+  nextVersion: async (fromVersion: string, releaseType: Release["releaseType"] = "patch") =>
     parseResponse<{ nextVersion: string }>(
       await apiFetch(`${API_BASE_URL}/version/next`, {
         method: "POST",
-        ...asJson({ fromVersion })
+        ...asJson({ fromVersion, releaseType })
       })
     ),
 
@@ -1194,5 +1641,13 @@ export const sitesApi = {
       })
     ),
   operationCapabilities: async () => parseResponse<OperationCapabilities>(await apiFetch(`${API_BASE_URL}/operations/capabilities`)),
-  siteOperationsSummary: async (siteId: string) => parseResponse<SiteOperationsSummary>(await apiFetch(`${API_BASE_URL}/operations/sites/${siteId}/summary`))
+  siteOperationsSummary: async (siteId: string) => parseResponse<SiteOperationsSummary>(await apiFetch(`${API_BASE_URL}/operations/sites/${siteId}/summary`)),
+  diagnostics: async (siteId?: string) => parseResponse<DiagnosticsResult>(await apiFetch(`${API_BASE_URL}/diagnostics${siteId ? `?siteId=${encodeURIComponent(siteId)}` : ""}`)),
+  runSharePointDiagnostics: async (siteId?: string) =>
+    parseResponse<SharePointDiagnosticsCheck>(
+      await apiFetch(`${API_BASE_URL}/diagnostics/sharepoint-check`, {
+        method: "POST",
+        ...asJson(siteId ? { siteId } : {})
+      })
+    )
 };

@@ -98,12 +98,18 @@ vi.mock("../server/src/services/audit.service", () => ({
 vi.mock("../server/src/utils/logger", () => ({ logger: mocks.logger }));
 vi.mock("../server/src/config/env", () => ({
   env: {
+    NODE_ENV: "test",
     JOB_WORKER_ENABLED: false,
-    JOB_WORKER_POLL_MS: 3000
-  }
+    JOB_WORKER_POLL_MS: 3000,
+    HUB_LOCAL_DEV_DEPLOY_REQUIRES_BACKUP: false,
+    HUB_PRODUCTION_DEPLOY_REQUIRES_BACKUP: true,
+    HUB_PRODUCTION_DEPLOY_REQUIRES_APPROVAL: true,
+    HUB_ADVANCED_APPROVALS_ENABLED: true
+  },
+  ownerDirectModeEnabled: () => false
 }));
 
-const rollbackMessage = "Rollback job is awaiting approval before an older release overwrites the live SharePoint dist files.";
+const rollbackMessage = "Rollback job requires approval because advanced approvals are enabled.";
 
 const idOf = (value: string) => ({ toString: () => value });
 
@@ -279,13 +285,13 @@ describe("version rollback approval gating", () => {
         siteId: "site-1",
         createdBy: "operator",
         requiresApproval: true,
-        payload: {
+        payload: expect.objectContaining({
           releaseId: "release-1",
           deploymentId: "deployment-1",
           targetVersion: "1.1.0",
           rollback: true,
           rollbackReason: "bad deploy"
-        }
+        })
       })
     );
 

@@ -1,11 +1,12 @@
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
-import { env } from "./config/env";
+import { env, getClientOrigins } from "./config/env";
 import { getMongoStatus } from "./db/mongo";
 import auditRoutes from "./routes/audit.routes";
 import authRoutes from "./routes/auth.routes";
 import backupsRoutes from "./routes/backups.routes";
+import diagnosticsRoutes from "./routes/diagnostics.routes";
 import jobsRoutes from "./routes/jobs.routes";
 import monitoringRoutes from "./routes/monitoring.routes";
 import operationsRoutes from "./routes/operations.routes";
@@ -21,7 +22,14 @@ import { rateLimitMiddleware } from "./middlewares/rate-limit";
 export const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: env.CLIENT_ORIGIN }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    const allowedOrigins = getClientOrigins();
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS origin is not allowed: ${origin}`));
+  }
+}));
 app.use(express.json({ limit: "1mb" }));
 app.use(requestContextMiddleware);
 app.use(rateLimitMiddleware);
@@ -107,6 +115,7 @@ app.get("/api/health", (req, res) => {
 app.use(authMiddleware);
 app.use("/api/auth", authRoutes);
 
+app.use("/api/diagnostics", diagnosticsRoutes);
 app.use("/api/sites", sitesRoutes);
 app.use("/api/releases", releasesRoutes);
 app.use("/api/backups", backupsRoutes);

@@ -27,7 +27,8 @@ vi.mock("../server/src/models/MonitoringAlert", () => ({ MonitoringAlert: mocks.
 vi.mock("../server/src/config/env", () => ({
   env: {
     MONITORING_STALE_BACKUP_HOURS: 26
-  }
+  },
+  ownerDirectModeEnabled: () => false
 }));
 vi.mock("../server/src/utils/logger", () => ({ logger: mocks.logger }));
 

@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { sitesApi } from "../api/sitesApi";
 import { DerivedHealthStatus, Site, SiteStatus, SitesStats } from "../types/site";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DetailsDrawer } from "../components/DetailsDrawer";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
 import { FilterBar } from "../components/FilterBar";
@@ -41,12 +42,17 @@ export function SitesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedSite, setSelectedSite] = useState<Site | null>(null);
   const [siteToArchive, setSiteToArchive] = useState<Site | null>(null);
+  const [siteToRestore, setSiteToRestore] = useState<Site | null>(null);
+  const [siteToDelete, setSiteToDelete] = useState<Site | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"active" | "archive">("active");
+  const [notice, setNotice] = useState("");
 
   const loadSites = async () => {
     setLoading(true);
     setError("");
     try {
-      const response = await sitesApi.list();
+      const response = await sitesApi.list({ includeArchived: "true" });
       setAllSites(response.data);
       setStats(response.meta?.stats ?? defaultStats);
     } catch (err) {
@@ -72,6 +78,7 @@ export function SitesPage() {
   const sites = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return allSites
+      .filter((site) => activeTab === "archive" ? site.status === "archived" : site.status !== "archived")
       .filter((site) => !needle || [site.displayName, site.siteCode, site.ownerName, site.ownerPersonalNumber, site.unitName, site.ownerEmail].some((value) => (value || "").toLowerCase().includes(needle)))
       .filter((site) => (statusFilter === "all" ? true : site.status === statusFilter))
       .filter((site) => (healthFilter === "all" ? true : site.derivedHealthStatus === healthFilter))
@@ -80,7 +87,7 @@ export function SitesPage() {
         if (sortBy === "displayName") return a.displayName.localeCompare(b.displayName, "he");
         return new Date((b as any)[sortBy] || 0).getTime() - new Date((a as any)[sortBy] || 0).getTime();
       });
-  }, [allSites, search, statusFilter, healthFilter, versionFilter, sortBy]);
+  }, [activeTab, allSites, search, statusFilter, healthFilter, versionFilter, sortBy]);
 
   const clearFilters = () => {
     setSearch("");
@@ -90,17 +97,35 @@ export function SitesPage() {
     setSortBy("updatedAt");
   };
 
+  const activeFilterCount = [statusFilter !== "all", healthFilter !== "all", versionFilter !== "all", sortBy !== "updatedAt"].filter(Boolean).length;
+
   const onSave = async (payload: Partial<Site>, options: SiteFormSaveOptions) => {
+    setNotice("");
     try {
       if (selectedSite) await sitesApi.update(selectedSite._id, payload);
       else {
         const created = await sitesApi.create(payload);
-        if (options.bootstrapSharePoint) {
-          await sitesApi.queueSiteBootstrap(created.data._id, {
-            runProvisioning: true,
-            runPermissionsSetup: true,
-            reason: "Bootstrap queued from site creation"
-          });
+        if (options.flow === "track-existing" && options.runReadOnlyValidation) {
+          try {
+            const health = await sitesApi.runSharePointReadOnlyHealth(created.data._id);
+            setNotice(`האתר נשמר והבדיקה הסתיימה: ${health.data.derivedHealthStatus}.`);
+          } catch (validationError) {
+            setNotice(`האתר נשמר, אבל בדיקת הקריאה נכשלה: ${validationError instanceof Error ? validationError.message : "שגיאה לא ידועה"}`);
+          }
+        }
+        if (options.flow === "create-new" && options.bootstrapSharePoint) {
+          try {
+            const queued = await sitesApi.queueSiteBootstrap(created.data._id, {
+              runProvisioning: true,
+              runPermissionsSetup: true,
+              ...(options.bootstrapOptions || {})
+            });
+            const job = queued.data.job;
+            const approvalText = queued.data.requiresApproval ? " וממתין לאישור מתקדם" : "";
+            setNotice(`רשומת האתר נשמרה ונוצר Job הקמה ${job._id}${approvalText}.`);
+          } catch (queueError) {
+            setNotice(`רשומת האתר נשמרה, אבל יצירת SharePoint לא הופעלה: ${queueError instanceof Error ? queueError.message : "שגיאה לא ידועה"}`);
+          }
         }
       }
       setModalOpen(false);
@@ -118,11 +143,26 @@ export function SitesPage() {
     await loadSites();
   };
 
+  const restoreSelected = async () => {
+    if (!siteToRestore) return;
+    await sitesApi.restoreFromArchive(siteToRestore._id);
+    setSiteToRestore(null);
+    await loadSites();
+  };
+
+  const deleteSelected = async () => {
+    if (!siteToDelete) return;
+    await sitesApi.deletePermanently(siteToDelete._id);
+    setSiteToDelete(null);
+    await loadSites();
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="רשימת אתרים"
         subtitle="ניהול registry מרכזי לאתרי Site Builder. הרשומות כאן הן מקור ניהולי ב־Mongo; פעולות SharePoint מסומנות בנפרד."
+        helpKey="sites.registry"
         actions={
           <>
             <MetadataOnlyBadge mode="metadata" />
@@ -132,18 +172,35 @@ export function SitesPage() {
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard title="סה״כ רשומות" value={formatNumber(stats.total)} icon={<SlidersHorizontal size={18} />} description="אתרים רשומים ב־Hub" tone="info" />
-        <KpiCard title="פעילים" value={formatNumber(stats.active)} icon={<SlidersHorizontal size={18} />} description="סטטוס פעיל" tone="success" />
-        <KpiCard title="דורשים טיפול" value={formatNumber(stats.warning + stats.failed)} icon={<SlidersHorizontal size={18} />} description="warning או failed" tone={stats.warning + stats.failed ? "warning" : "success"} />
-        <KpiCard title="אחסון רשום" value={formatMb(stats.totalStorageMb)} icon={<SlidersHorizontal size={18} />} description="לפי metadata במערכת" tone="neutral" />
+        <KpiCard title="סה״כ רשומות" value={formatNumber(stats.total)} icon={<SlidersHorizontal size={18} />} description="אתרים רשומים ב־Hub" tone="info" variant="inline" helpKey="sites.registry" />
+        <KpiCard title="פעילים" value={formatNumber(stats.active)} icon={<SlidersHorizontal size={18} />} description="סטטוס פעיל" tone="success" variant="inline" helpKey="site.active" />
+        <KpiCard title="דורשים טיפול" value={formatNumber(stats.warning + stats.failed)} icon={<SlidersHorizontal size={18} />} description="warning או failed" tone={stats.warning + stats.failed ? "warning" : "success"} variant="inline" helpKey="monitoring.alert" />
+        <KpiCard title="אחסון רשום" value={formatMb(stats.totalStorageMb)} icon={<SlidersHorizontal size={18} />} description="לפי metadata במערכת" tone="neutral" variant="inline" helpKey="storage" />
       </div>
 
+      <div className="segmented-control w-fit">
+        <button className={activeTab === "active" ? "active" : ""} onClick={() => { setActiveTab("active"); setStatusFilter("all"); }} type="button">אתרים פעילים</button>
+        <button className={activeTab === "archive" ? "active" : ""} onClick={() => { setActiveTab("archive"); setStatusFilter("all"); }} type="button">ארכיון</button>
+      </div>
+
+      {notice ? (
+        <div className="soft-panel p-3 text-sm" style={{ color: "var(--text-strong)" }}>
+          {notice}
+        </div>
+      ) : null}
+
       <SectionCard
-        title="ניהול אתרים"
+        title={activeTab === "archive" ? "ארכיון אתרים" : "ניהול אתרים"}
         subtitle="חיפוש, סינון ומיון לפי סטטוס, תקינות וגרסה"
+        helpKey={activeTab === "archive" ? "site.archived" : "sites.registry"}
         actions={<button className="btn btn-secondary" onClick={loadSites} type="button"><RefreshCcw size={15} />רענן</button>}
       >
-        <FilterBar actions={<button className="btn btn-ghost" onClick={clearFilters} type="button">נקה סינונים</button>}>
+        <FilterBar actions={
+          <>
+            <button className="btn btn-secondary" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal size={15} />סינון מתקדם {activeFilterCount ? `(${activeFilterCount})` : ""}</button>
+            <button className="btn btn-ghost" onClick={clearFilters} type="button">נקה סינונים</button>
+          </>
+        }>
           <label className="block">
             <span className="field-label">חיפוש</span>
             <div className="relative">
@@ -151,6 +208,35 @@ export function SitesPage() {
               <input className="control pr-9" placeholder="שם, קוד, בעלים או יחידה" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
           </label>
+          <div className="flex flex-wrap items-end gap-2">
+            {statusFilter !== "all" ? <span className="badge badge-info">סטטוס: {statusFilter}</span> : null}
+            {healthFilter !== "all" ? <span className="badge badge-info">תקינות: {healthFilter}</span> : null}
+            {versionFilter !== "all" ? <span className="badge badge-info">גרסה: {versionFilter}</span> : null}
+            <span className="badge badge-neutral">מציג {formatNumber(sites.length)} מתוך {formatNumber(activeTab === "archive" ? stats.archived : allSites.length - stats.archived)}</span>
+          </div>
+        </FilterBar>
+
+        {loading ? <LoadingState /> : null}
+        {!loading && error ? <ErrorState message={error} onRetry={loadSites} /> : null}
+        {!loading && !error && allSites.length === 0 ? (
+          <EmptyState title="אין עדיין אתרים" description="התחל בהוספת אתר ראשון ל־registry. הפעולה אינה יוצרת אתר SharePoint." action={<button className="btn btn-primary" onClick={() => setModalOpen(true)} type="button"><Plus size={16} />הוסף אתר</button>} />
+        ) : null}
+        {!loading && !error && allSites.length > 0 && sites.length === 0 ? <EmptyState title="אין תוצאות" description="שנה סינונים או נקה אותם כדי לראות אתרים." /> : null}
+        {!loading && !error && sites.length > 0 ? (
+          <SitesTable
+            sites={sites}
+            onEdit={(site) => { setSelectedSite(site); setModalOpen(true); }}
+            onArchive={setSiteToArchive}
+            onRestore={setSiteToRestore}
+            onPermanentDelete={setSiteToDelete}
+            onDetails={(id) => navigate(`/sites/${id}`)}
+          />
+        ) : null}
+      </SectionCard>
+
+      <SiteFormModal open={modalOpen} site={selectedSite} onClose={() => setModalOpen(false)} onSave={onSave} />
+      <DetailsDrawer open={filtersOpen} title="סינון מתקדם" subtitle="סטטוס, תקינות, גרסה ומיון" onClose={() => setFiltersOpen(false)}>
+        <div className="space-y-4">
           <label className="block">
             <span className="field-label">סטטוס</span>
             <select className="control" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)}>
@@ -190,33 +276,37 @@ export function SitesPage() {
               <option value="displayName">שם אתר</option>
             </select>
           </label>
-        </FilterBar>
-
-        {loading ? <LoadingState /> : null}
-        {!loading && error ? <ErrorState message={error} onRetry={loadSites} /> : null}
-        {!loading && !error && allSites.length === 0 ? (
-          <EmptyState title="אין עדיין אתרים" description="התחל בהוספת אתר ראשון ל־registry. הפעולה אינה יוצרת אתר SharePoint." action={<button className="btn btn-primary" onClick={() => setModalOpen(true)} type="button"><Plus size={16} />הוסף אתר</button>} />
-        ) : null}
-        {!loading && !error && allSites.length > 0 && sites.length === 0 ? <EmptyState title="אין תוצאות" description="שנה סינונים או נקה אותם כדי לראות אתרים." /> : null}
-        {!loading && !error && sites.length > 0 ? (
-          <SitesTable
-            sites={sites}
-            onEdit={(site) => { setSelectedSite(site); setModalOpen(true); }}
-            onArchive={setSiteToArchive}
-            onDetails={(id) => navigate(`/sites/${id}`)}
-          />
-        ) : null}
-      </SectionCard>
-
-      <SiteFormModal open={modalOpen} site={selectedSite} onClose={() => setModalOpen(false)} onSave={onSave} />
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-secondary" type="button" onClick={clearFilters}>נקה סינונים</button>
+            <button className="btn btn-primary" type="button" onClick={() => setFiltersOpen(false)}>החל</button>
+          </div>
+        </div>
+      </DetailsDrawer>
       <ConfirmDialog
         open={Boolean(siteToArchive)}
-        title="לארכב אתר?"
-        description={`הפעולה מסמנת את ${siteToArchive?.displayName || "האתר"} כבארכיון ב־Hub בלבד. לא נמחקים קבצים או נתונים מ־SharePoint.`}
-        confirmLabel="ארכב ב־Hub"
+        title="להעביר לארכיון?"
+        description={`הפעולה מסמנת את ${siteToArchive?.displayName || "האתר"} בארכיון של ה־Hub בלבד. לא נמחקים קבצים או נתונים מ־SharePoint.`}
+        confirmLabel="העבר לארכיון"
         danger
         onClose={() => setSiteToArchive(null)}
         onConfirm={archiveSelected}
+      />
+      <ConfirmDialog
+        open={Boolean(siteToRestore)}
+        title="לשחזר מהארכיון?"
+        description={`האתר ${siteToRestore?.displayName || ""} יחזור לרשימת האתרים הפעילים.`}
+        confirmLabel="שחזר"
+        onClose={() => setSiteToRestore(null)}
+        onConfirm={restoreSelected}
+      />
+      <ConfirmDialog
+        open={Boolean(siteToDelete)}
+        title="מחיקה קבועה?"
+        description={`הפעולה מוחקת את רשומת ${siteToDelete?.displayName || "האתר"} מה־Hub. היא אינה מוחקת קבצי SharePoint.`}
+        confirmLabel="מחק לצמיתות"
+        danger
+        onClose={() => setSiteToDelete(null)}
+        onConfirm={deleteSelected}
       />
     </div>
   );

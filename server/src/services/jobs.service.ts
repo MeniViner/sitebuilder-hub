@@ -1,5 +1,5 @@
 import { Types } from "mongoose";
-import { env } from "../config/env";
+import { env, ownerDirectModeEnabled } from "../config/env";
 import { Job } from "../models/Job";
 import { logger } from "../utils/logger";
 
@@ -21,7 +21,7 @@ const normalizeActorId = (actor?: string) => String(actor || "").trim();
 const normalizeComparisonValue = (value?: unknown) => String(value || "").trim().toLowerCase();
 const normalizeDecisionReason = (reason?: string) => String(reason || "").trim();
 
-const approvalSeparationTypes = new Set<JobType>([
+const selfApprovalLoggedTypes = new Set<JobType>([
   "backup",
   "restore",
   "deploy",
@@ -39,6 +39,8 @@ const approvalTtlMs = () => {
   return normalizedHours * 60 * 60 * 1000;
 };
 
+export const approvalsEnabled = () => !ownerDirectModeEnabled();
+
 const formatApprovalSummary = (summary?: string | Record<string, unknown>) => {
   if (!summary) return "";
   if (typeof summary === "string") return summary.trim();
@@ -51,8 +53,8 @@ const formatApprovalSummary = (summary?: string | Record<string, unknown>) => {
   return [title || fallback, message].filter(Boolean).join(" - ");
 };
 
-const assertApprovalSeparation = (job: any, actorName: string, actorId = "") => {
-  if (!job.requiresApproval || !approvalSeparationTypes.has(job.type)) return;
+const logSelfApprovalIfSameActor = (job: any, actorName: string, actorId = "") => {
+  if (!job.requiresApproval || !selfApprovalLoggedTypes.has(job.type)) return;
 
   const normalizedActorName = normalizeComparisonValue(actorName);
   const normalizedActorId = normalizeComparisonValue(actorId);
@@ -70,7 +72,7 @@ const assertApprovalSeparation = (job: any, actorName: string, actorId = "") => 
 
   if (!sameActorById && !sameActorByName) return;
 
-  logger.warn("security", "Dangerous job self-approval blocked", {
+  logger.warn("security", "Job self-approval accepted", {
     jobId: job._id?.toString?.() || "",
     type: job.type,
     siteId: job.siteId?.toString?.(),
@@ -82,7 +84,6 @@ const assertApprovalSeparation = (job: any, actorName: string, actorId = "") => 
     approvedById: actorId,
     matchedBy: sameActorById ? "id" : "name"
   });
-  throw new Error("job-self-approval-forbidden");
 };
 
 export async function createJob(input: {
@@ -97,7 +98,8 @@ export async function createJob(input: {
   approvalSnapshot?: unknown;
   approvalExpiresAt?: Date;
 }) {
-  const requiresApproval = Boolean(input.requiresApproval);
+  const requestedApproval = Boolean(input.requiresApproval);
+  const requiresApproval = approvalsEnabled() ? requestedApproval : false;
   const createdBy = normalizeActorName(input.createdBy);
   const createdById = normalizeActorId(input.createdById);
   const now = new Date();
@@ -112,6 +114,8 @@ export async function createJob(input: {
     createdById,
     maxAttempts: input.maxAttempts ?? 3,
     requiresApproval,
+    requestedApproval,
+    ownerDirectMode: ownerDirectModeEnabled(),
     approvalSummary,
     approvalExpiresAt,
     payload: logger.isPayloadLoggingEnabled() ? input.payload : undefined,
@@ -130,7 +134,13 @@ export async function createJob(input: {
     attempt: 0,
     requiresApproval,
     approvalSummary,
-    approvalSnapshot: input.approvalSnapshot,
+    approvalSnapshot: requestedApproval && !requiresApproval
+      ? {
+          ...(typeof input.approvalSnapshot === "object" && input.approvalSnapshot !== null ? input.approvalSnapshot as Record<string, unknown> : {}),
+          approvalSkipped: true,
+          approvalSkippedReason: "owner-direct-mode"
+        }
+      : input.approvalSnapshot,
     approvalExpiresAt,
     approvalRequestedAt: requiresApproval ? now : undefined,
     approvalRequestedBy: requiresApproval ? createdBy : "",
@@ -164,7 +174,7 @@ export async function approveJobWithActor(jobId: string, approvedBy: { name: str
   if (job.approvalExpiresAt && job.approvalExpiresAt.getTime() < now.getTime()) {
     throw new Error("job-approval-expired");
   }
-  assertApprovalSeparation(job, actor, actorId);
+  logSelfApprovalIfSameActor(job, actor, actorId);
 
   logger.info("jobs", "Approving job", {
     jobId,

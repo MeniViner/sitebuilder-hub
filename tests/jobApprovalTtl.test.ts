@@ -19,7 +19,8 @@ vi.mock("../server/src/models/Job", () => ({ Job: mocks.Job }));
 vi.mock("../server/src/config/env", () => ({
   env: {
     JOB_APPROVAL_TTL_HOURS: 2
-  }
+  },
+  ownerDirectModeEnabled: () => false
 }));
 vi.mock("../server/src/utils/logger", () => ({ logger: mocks.logger }));
 
@@ -77,7 +78,7 @@ describe("job approval TTL defaults", () => {
     expect(mocks.Job.create.mock.calls[1][0].approvalExpiresAt).toBeUndefined();
   });
 
-  it("blocks self-approval for approval-gated dangerous jobs by actor name", async () => {
+  it("allows self-approval for approval-gated jobs and logs the same actor decision", async () => {
     const pendingJob = {
       _id: { toString: () => "job-self-1" },
       type: "backup",
@@ -86,15 +87,27 @@ describe("job approval TTL defaults", () => {
       createdBy: "Operator One",
       approvalRequestedBy: "Operator One"
     };
+    const updatedJob = { ...pendingJob, status: "queued", approvedBy: "Operator One" };
     mocks.Job.findById.mockResolvedValue(pendingJob);
+    mocks.Job.findByIdAndUpdate.mockResolvedValue(updatedJob);
 
     const { approveJob } = await import("../server/src/services/jobs.service");
-    await expect(approveJob("job-self-1", "Operator One", "looks good")).rejects.toThrow("job-self-approval-forbidden");
+    await expect(approveJob("job-self-1", "Operator One", "looks good")).resolves.toBe(updatedJob);
 
-    expect(mocks.Job.findByIdAndUpdate).not.toHaveBeenCalled();
+    expect(mocks.Job.findByIdAndUpdate).toHaveBeenCalledWith(
+      "job-self-1",
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: "queued",
+          approvedBy: "Operator One",
+          approvalDecisionReason: "looks good"
+        })
+      }),
+      { new: true }
+    );
     expect(mocks.logger.warn).toHaveBeenCalledWith(
       "security",
-      "Dangerous job self-approval blocked",
+      "Job self-approval accepted",
       expect.objectContaining({
         jobId: "job-self-1",
         type: "backup",
@@ -103,7 +116,7 @@ describe("job approval TTL defaults", () => {
     );
   });
 
-  it("allows a separate admin to approve and records approver identity", async () => {
+  it("allows another admin to approve and records approver identity", async () => {
     const pendingJob = {
       _id: { toString: () => "job-approve-1" },
       type: "restore",
@@ -119,7 +132,7 @@ describe("job approval TTL defaults", () => {
 
     const { approveJobWithActor } = await import("../server/src/services/jobs.service");
     await expect(
-      approveJobWithActor("job-approve-1", { name: "Admin Two", id: "pn:s2222222" }, "approved by separate admin")
+      approveJobWithActor("job-approve-1", { name: "Admin Two", id: "pn:s2222222" }, "approved by another admin")
     ).resolves.toBe(updatedJob);
 
     expect(mocks.Job.findByIdAndUpdate).toHaveBeenCalledWith(

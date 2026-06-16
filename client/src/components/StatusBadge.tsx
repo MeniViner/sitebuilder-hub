@@ -1,6 +1,7 @@
 import { AlertTriangle, Archive, BadgeCheck, CircleEllipsis, XCircle } from "lucide-react";
 import { ReactNode } from "react";
 import { siteStatusLabel } from "../utils/format";
+import { HelpIcon } from "./help/HelpIcon";
 
 export function StatusBadge({ status }: { status?: string }) {
   const map: Record<string, { tone: string; icon: ReactNode }> = {
@@ -12,5 +13,6 @@ export function StatusBadge({ status }: { status?: string }) {
   };
 
   const item = map[status || ""] ?? map.draft;
-  return <span className={`badge ${item.tone}`}>{item.icon}{siteStatusLabel(status)}</span>;
+  const helpKey = status === "archived" ? "site.archived" : status === "active" ? "site.active" : "job.status";
+  return <span className={`badge ${item.tone}`}>{item.icon}{siteStatusLabel(status)}<HelpIcon helpKey={helpKey} className="help-icon-in-token" /></span>;
 }

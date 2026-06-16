@@ -109,10 +109,11 @@ vi.mock("../server/src/config/env", () => ({
   env: {
     JOB_WORKER_ENABLED: false,
     JOB_WORKER_POLL_MS: 3000
-  }
+  },
+  ownerDirectModeEnabled: () => false
 }));
 
-const restoreMessage = "Restore job is awaiting approval before backup files overwrite live SharePoint files.";
+const restoreMessage = "Restore job requires approval because advanced approvals are enabled.";
 
 const restoreFiles = [
   {

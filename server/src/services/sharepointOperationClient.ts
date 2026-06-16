@@ -6,10 +6,17 @@ import { logger } from "../utils/logger";
 export type SharePointOperationCapabilities = {
   readAvailable: boolean;
   readUsesAuthMaterial: boolean;
+  configured: {
+    writeEnabled: boolean;
+    authCookieConfigured: boolean;
+    bearerTokenConfigured: boolean;
+    unauthenticatedWriteBypassEnabled: boolean;
+  };
   writeEnabled: boolean;
   hasAuthMaterial: boolean;
   unauthenticatedWriteAllowed: boolean;
   writeAvailable: boolean;
+  writeVerified: boolean;
   authMode: "bearer" | "cookie" | "none";
   authModes: Array<"bearer" | "cookie">;
   requestTimeoutMs: number;
@@ -354,7 +361,7 @@ const getSharePointCollectionPayload = async (
 export const getSharePointOperationCapabilities = (): SharePointOperationCapabilities => {
   const hasAuthMaterial = Boolean(env.SHAREPOINT_AUTH_COOKIE || env.SHAREPOINT_BEARER_TOKEN);
   const unauthenticatedWriteAllowed = env.SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE;
-  const writeAvailable = env.SHAREPOINT_WRITE_ENABLED && (hasAuthMaterial || unauthenticatedWriteAllowed);
+  const writeAvailable = env.SHAREPOINT_WRITE_ENABLED && hasAuthMaterial;
   const authModes = [
     env.SHAREPOINT_BEARER_TOKEN ? "bearer" as const : undefined,
     env.SHAREPOINT_AUTH_COOKIE ? "cookie" as const : undefined
@@ -367,16 +374,25 @@ export const getSharePointOperationCapabilities = (): SharePointOperationCapabil
   const reason = writeAvailable
     ? undefined
     : env.SHAREPOINT_WRITE_ENABLED
-      ? "SharePoint write is enabled, but no SHAREPOINT_AUTH_COOKIE, SHAREPOINT_BEARER_TOKEN, or SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE=true is configured."
+      ? unauthenticatedWriteAllowed && !hasAuthMaterial
+        ? "SharePoint write is enabled, but unauthenticated write bypass is not proof that SharePoint accepts writes. Configure SHAREPOINT_AUTH_COOKIE or SHAREPOINT_BEARER_TOKEN and verify contextinfo/digest."
+        : "SharePoint write is enabled, but no SHAREPOINT_AUTH_COOKIE or SHAREPOINT_BEARER_TOKEN is configured."
       : "SharePoint write is disabled. Set SHAREPOINT_WRITE_ENABLED=true and configure auth material to run real write operations.";
 
   const capabilities: SharePointOperationCapabilities = {
     readAvailable: true,
     readUsesAuthMaterial: hasAuthMaterial,
+    configured: {
+      writeEnabled: env.SHAREPOINT_WRITE_ENABLED,
+      authCookieConfigured: Boolean(env.SHAREPOINT_AUTH_COOKIE),
+      bearerTokenConfigured: Boolean(env.SHAREPOINT_BEARER_TOKEN),
+      unauthenticatedWriteBypassEnabled: unauthenticatedWriteAllowed
+    },
     writeEnabled: env.SHAREPOINT_WRITE_ENABLED,
     hasAuthMaterial,
     unauthenticatedWriteAllowed,
     writeAvailable,
+    writeVerified: false,
     authMode,
     authModes,
     requestTimeoutMs: env.SHAREPOINT_REQUEST_TIMEOUT_MS,

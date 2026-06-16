@@ -20,10 +20,14 @@ const envSchema = z.object({
   SERVER_PORT: z.coerce.number().int().positive("SERVER_PORT חייב להיות מספר חיובי").default(4100),
   MONGO_URI: z.string().min(1, "MONGO_URI הוא שדה חובה"),
   CLIENT_ORIGIN: z.string().url("CLIENT_ORIGIN חייב להיות URL תקין").default("http://localhost:5177"),
+  CLIENT_ORIGINS: z.string().default(""),
 
   AUTH_ENABLED: booleanFromEnv.default(false),
   API_KEY: z.string().min(8, "API_KEY חייב להכיל לפחות 8 תווים").default("dev-local-key"),
-  BOOTSTRAP_ADMIN_PERSONAL_NUMBERS: z.string().default("s8856096,s8856095"),
+  HUB_OWNER_PERSONAL_NUMBER: z.string().default(""),
+  BOOTSTRAP_ADMIN_PERSONAL_NUMBERS: z.string().default(""),
+  HUB_OWNER_DIRECT_MODE: booleanFromEnv.default(true),
+  HUB_ADVANCED_APPROVALS_ENABLED: booleanFromEnv.default(false),
 
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(180),
@@ -43,6 +47,9 @@ const envSchema = z.object({
   SHAREPOINT_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
   SHAREPOINT_SITE_CREATE_POLL_ATTEMPTS: z.coerce.number().int().positive().default(24),
   SHAREPOINT_SITE_CREATE_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5_000),
+  HUB_LOCAL_DEV_DEPLOY_REQUIRES_BACKUP: booleanFromEnv.default(false),
+  HUB_PRODUCTION_DEPLOY_REQUIRES_BACKUP: booleanFromEnv.default(true),
+  HUB_PRODUCTION_DEPLOY_REQUIRES_APPROVAL: booleanFromEnv.default(true),
 
   LOG_ALL: booleanFromEnv.default(false),
   LOG_FORMAT: z.enum(["json", "pretty"]).default("json"),
@@ -75,10 +82,14 @@ const parsed = envSchema.safeParse({
   SERVER_PORT: process.env.SERVER_PORT,
   MONGO_URI: process.env.MONGO_URI,
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN,
+  CLIENT_ORIGINS: process.env.CLIENT_ORIGINS,
 
   AUTH_ENABLED: process.env.AUTH_ENABLED,
   API_KEY: process.env.API_KEY,
+  HUB_OWNER_PERSONAL_NUMBER: process.env.HUB_OWNER_PERSONAL_NUMBER,
   BOOTSTRAP_ADMIN_PERSONAL_NUMBERS: process.env.BOOTSTRAP_ADMIN_PERSONAL_NUMBERS,
+  HUB_OWNER_DIRECT_MODE: process.env.HUB_OWNER_DIRECT_MODE,
+  HUB_ADVANCED_APPROVALS_ENABLED: process.env.HUB_ADVANCED_APPROVALS_ENABLED,
 
   RATE_LIMIT_WINDOW_MS: process.env.RATE_LIMIT_WINDOW_MS,
   RATE_LIMIT_MAX: process.env.RATE_LIMIT_MAX,
@@ -98,6 +109,9 @@ const parsed = envSchema.safeParse({
   SHAREPOINT_REQUEST_TIMEOUT_MS: process.env.SHAREPOINT_REQUEST_TIMEOUT_MS,
   SHAREPOINT_SITE_CREATE_POLL_ATTEMPTS: process.env.SHAREPOINT_SITE_CREATE_POLL_ATTEMPTS,
   SHAREPOINT_SITE_CREATE_POLL_INTERVAL_MS: process.env.SHAREPOINT_SITE_CREATE_POLL_INTERVAL_MS,
+  HUB_LOCAL_DEV_DEPLOY_REQUIRES_BACKUP: process.env.HUB_LOCAL_DEV_DEPLOY_REQUIRES_BACKUP,
+  HUB_PRODUCTION_DEPLOY_REQUIRES_BACKUP: process.env.HUB_PRODUCTION_DEPLOY_REQUIRES_BACKUP,
+  HUB_PRODUCTION_DEPLOY_REQUIRES_APPROVAL: process.env.HUB_PRODUCTION_DEPLOY_REQUIRES_APPROVAL,
 
   LOG_ALL: process.env.LOG_ALL,
   LOG_FORMAT: process.env.LOG_FORMAT,
@@ -131,3 +145,17 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+export const getClientOrigins = () => {
+  const origins = [
+    env.CLIENT_ORIGIN,
+    ...env.CLIENT_ORIGINS.split(",")
+  ]
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(origins));
+};
+
+export const ownerDirectModeEnabled = () =>
+  env.HUB_OWNER_DIRECT_MODE && !env.HUB_ADVANCED_APPROVALS_ENABLED;

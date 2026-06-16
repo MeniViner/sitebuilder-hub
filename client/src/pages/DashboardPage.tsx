@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, CheckCircle2, Clock3, Database, FolderKanban, GitBranch, ListChecks, ShieldAlert, Workflow, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, DatabaseBackup, FolderKanban, GitBranch, HeartPulse, Rocket, ShieldAlert, Workflow } from "lucide-react";
 import { Job, OperationCapabilities, sitesApi } from "../api/sitesApi";
 import { Site, SitesStats } from "../types/site";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
-import { HealthBadge } from "../components/HealthBadge";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
-import { StatusBadge } from "../components/StatusBadge";
-import { VersionBadge } from "../components/VersionBadge";
+import { StatusToken } from "../components/StatusToken";
 import { formatDateTime, formatNumber, jobStatusLabel, jobTypeLabel } from "../utils/format";
 
 const defaultStats: SitesStats = {
@@ -23,6 +21,27 @@ const defaultStats: SitesStats = {
   archived: 0,
   totalStorageMb: 0,
   health: { healthy: 0, warning: 0, failed: 0, unknown: 0 }
+};
+
+type CommandActionTone = "success" | "warning" | "danger" | "info" | "neutral";
+
+type CommandAction = {
+  key: string;
+  title: string;
+  description: string;
+  to: string;
+  actionLabel: string;
+  tone: CommandActionTone;
+  icon: JSX.Element;
+  meta?: string;
+};
+
+const actionToneClass: Record<CommandActionTone, string> = {
+  success: "panel-success",
+  warning: "panel-warning",
+  danger: "panel-danger",
+  info: "",
+  neutral: ""
 };
 
 export function DashboardPage() {
@@ -59,13 +78,7 @@ export function DashboardPage() {
   useEffect(() => { load(); }, []);
 
   const failedJobs = jobs.filter((job) => job.status === "failed");
-  const needsAttention = useMemo(
-    () =>
-      sites
-        .filter((site) => site.status === "warning" || site.status === "failed" || site.derivedHealthStatus === "warning" || site.derivedHealthStatus === "failed" || site.versionStatus === "outdated")
-        .slice(0, 7),
-    [sites]
-  );
+  const backupFailures = useMemo(() => sites.filter((site) => site.status !== "archived" && site.backupStatus === "failed"), [sites]);
   const outdatedSites = useMemo(() => (versionStatus?.sites || []).filter((row: any) => row.status === "outdated").slice(0, 7), [versionStatus]);
   const recentActivity = useMemo(() => {
     const siteRows = sites.flatMap((site) => [
@@ -78,8 +91,106 @@ export function DashboardPage() {
     return [...siteRows, ...jobRows].sort((a, b) => +new Date(b.at) - +new Date(a.at)).slice(0, 8);
   }, [sites, jobs]);
 
-  const verifiedCount = stats.health.healthy + stats.health.warning + stats.health.failed;
   const writeAvailable = Boolean(capabilities?.sharePoint.writeAvailable);
+  const commandActions = useMemo<CommandAction[]>(() => {
+    const actions: CommandAction[] = [];
+    const failedHealth = sites.filter((site) => site.status === "failed" || site.derivedHealthStatus === "failed");
+    const warningHealth = sites.filter((site) => site.status === "warning" || site.derivedHealthStatus === "warning");
+    const outdatedCount = versionStatus?.outdatedSites || 0;
+
+    if (failedJobs.length) {
+      actions.push({
+        key: "failed-jobs",
+        title: `${formatNumber(failedJobs.length)} פעולות נכשלו`,
+        description: "בדקו את תור הפעולות לפני הרצת פריסה, שחזור או תיקון נוסף.",
+        to: "/jobs",
+        actionLabel: "פתח תור פעולות",
+        tone: "danger",
+        icon: <Workflow size={18} />,
+        meta: "Execution risk"
+      });
+    }
+
+    if (failedHealth.length) {
+      actions.push({
+        key: "failed-health",
+        title: `${formatNumber(failedHealth.length)} אתרים במצב כשל`,
+        description: "אתרים עם health failed צריכים בדיקה לפני deploy או restore.",
+        to: `/sites/${failedHealth[0]._id}`,
+        actionLabel: "פתח אתר ראשון",
+        tone: "danger",
+        icon: <ShieldAlert size={18} />,
+        meta: failedHealth.slice(0, 2).map((site) => site.siteCode).join(", ")
+      });
+    }
+
+    if (outdatedCount) {
+      actions.push({
+        key: "outdated-sites",
+        title: `${formatNumber(outdatedCount)} אתרים מאחורי latest`,
+        description: "פתחו תוכנית פריסה, הריצו Dry-run, וקבלו blast-radius לפני Execute.",
+        to: "/releases",
+        actionLabel: "תכנן פריסה",
+        tone: "warning",
+        icon: <Rocket size={18} />,
+        meta: `Latest ${versionStatus?.latestVersion || "unknown"}`
+      });
+    }
+
+    if (backupFailures.length) {
+      actions.push({
+        key: "backup-failures",
+        title: `${formatNumber(backupFailures.length)} גיבויים נכשלו`,
+        description: "בדקו גיבויים לפני פעולות כתיבה רחבות או rollback.",
+        to: "/backups",
+        actionLabel: "בדוק Recovery",
+        tone: "warning",
+        icon: <DatabaseBackup size={18} />,
+        meta: backupFailures.slice(0, 2).map((site) => site.siteCode).join(", ")
+      });
+    }
+
+    if (warningHealth.length && actions.length < 6) {
+      actions.push({
+        key: "warning-health",
+        title: `${formatNumber(warningHealth.length)} אתרים באזהרה`,
+        description: "לא בהכרח חסום, אבל כדאי לבדוק לפני rollout רחב.",
+        to: `/sites/${warningHealth[0]._id}`,
+        actionLabel: "בדוק אזהרות",
+        tone: "warning",
+        icon: <HeartPulse size={18} />,
+        meta: warningHealth.slice(0, 2).map((site) => site.siteCode).join(", ")
+      });
+    }
+
+    if (!writeAvailable) {
+      actions.push({
+        key: "write-locked",
+        title: "כתיבה ל-SharePoint חסומה",
+        description: "אפשר לתכנן, לבדוק ולקרוא נתונים, אבל Execute חי ייחסם עד שתהיה יכולת כתיבה.",
+        to: "/settings",
+        actionLabel: "בדוק יכולות מערכת",
+        tone: "info",
+        icon: <ShieldAlert size={18} />,
+        meta: "Read-only boundary"
+      });
+    }
+
+    if (!actions.length) {
+      actions.push({
+        key: "all-clear",
+        title: "אין משימות דחופות",
+        description: "המערכת לא מזהה כרגע כשל, גרסה מיושנת או פעולה שנכשלה.",
+        to: "/sites",
+        actionLabel: "פתח Registry",
+        tone: "success",
+        icon: <CheckCircle2 size={18} />,
+        meta: "Operationally clear"
+      });
+    }
+
+    return actions.slice(0, 6);
+  }, [backupFailures, failedJobs, sites, versionStatus, writeAvailable]);
 
   if (loading) return <LoadingState label="טוען דשבורד..." />;
   if (error) return <ErrorState message={error} onRetry={load} />;
@@ -87,67 +198,57 @@ export function DashboardPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="דשבורד"
-        subtitle="תמונת מצב תפעולית לכל אתרי Site Builder הרשומים ב־Hub, עם הפרדה ברורה בין מידע מאומת לבין מטא־דאטה."
-        actions={<Link className="btn btn-primary" to="/sites"><FolderKanban size={16} />רשימת אתרים</Link>}
+        title="מרכז פיקוד"
+        subtitle="תור החלטות תפעולי: מה דורש פעולה, מה חסום, ומה בטוח להריץ עכשיו."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Link className="btn btn-primary" to="/releases"><Rocket size={16} />תכנן פריסה</Link>
+            <Link className="btn btn-secondary" to="/sites"><FolderKanban size={16} />אתרים מנוהלים</Link>
+          </div>
+        }
+        helpKey="dashboard.page"
       />
 
-      <div className="surface-card p-4">
-        <div className="grid gap-3 md:grid-cols-4">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-bold muted">Mongo Registry</span>
-            <MetadataOnlyBadge mode="metadata" />
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-bold muted">SharePoint Read</span>
-            <MetadataOnlyBadge mode="readonly" />
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-bold muted">SharePoint Write</span>
-            {writeAvailable ? <span className="badge badge-success">מחובר לכתיבה</span> : <MetadataOnlyBadge mode="notConnected" />}
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-bold muted">Auth</span>
-            <span className="badge badge-warning">Dev/API key</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard title="סה״כ אתרים" value={formatNumber(stats.total)} icon={<FolderKanban size={18} />} description="אתרים רשומים ב־Hub" tone="info" footer={<span className="muted">כולל טיוטות, ללא פריסת SharePoint מכאן</span>} />
-        <KpiCard title="דורשים טיפול" value={formatNumber(needsAttention.length)} icon={<AlertTriangle size={18} />} description="סטטוס warning/failed, תקינות בעייתית או גרסה מיושנת" tone={needsAttention.length ? "warning" : "success"} />
-        <KpiCard title="אתרים מיושנים" value={formatNumber(versionStatus?.outdatedSites || 0)} icon={<GitBranch size={18} />} description="לפי השוואת גרסאות ב־Mongo/release registry" tone={(versionStatus?.outdatedSites || 0) ? "warning" : "success"} />
-        <KpiCard title="Jobs שנכשלו" value={formatNumber(failedJobs.length)} icon={<XCircle size={18} />} description="פעולות תפעוליות שדורשות בדיקה" tone={failedJobs.length ? "danger" : "success"} />
-        <KpiCard title="תקינות נכשלה" value={formatNumber(stats.health.failed || 0)} icon={<ShieldAlert size={18} />} description="אתרים עם health failed" tone={stats.health.failed ? "danger" : "success"} />
-        <KpiCard title="נבדקו בפועל" value={`${stats.total ? Math.round((verifiedCount / stats.total) * 100) : 0}%`} icon={<ListChecks size={18} />} description="אתרים עם תוצאת health שאינה unknown" tone="info" />
-        <KpiCard title="פעילים" value={formatNumber(stats.active)} icon={<CheckCircle2 size={18} />} description="אתרים במצב פעיל" tone="success" />
-        <KpiCard title="לא נבדקו" value={formatNumber(stats.health.unknown || 0)} icon={<Clock3 size={18} />} description="דורשים בדיקת SharePoint read-only או health ידני" tone="neutral" />
+      <div className="grid gap-3 lg:grid-cols-3">
+        <KpiCard title="משימות פתוחות" value={formatNumber(commandActions.filter((item) => item.tone !== "success").length)} icon={<AlertTriangle size={18} />} description="פעולות שהמערכת ממליצה לבדוק עכשיו" tone={commandActions.some((item) => item.tone === "danger") ? "danger" : commandActions.some((item) => item.tone === "warning") ? "warning" : "success"} variant="hero" helpKey="monitoring.alert" />
+        <KpiCard title="אתרים מנוהלים" value={formatNumber(stats.total)} icon={<FolderKanban size={18} />} description={`${formatNumber(stats.active)} פעילים · ${formatNumber(stats.archived)} בארכיון`} tone="info" variant="hero" helpKey="sites.registry" />
+        <KpiCard title="מוכנות פריסה" value={formatNumber(versionStatus?.outdatedSites || 0)} icon={<GitBranch size={18} />} description="אתרים מאחורי latest שדורשים Dry-run לפני Execute" tone={(versionStatus?.outdatedSites || 0) ? "warning" : "success"} variant="hero" helpKey="version.outdated" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
-        <SectionCard title="דורשים טיפול" subtitle="אתרים עם תקלה, אזהרה או גרסה מיושנת">
-          {needsAttention.length === 0 ? (
-            <EmptyState title="אין אתרים דחופים" description="לא נמצאו אתרים עם סטטוס בעייתי או גרסה מיושנת." />
-          ) : (
-            <div className="space-y-2">
-              {needsAttention.map((site) => (
-                <Link key={site._id} className="soft-panel flex flex-wrap items-center justify-between gap-3 p-3 transition hover:border-[var(--border-strong)]" to={`/sites/${site._id}`}>
-                  <div>
-                    <p className="font-bold" style={{ color: "var(--text-strong)" }}>{site.displayName}</p>
-                    <p className="num mt-1 text-xs muted">{site.siteCode}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <StatusBadge status={site.status} />
-                    <HealthBadge status={site.derivedHealthStatus} />
-                    <VersionBadge status={site.versionStatus} />
-                  </div>
-                </Link>
-              ))}
+        <SectionCard
+          title="תור החלטות"
+          subtitle="משימות מדורגות לפי סיכון, עם פעולה מומלצת במקום רשימת סטטוסים בלבד."
+          helpKey="monitoring.alert"
+          actions={
+            <div className="flex flex-wrap gap-2">
+              <StatusToken kind={writeAvailable ? "writeEnabled" : "blocked"} label={writeAvailable ? "כתיבה זמינה" : "כתיבה חסומה"} helpKey={writeAvailable ? "sharepoint.write" : "sharepoint.writeBlocked"} />
+              <MetadataOnlyBadge mode="readonly" />
             </div>
-          )}
+          }
+        >
+          <div className="space-y-3">
+            {commandActions.map((item) => (
+              <Link key={item.key} className={`panel block p-3 transition hover:border-[var(--border-strong)] ${actionToneClass[item.tone]}`} to={item.to}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="kpi-icon mt-0.5" style={{ background: item.tone === "danger" ? "var(--danger-soft)" : item.tone === "warning" ? "var(--warning-soft)" : item.tone === "success" ? "var(--success-soft)" : "var(--info-soft)", color: item.tone === "danger" ? "var(--danger)" : item.tone === "warning" ? "var(--warning)" : item.tone === "success" ? "var(--success)" : "var(--info)" }}>
+                      {item.icon}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-bold" style={{ color: "var(--text-strong)" }}>{item.title}</p>
+                      <p className="mt-1 text-sm leading-6 muted">{item.description}</p>
+                      {item.meta ? <p className="num mt-2 text-xs subtle">{item.meta}</p> : null}
+                    </div>
+                  </div>
+                  <span className="btn btn-secondary min-h-0 px-2 py-1 text-xs">{item.actionLabel}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
         </SectionCard>
 
-        <SectionCard title="התפלגות תקינות" subtitle="Health status לפי הרשומות האחרונות">
+        <SectionCard title="התפלגות תקינות" subtitle="Health status לפי הרשומות האחרונות" helpKey="health">
           <div className="space-y-4">
             {[
               ["healthy", "תקין", stats.health.healthy, "var(--success)"],
@@ -170,8 +271,8 @@ export function DashboardPage() {
         </SectionCard>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-3">
-        <SectionCard title="פעילות אחרונה" subtitle="אתרים, health, גיבויים ו־Jobs">
+      <div className="grid gap-5 xl:grid-cols-[1fr_0.8fr]">
+        <SectionCard title="פעילות אחרונה" subtitle="Timeline תפעולי קומפקטי" helpKey="history">
           {recentActivity.length === 0 ? <EmptyState title="אין פעילות להצגה" description="פעולות אחרונות יופיעו כאן אחרי עדכונים או Jobs." /> : (
             <div className="space-y-2">
               {recentActivity.map((row, index) => (
@@ -184,24 +285,7 @@ export function DashboardPage() {
           )}
         </SectionCard>
 
-        <SectionCard title="Jobs אחרונים" subtitle="סטטוס תורים ופעולות">
-          {jobs.length === 0 ? <EmptyState title="אין Jobs" description="פעולות תפעוליות יופיעו כאן לאחר הרצה." /> : (
-            <div className="space-y-2">
-              {jobs.slice(0, 7).map((job) => (
-                <Link key={job._id} className="soft-panel block p-3" to="/jobs">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-bold" style={{ color: "var(--text-strong)" }}>{jobTypeLabel(job.type)}</p>
-                    <span className={`badge ${job.status === "failed" ? "badge-danger" : job.status === "succeeded" ? "badge-success" : "badge-info"}`}>{jobStatusLabel(job.status)}</span>
-                  </div>
-                  <div className="mt-2 progress-track"><div className="progress-fill" style={{ width: `${job.progressPercent || 0}%` }} /></div>
-                  <p className="num mt-2 text-xs muted">{formatDateTime(job.createdAt)}</p>
-                </Link>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-
-        <SectionCard title="אתרים מיושנים" subtitle="פער בין currentVersion ל־latest release">
+        <SectionCard title="אתרים מיושנים" subtitle="פער בין currentVersion ל־latest release" helpKey="version.outdated">
           {outdatedSites.length === 0 ? <EmptyState title="אין אתרים מיושנים" description="כל האתרים הרשומים מיושרים לגרסה האחרונה או שאין release פעיל." /> : (
             <div className="space-y-2">
               {outdatedSites.map((row: any) => (
@@ -216,23 +300,11 @@ export function DashboardPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="מה מאומת ומה מטא־דאטה" subtitle="הבהרה תפעולית חשובה">
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="soft-panel p-4">
-            <Database className="mb-2" size={18} style={{ color: "var(--accent)" }} />
-            <p className="font-bold" style={{ color: "var(--text-strong)" }}>רשומות Hub</p>
-            <p className="mt-1 text-sm muted">אתרים, גרסאות, Jobs, גיבויים ומנהלים נשמרים ב־Mongo אלא אם מצוין אחרת.</p>
-          </div>
-          <div className="soft-panel p-4">
-            <ListChecks className="mb-2" size={18} style={{ color: "var(--accent)" }} />
-            <p className="font-bold" style={{ color: "var(--text-strong)" }}>קריאות SharePoint</p>
-            <p className="mt-1 text-sm muted">Health, backup plan ו־live admin read מבצעים קריאה בלבד כאשר SharePoint מאפשר זאת.</p>
-          </div>
-          <div className="soft-panel p-4">
-            <Workflow className="mb-2" size={18} style={{ color: writeAvailable ? "var(--success)" : "var(--warning)" }} />
-            <p className="font-bold" style={{ color: "var(--text-strong)" }}>כתיבות SharePoint</p>
-            <p className="mt-1 text-sm muted">{writeAvailable ? "השרת מדווח שכתיבה זמינה ומוגדרת." : "כתיבה אינה זמינה כרגע; פעולות deploy/backup/provision מוצגות כלא מחוברות."}</p>
-          </div>
+      <SectionCard title="גבולות אמינות" subtitle="מה המסך הזה אומר ומה הוא לא אומר" compact helpKey="mode.metadataOnly">
+        <div className="flex flex-wrap gap-2">
+          <StatusToken kind="metadata" label="אתרים/גרסאות/Jobs נשמרים ב־Mongo" helpKey="site.mongodb" />
+          <StatusToken kind="readonly" label="Health ו־backup plan הם read-only כאשר SharePoint מאפשר" helpKey="mode.readOnly" />
+          <StatusToken kind={writeAvailable ? "writeEnabled" : "blocked"} label={writeAvailable ? "כתיבות SharePoint זמינות" : "כתיבות SharePoint חסומות"} helpKey={writeAvailable ? "sharepoint.write" : "sharepoint.writeBlocked"} />
         </div>
       </SectionCard>
     </div>

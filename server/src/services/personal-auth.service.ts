@@ -5,19 +5,22 @@ import { logger } from "../utils/logger";
 export type AuthorizedPersonalNumber = {
   personalNumber: string;
   role: "admin";
-  source: "hardcoded" | "bootstrap" | "site-admin";
+  source: "owner" | "bootstrap" | "site-admin";
   isBootstrapAdmin: boolean;
   siteId?: string;
   siteCode?: string;
   siteName?: string;
 };
 
-const HARDCODED_ALWAYS_ALLOWED_PERSONAL_NUMBERS = ["s8856096", "s8856095"];
+export const normalizePersonalNumber = (value: string) => {
+  const match = String(value || "").trim().match(/s?\d{6,8}/i);
+  if (!match) return "";
+  const digits = match[0].replace(/\D/g, "");
+  return digits ? `s${digits}` : "";
+};
 
-export const normalizePersonalNumber = (value: string) => String(value || "").replace(/\D/g, "");
-
-export function getHardcodedAlwaysAllowedPersonalNumbers() {
-  return Array.from(new Set(HARDCODED_ALWAYS_ALLOWED_PERSONAL_NUMBERS.map(normalizePersonalNumber).filter(Boolean)));
+export function getOwnerPersonalNumbers() {
+  return Array.from(new Set([env.HUB_OWNER_PERSONAL_NUMBER].map(normalizePersonalNumber).filter(Boolean)));
 }
 
 export function getBootstrapAdminPersonalNumbers() {
@@ -25,7 +28,7 @@ export function getBootstrapAdminPersonalNumbers() {
 }
 
 export function getAllBootstrapPersonalNumbers() {
-  return Array.from(new Set([...getHardcodedAlwaysAllowedPersonalNumbers(), ...getBootstrapAdminPersonalNumbers()]));
+  return Array.from(new Set([...getOwnerPersonalNumbers(), ...getBootstrapAdminPersonalNumbers()]));
 }
 
 function collectPersonalNumbers(site: any) {
@@ -46,15 +49,15 @@ export async function findAuthorizedPersonalNumber(rawPersonalNumber: string): P
   const masked = `***${pn.slice(-4)}`;
   logger.debug("auth", "Searching authorized personal number", { personalNumber: masked });
 
-  if (getHardcodedAlwaysAllowedPersonalNumbers().includes(pn)) {
-    logger.info("auth", "Personal number matched hardcoded admin", { personalNumber: masked });
+  if (getOwnerPersonalNumbers().includes(pn)) {
+    logger.info("auth", "Personal number matched HUB owner", { personalNumber: masked });
     return {
       personalNumber: pn,
       role: "admin",
-      source: "hardcoded",
+      source: "owner",
       isBootstrapAdmin: true,
-      siteCode: "hub-hardcoded-admin",
-      siteName: "Hub Hardcoded Admin"
+      siteCode: "hub-owner",
+      siteName: "Hub Owner"
     };
   }
 

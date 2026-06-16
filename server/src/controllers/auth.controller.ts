@@ -4,7 +4,7 @@ import {
   findAuthorizedPersonalNumber,
   getAllBootstrapPersonalNumbers,
   getBootstrapAdminPersonalNumbers,
-  getHardcodedAlwaysAllowedPersonalNumbers,
+  getOwnerPersonalNumbers,
   normalizePersonalNumber
 } from "../services/personal-auth.service";
 
@@ -40,7 +40,7 @@ export const loginByPersonalNumber = async (req: Request, res: Response) => {
 export const bootstrapStatus = async (_req: Request, res: Response) => {
   return ok(res, {
     personalNumberLoginEnabled: true,
-    hardcodedAdminsConfigured: getHardcodedAlwaysAllowedPersonalNumbers().length,
+    ownerPersonalNumberConfigured: getOwnerPersonalNumbers().length,
     envBootstrapAdminsConfigured: getBootstrapAdminPersonalNumbers().length,
     bootstrapAdminsConfigured: getAllBootstrapPersonalNumbers().length,
     bootstrapPersonalNumberAuthAvailable: getAllBootstrapPersonalNumbers().length > 0

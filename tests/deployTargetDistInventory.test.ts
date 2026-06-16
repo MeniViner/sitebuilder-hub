@@ -49,6 +49,9 @@ const mocks = vi.hoisted(() => ({
   Release: {
     findById: vi.fn()
   },
+  SiteVersionDeployment: {
+    findById: vi.fn()
+  },
   getSharePointOperationCapabilities: vi.fn(),
   listSharePointFolders: vi.fn(),
   listSharePointFiles: vi.fn(),
@@ -73,6 +76,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../server/src/models/Site", () => ({ Site: mocks.Site }));
 vi.mock("../server/src/models/Release", () => ({ Release: mocks.Release }));
+vi.mock("../server/src/models/SiteVersionDeployment", () => ({
+  SiteVersionDeployment: mocks.SiteVersionDeployment
+}));
 vi.mock("../server/src/services/sharepointOperationClient", () => ({
   getSharePointOperationCapabilities: mocks.getSharePointOperationCapabilities,
   listSharePointFolders: mocks.listSharePointFolders,
@@ -128,6 +134,7 @@ beforeEach(() => {
   artifactRoot = "";
   mocks.Site.findById.mockReset();
   mocks.Release.findById.mockReset();
+  mocks.SiteVersionDeployment.findById.mockReset();
   mocks.getSharePointOperationCapabilities.mockReset();
   mocks.listSharePointFolders.mockReset();
   mocks.listSharePointFiles.mockReset();
@@ -208,6 +215,44 @@ afterEach(async () => {
 });
 
 describe("deploy target dist inventory stale-file policy", () => {
+  it("blocks deploy planning when the release has no artifact path", async () => {
+    const release = makeRelease("");
+    mocks.Site.findById.mockResolvedValue(makeSite());
+    mocks.Release.findById.mockResolvedValue(release);
+
+    const { buildSiteDeployPlan } = await import("../server/src/services/deployArtifact.service");
+
+    await expect(buildSiteDeployPlan("site-1", "release-1")).rejects.toThrow("release-artifact-ref-missing");
+    expect(release.set).toHaveBeenCalledWith(
+      "artifactValidation",
+      expect.objectContaining({
+        artifactRef: "",
+        readyForDeploy: false,
+        validationError: "release-artifact-ref-missing"
+      })
+    );
+    expect(mocks.uploadSharePointFile).not.toHaveBeenCalled();
+  });
+
+  it("blocks deploy planning when the artifact path does not exist", async () => {
+    const release = makeRelease("/tmp/sitebuilder-hub-missing-artifact");
+    mocks.Site.findById.mockResolvedValue(makeSite());
+    mocks.Release.findById.mockResolvedValue(release);
+
+    const { buildSiteDeployPlan } = await import("../server/src/services/deployArtifact.service");
+
+    await expect(buildSiteDeployPlan("site-1", "release-1")).rejects.toThrow("release-artifact-not-found");
+    expect(release.set).toHaveBeenCalledWith(
+      "artifactValidation",
+      expect.objectContaining({
+        artifactRef: "/tmp/sitebuilder-hub-missing-artifact",
+        readyForDeploy: false,
+        validationError: "release-artifact-not-found:/tmp/sitebuilder-hub-missing-artifact"
+      })
+    );
+    expect(mocks.uploadSharePointFile).not.toHaveBeenCalled();
+  });
+
   it("includes read-only final dist inventory and summarizes stale files without delete actions in deploy planning", async () => {
     const release = makeRelease(await writeArtifact());
     mocks.Site.findById.mockResolvedValue(makeSite());
@@ -219,6 +264,18 @@ describe("deploy target dist inventory stale-file policy", () => {
 
     expect(plan.resolvedPaths.finalDistRoot).toBe(targetDistRoot);
     expect(plan.files.map((file) => file.relativePath).sort()).toEqual(["assets/app.js", "index.html"]);
+    expect(plan.target).toMatchObject({
+      siteCode: "alpha",
+      environment: "unknown",
+      currentKnownVersion: "1.2.3",
+      releaseVersion: "1.2.4",
+      artifactPath: release.artifactRef,
+      targetDistPath: targetDistRoot,
+      sharePointWriteConfigured: false,
+      backupRequired: true,
+      mode: "production-safe"
+    });
+    expect(plan.missingRequirements).toContain("Deploy cannot run because SharePoint write is not configured.");
     expect(planJson).toContain("read-only");
     expect(planJson).toContain("assets/legacy.js");
     expect(planJson).toContain("absent-from-release-artifact");

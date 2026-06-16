@@ -1,115 +1,164 @@
-# Site Builder Hub (MVP1.1)
+# Site Builder Hub
 
-מערכת ניהול מרכזית נפרדת לאתרי Site Builder. ה-Hub כולל פעולות SharePoint מבוקרות דרך worker, approval gates, audit ולוגים מקוטלגים; אסטרטגיית SharePoint auth אמיתית עדיין מוגדרת דרך env ולא כחיבור משתמש production מלא.
+Central management Hub for multiple existing Site Builder sites. This project is the Hub only; regular Site Builder apps are external managed targets.
 
-## דרישות מקדימות
-- Node.js 20+
-- npm 10+
-- MongoDB מקומי פעיל
+## Local Quick Start
 
-## התקנה
 ```bash
-cd sitebuilder-hub
+cd /Users/meni/dev/sitebuilder-hub
+npm run install:all
+cp .env.example .env
+docker compose up -d mongo
+npm run seed
+npm run dev
+```
+
+Open:
+
+- Frontend: http://localhost:5177
+- Backend health: http://localhost:4100/api/health
+
+## Local Development Auth
+
+Local development runs without a login screen by default:
+
+```bash
+AUTH_ENABLED=false
+```
+
+The backend assigns a local admin identity automatically so protected API routes still work.
+The UI shows this clearly as local development mode. When the built Hub is hosted inside SharePoint, the browser calls `/_api/web/currentuser` and forwards that SharePoint identity to the API, so the owner no longer sees `Local Developer`.
+
+To test personal-number auth locally, set:
+
+```bash
+AUTH_ENABLED=true
+HUB_OWNER_PERSONAL_NUMBER=s0000001
+```
+
+Then use `s0000001` on the login screen, or replace it in `.env` with your own owner personal number.
+
+## SharePoint Hosting
+
+The client uses hash routes and relative assets for SharePoint folder hosting:
+
+- `index.html#/releases`
+- `index.html#/sites`
+- `index.html#/sites/:id`
+- `index.html#/diagnostics`
+
+Set the API CORS origins without code changes:
+
+```bash
+CLIENT_ORIGIN=https://portal.army.idf
+CLIENT_ORIGINS=https://portal.army.idf,http://localhost:5177,http://127.0.0.1:5177
+```
+
+Use `בעיות וחיבורים` in the sidebar to inspect app mode, frontend origin, API base URL, current user detection, SharePoint current user, read test, digest/contextinfo, write verification, env flags, exact failing URL/status, and resolved SharePoint paths.
+
+## Hebrew Help Layer
+
+The Hub includes a Hebrew explanation layer for operators:
+
+- Inline help icons appear next to key page titles, panels, KPI cards, statuses, table columns, and important form labels.
+- The sidebar includes `מרכז הסברים` at `#/help`, with explanations for sites, releases/deploys, SharePoint connections, admins, backups, Jobs, health checks, audit, common problems, and glossary terms.
+- Help icons are enabled by default. To hide inline icons while keeping the help center route available, set:
+
+```bash
+VITE_HUB_HELP_ICONS_ENABLED=false
+```
+
+Use `VITE_HUB_HELP_ICONS_ENABLED=true` or omit the variable to keep the default help icons.
+
+## Commands
+
+```bash
+npm run install:all
+docker compose up -d mongo
+npm run seed
+npm run dev:server
+npm run dev:client
+npm test
+npm run build
+```
+
+If Mongo is missing, start it with:
+
+```bash
+docker compose up -d mongo
+```
+
+If dependencies are missing, run:
+
+```bash
 npm run install:all
 ```
 
-## משתני סביבה
-1. העתיקו `sitebuilder-hub/.env.example` ל-`sitebuilder-hub/.env`
-2. העתיקו ערכים רלוונטיים גם ל-`sitebuilder-hub/server/.env` ול-`sitebuilder-hub/client/.env`
+## Deploy MVP
 
-Root `.env.example`:
-- `SERVER_PORT=4100`
-- `MONGO_URI=mongodb://127.0.0.1:27017/sitebuilder_hub`
-- `CLIENT_ORIGIN=http://localhost:5177`
+Deploy is a real first-class Hub capability. The UI now supports both bulk deploy and single-site deploy.
 
-Client `.env.example`:
-- `VITE_API_BASE_URL=http://localhost:4100/api`
+The Deploy screen lives under `גרסאות ופריסות` and supports:
 
-## Console Debug Logging
-המערכת כוללת logging מקוטלג בשרת ובקליינט. כל קטגוריה נשלטת עם `true` / `false` ב-env.
+- Select or create one release.
+- Require a real `artifactRef` pointing to a local `dist` folder or `sharepoint-deploy-manifest.json`.
+- Validate the artifact before deploy.
+- Select one managed site, or use Deploy Center for all active sites, selected sites, or one environment.
+- Generate a dry-run deploy plan.
+- Show target site, environment, current known version, release version, artifact path, files to upload, SharePoint target `dist`, write capability, backup requirement, and deploy mode.
+- Run deploy only when release, artifact, site, plan, and SharePoint write requirements are satisfied.
+- Record job logs, upload read-back evidence, post-deploy health evidence, timestamps, and deployment result.
 
-Server `.env`:
-- `LOG_ALL=true` מדליק את כל קטגוריות השרת.
-- `LOG_FORMAT=pretty` מציג לוגים קריאים בקונסול. `json` מתאים לאיסוף לוגים.
-- `LOG_VERBOSE_PAYLOADS=true` / `LOG_HTTP_PAYLOADS=true` מוסיפים bodies ו-headers אחרי redaction.
-- קטגוריות: `LOG_SERVER`, `LOG_ENV`, `LOG_HTTP`, `LOG_AUTH`, `LOG_RATE_LIMIT`, `LOG_DB`, `LOG_JOBS`, `LOG_AUDIT`, `LOG_SITES`, `LOG_RELEASES`, `LOG_BACKUPS`, `LOG_ADMINS`, `LOG_OPERATIONS`, `LOG_SHAREPOINT`, `LOG_SECURITY`, `LOG_ERRORS`, `LOG_PERFORMANCE`.
+Deploy modes:
 
-Client `client/.env`:
-- `VITE_LOG_ALL=true` מדליק את כל קטגוריות הקליינט.
-- `VITE_LOG_VERBOSE_PAYLOADS=true` / `VITE_LOG_API_PAYLOADS=true` מוסיפים request/response payloads אחרי redaction.
-- קטגוריות: `VITE_LOG_APP`, `VITE_LOG_API`, `VITE_LOG_AUTH`, `VITE_LOG_ROUTER`, `VITE_LOG_UI`, `VITE_LOG_STATE`, `VITE_LOG_STORAGE`, `VITE_LOG_BROWSER_FETCH`, `VITE_LOG_PERFORMANCE`, `VITE_LOG_ERRORS`.
+- `Owner-direct deploy`: default MVP path. No pending approval jobs. Backup is a warning unless explicitly configured as required. Artifact validation, SharePoint digest, upload, read-back verification, post-deploy health, audit, logs, and evidence still run.
+- `Production-safe deploy`: advanced future/team mode. Enable only when you intentionally want approval/backup gates.
 
-כברירת מחדל ערכים רגישים כמו tokens, cookies, API keys ו-personal numbers מוסתרים. רק אם חייבים ממש, `LOG_SHOW_SENSITIVE=true` או `VITE_LOG_SHOW_SENSITIVE=true` יציגו אותם.
+Required SharePoint write env for a real deploy:
 
-## MongoDB בדוקר
 ```bash
-docker run -d --name sitebuilder-mongo -p 27017:27017 mongo:7
+SHAREPOINT_WRITE_ENABLED=true
+SHAREPOINT_AUTH_COOKIE=...
+# or
+SHAREPOINT_BEARER_TOKEN=...
 ```
 
-## פקודות הרצה
+`SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE=true` is not proof that SharePoint writes work. It only allows the backend to attempt a write path. Real write readiness requires a successful SharePoint `/_api/contextinfo` digest check, visible in `בעיות וחיבורים`.
+
+Optional deploy policy env:
+
 ```bash
-npm run dev
-npm run dev:server
-npm run dev:client
-npm run build
-npm run check
-npm run seed
+HUB_LOCAL_DEV_DEPLOY_REQUIRES_BACKUP=false
+HUB_OWNER_DIRECT_MODE=true
+HUB_ADVANCED_APPROVALS_ENABLED=false
+HUB_PRODUCTION_DEPLOY_REQUIRES_BACKUP=false
+HUB_PRODUCTION_DEPLOY_REQUIRES_APPROVAL=false
 ```
 
-## כתובות עבודה
-- Backend: `http://localhost:4100`
-- Frontend: `http://localhost:5177`
+When SharePoint write is not configured, the UI and API report:
 
-## MVP1.1 כולל
-- API אחיד (`ok/data/meta` + פורמט שגיאה עקבי)
-- CRUD מלא לרשומות אתר
-- ארכוב soft-delete
-- Dashboard RTL עם חיפוש/סינון/מיון/מצבי טעינה-ריק-שגיאה
-- סטטוס עסקי + סטטוס תקינות נגזר
-- עמוד פרטי אתר עם עדכון ידני לבדיקת תקינות
-- seed ריאליסטי ואידמפוטנטי
+```text
+Deploy cannot run because SharePoint write is not configured.
+```
 
-## יכולות ליבה שנוספו
-- בסיס Auth + Role Guard (`viewer`/`operator`/`admin`) באמצעות `x-api-key` (ניתן לכיבוי בסביבת פיתוח)
-- Rate limit בסיסי + `x-request-id`
-- Health endpoints:
-  - `GET /api/health/live`
-  - `GET /api/health/ready`
-  - `GET /api/health`
-- מרכז גרסאות ופריסות:
-  - `GET/POST /api/releases`
-  - `POST /api/releases/:id/deploy-all`
-  - `POST /api/sites/:id/deploy-version/plan`
-  - `POST /api/sites/:id/deploy-version`
-  - `POST /api/sites/:id/rollback-version/plan`
-  - `POST /api/sites/:id/rollback-version`
-  - `GET /api/sites/:id/deployments`
-  - `POST /api/version/next`
-  - `GET /api/version/status`
-- מרכז גיבויים:
-  - `GET /api/backups`
-  - `POST /api/backups/run-all`
-  - `GET /api/sites/:id/backups`
-  - `POST /api/sites/:id/backups`
-  - `POST /api/backups/:id/verify`
-  - `POST /api/backups/:id/restore-plan`
-  - `POST /api/backups/:id/restore`
-- ניהול Admins פר אתר:
-  - `GET /api/sites/:id/admins`
-  - `POST /api/sites/:id/admins/sync`
-  - `POST /api/sites/:id/admins`
-  - `DELETE /api/sites/:id/admins/:adminId`
-  - `GET /api/sites/:id/admins/diff`
-- Jobs + worker + audit:
-  - `GET /api/jobs`
-  - `POST /api/jobs/:id/approve`
-  - `POST /api/jobs/:id/reject`
-  - `POST /api/jobs/:id/rerun`
-  - `GET /api/audit`
+When the release artifact is missing, they report:
 
-## MVP2 מוצע
-- Health checks אמיתיים מול SharePoint
-- pipeline מבוקר ל-create/deploy
-- jobs queue עם retries ו-audit log
-- הרשאות משתמשים ורמות גישה
-- מרכז לוגים ופעולות תיקון אוטומטיות (admins/permissions)
+```text
+Deploy cannot run because the release artifact is missing.
+```
+
+## Builder Integration Contract
+
+Existing sites do not need to expose this yet. Future Builder sites should expose authenticated read endpoints:
+
+- `/health`
+- `/version`
+- `/site-info`
+- `/users/admins`
+- `/backups`
+- `/jobs`
+- `/logs`
+- `/update-status`
+- `/capabilities`
+
+Until that contract exists, the Hub falls back to SharePoint read-only checks and labels values as Hub metadata, cached, unknown, or not configured.

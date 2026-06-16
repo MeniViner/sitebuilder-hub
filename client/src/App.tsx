@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
+import { HashRouter, Route, Routes, useLocation } from "react-router-dom";
 import { KeyRound, LogIn, RefreshCw, ShieldCheck } from "lucide-react";
 import { Layout } from "./components/Layout";
 import { AppShell } from "./components/AppShell";
@@ -9,6 +9,7 @@ import { MetadataOnlyBadge } from "./components/MetadataOnlyBadge";
 import { PageHeader } from "./components/PageHeader";
 import { SectionCard } from "./components/SectionCard";
 import { DashboardPage } from "./pages/DashboardPage";
+import { AnalyticsDashboardPage } from "./pages/AnalyticsDashboardPage";
 import { SitesPage } from "./pages/SitesPage";
 import { SiteDetailsPage } from "./pages/SiteDetailsPage";
 import { ReleasesPage } from "./pages/ReleasesPage";
@@ -19,7 +20,18 @@ import { AuditPage } from "./pages/AuditPage";
 import { HealthPage } from "./pages/HealthPage";
 import { MonitoringPage } from "./pages/MonitoringPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { AuthBootstrapStatus, AuthLoginResult, getHubPersonalNumber, sitesApi, WhoAmIResult } from "./api/sitesApi";
+import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { HelpPage } from "./pages/HelpPage";
+import {
+  AuthBootstrapStatus,
+  AuthLoginResult,
+  detectSharePointCurrentUser,
+  getClientRuntimeMode,
+  getHubPersonalNumber,
+  SharePointCurrentUserResult,
+  sitesApi,
+  WhoAmIResult
+} from "./api/sitesApi";
 import { clientLogger } from "./utils/logger";
 
 type AuthUser = NonNullable<WhoAmIResult["user"]>;
@@ -32,6 +44,20 @@ function authUserFromLogin(result: AuthLoginResult): AuthUser {
     personalNumber: result.personalNumber,
     source: result.source,
     isBootstrapAdmin: result.isBootstrapAdmin
+  };
+}
+
+function authUserFromSharePoint(result: SharePointCurrentUserResult): AuthUser | null {
+  if (!result.ok || !result.user) return null;
+  return {
+    id: result.user.loginName || result.user.email || `sp:${result.user.id || "current"}`,
+    name: result.user.personalNumber || result.user.email || result.user.loginName || result.user.title || "SharePoint user",
+    role: "admin",
+    source: "sharepoint",
+    personalNumber: result.user.personalNumber,
+    loginName: result.user.loginName,
+    email: result.user.email,
+    identityMode: "sharepoint-user"
   };
 }
 
@@ -53,11 +79,13 @@ function RouteLogger() {
 function FirstInitAuthPage({
   bootstrapStatus,
   authError,
+  sharePointCurrentUser,
   onLogin,
   onRetry
 }: {
   bootstrapStatus: AuthBootstrapStatus | null;
   authError: string;
+  sharePointCurrentUser: SharePointCurrentUserResult | null;
   onLogin: (personalNumber: string) => Promise<void>;
   onRetry: () => Promise<void>;
 }) {
@@ -84,11 +112,18 @@ function FirstInitAuthPage({
     <div className="mx-auto max-w-3xl space-y-5">
       <PageHeader
         title="כניסה ל־Site Builder Hub"
-        subtitle="יש להזין מספר אישי מורשה כדי להמשיך לניהול האתרים והפעולות המוגנות."
+        subtitle="אם ה־Hub פתוח מתוך SharePoint, המערכת מנסה לזהות את המשתמש הנוכחי מהדפדפן. מספר אישי נדרש רק כאשר אין זיהוי SharePoint זמין והשרת דורש זאת."
         actions={<MetadataOnlyBadge mode="metadata" />}
+        helpKey="sharepoint.currentUser"
       />
 
-      <SectionCard title="התחברות ראשונית" subtitle="המערכת תבדוק את המספר מול רשימת המורשים ותשמור אותו לקריאות הבאות.">
+      <SectionCard title="התחברות ראשונית" subtitle="המערכת תבדוק את המספר מול רשימת המורשים ותשמור אותו לקריאות הבאות." helpKey="settings">
+        {sharePointCurrentUser?.attempted && !sharePointCurrentUser.ok ? (
+          <div className="mb-4 rounded-lg border p-3 text-sm" style={{ background: "var(--warning-soft)", borderColor: "color-mix(in srgb, var(--warning) 35%, var(--border))" }}>
+            <p className="font-bold" style={{ color: "var(--text-strong)" }}>דרושה התחברות ל־SharePoint או בדיקת חיבור</p>
+            <p className="mt-1 muted">הדפדפן לא הצליח לקרוא את `/_api/web/currentuser`. אם השרת עדיין דורש זהות בעלים, אפשר להתחבר במספר אישי או לפתוח את "בעיות וחיבורים".</p>
+          </div>
+        ) : null}
         <form className="space-y-4" onSubmit={handleSubmit}>
           <div>
             <label className="field-label" htmlFor="personal-number-login">מספר אישי</label>
@@ -137,6 +172,7 @@ function FirstInitAuthPage({
 export default function App() {
   const [serverStatus, setServerStatus] = useState<{ status?: string; mongo?: string; serverTime?: string }>({});
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [sharePointCurrentUser, setSharePointCurrentUser] = useState<SharePointCurrentUserResult | null>(null);
   const [authBootstrapStatus, setAuthBootstrapStatus] = useState<AuthBootstrapStatus | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
   const [authError, setAuthError] = useState("");
@@ -184,6 +220,23 @@ export default function App() {
     setAuthChecking(true);
     setAuthError("");
     const storedPersonalNumber = getHubPersonalNumber();
+    const runtimeMode = getClientRuntimeMode();
+    let detectedSharePointUser: SharePointCurrentUserResult | null = null;
+
+    try {
+      detectedSharePointUser = await detectSharePointCurrentUser();
+      setSharePointCurrentUser(detectedSharePointUser);
+      clientLogger.info("auth", "SharePoint current user detection completed", {
+        mode: detectedSharePointUser.mode,
+        attempted: detectedSharePointUser.attempted,
+        ok: detectedSharePointUser.ok,
+        status: detectedSharePointUser.status,
+        loginName: detectedSharePointUser.user?.loginName
+      });
+    } catch (error) {
+      clientLogger.warn("auth", "SharePoint current user detection failed unexpectedly", { error });
+      setSharePointCurrentUser(null);
+    }
 
     try {
       const bootstrapRes = await sitesApi.authBootstrapStatus();
@@ -202,14 +255,29 @@ export default function App() {
         role: meRes.data.user?.role,
         source: meRes.data.user?.source
       });
-      setAuthUser(meRes.data.user);
+      const sharePointUser = detectedSharePointUser ? authUserFromSharePoint(detectedSharePointUser) : null;
+      const backendUser = meRes.data.user;
+      if (sharePointUser && (!backendUser || backendUser.source === "dev")) {
+        setAuthUser(sharePointUser);
+      } else if (runtimeMode === "sharepoint-hosted" && backendUser?.source === "dev") {
+        setAuthUser(null);
+        setAuthError("מצב SharePoint: המשתמש לא זוהה מהדפדפן, ולכן לא מוצג Local Developer. פתחו את בעיות וחיבורים כדי לבדוק את החיבור.");
+      } else {
+        setAuthUser(backendUser);
+      }
     } catch (err) {
       clientLogger.warn("auth", "Current auth user failed", {
         hadStoredPersonalNumber: Boolean(storedPersonalNumber),
         error: err
       });
-      setAuthUser(null);
-      setAuthError(storedPersonalNumber ? (err instanceof Error ? err.message : "נדרשת התחברות עם מספר אישי") : "");
+      const sharePointUser = detectedSharePointUser ? authUserFromSharePoint(detectedSharePointUser) : null;
+      if (sharePointUser) {
+        setAuthUser(sharePointUser);
+        setAuthError("");
+      } else {
+        setAuthUser(null);
+        setAuthError(storedPersonalNumber ? (err instanceof Error ? err.message : "נדרשת התחברות עם מספר אישי") : "");
+      }
     } finally {
       clientLogger.info("auth", "Auth refresh finished");
       setAuthChecking(false);
@@ -255,14 +323,14 @@ export default function App() {
   }, [refreshAuth]);
 
   const appShell = (children: JSX.Element) => (
-    <BrowserRouter>
+    <HashRouter>
       <RouteLogger />
       <Layout>
         <AppShell serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={handleLogout}>
           {children}
         </AppShell>
       </Layout>
-    </BrowserRouter>
+    </HashRouter>
   );
 
   if (authChecking) {
@@ -274,6 +342,7 @@ export default function App() {
       <FirstInitAuthPage
         bootstrapStatus={authBootstrapStatus}
         authError={authError}
+        sharePointCurrentUser={sharePointCurrentUser}
         onLogin={handleLogin}
         onRetry={refreshAuth}
       />
@@ -281,12 +350,13 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
+    <HashRouter>
       <RouteLogger />
       <Layout>
         <AppShell serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={handleLogout}>
           <Routes>
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/analytics" element={<AnalyticsDashboardPage />} />
             <Route path="/sites" element={<SitesPage />} />
             <Route path="/sites/:id" element={<SiteDetailsPage />} />
             <Route path="/releases" element={<ReleasesPage />} />
@@ -296,6 +366,8 @@ export default function App() {
             <Route path="/monitoring" element={<MonitoringPage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/health" element={<HealthPage />} />
+            <Route path="/diagnostics" element={<DiagnosticsPage />} />
+            <Route path="/help" element={<HelpPage />} />
             <Route
               path="/settings"
               element={
@@ -313,6 +385,6 @@ export default function App() {
           </Routes>
         </AppShell>
       </Layout>
-    </BrowserRouter>
+    </HashRouter>
   );
 }

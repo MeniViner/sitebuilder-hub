@@ -2,21 +2,71 @@ import { Types } from "mongoose";
 import { Release } from "../models/Release";
 import { Site } from "../models/Site";
 import { SiteVersionDeployment } from "../models/SiteVersionDeployment";
-import { compareSemver, bumpPatch } from "../utils/version";
+import { compareSemver, bumpVersion } from "../utils/version";
 import { createJob } from "./jobs.service";
 import { assertSharePointWriteAvailable } from "./sharepointOperationClient";
 import { logger } from "../utils/logger";
 import { assertReleaseArtifactReady, buildSiteDeployPlan } from "./deployArtifact.service";
 import { assertRecentVerifiedBackupForDangerousWrite, BackupSafetySnapshot } from "./writeSafety.service";
+import {
+  buildDeployPolicy,
+  buildLocalDevDeploySafetySnapshot,
+  DeployMode,
+  DeployPolicySnapshot,
+  DeploySafetySnapshot
+} from "./deployPolicy.service";
+
+export type BatchDeployTargetMode = "single" | "selected" | "all";
+export type BatchDeployTargetStatus = "ready" | "warning" | "blocked" | "up_to_date";
+export type SharePointConnectorMode = "backend-sharepoint" | "browser-sharepoint";
+
+export type BatchDeployPlanRow = {
+  siteId: string;
+  siteCode: string;
+  displayName: string;
+  environment: string;
+  currentVersion: string;
+  targetVersion: string;
+  alreadyUpToDate: boolean;
+  included: boolean;
+  status: BatchDeployTargetStatus;
+  blockers: string[];
+  warnings: string[];
+  plan?: Awaited<ReturnType<typeof buildSiteDeployPlan>>;
+};
+
+export type BatchDeployPlan = {
+  generatedAt: string;
+  dryRun: true;
+  releaseId: string;
+  releaseVersion: string;
+  targetMode: BatchDeployTargetMode;
+  targetSiteIds: string[];
+  deployMode: DeployMode;
+  connectorMode: SharePointConnectorMode;
+  summary: {
+    totalSelectedSites: number;
+    readySites: number;
+    blockedSites: number;
+    warningSites: number;
+    alreadyUpToDateSites: number;
+    executionReady: boolean;
+  };
+  results: BatchDeployPlanRow[];
+  blockers: string[];
+  warnings: string[];
+};
 
 type ApprovalGatedJobInput = Parameters<typeof createJob>[0] & {
-  requiresApproval: true;
+  requiresApproval: boolean;
   approvalSummary: Record<string, unknown>;
   approvalSnapshot: Record<string, unknown>;
 };
 
-const DEPLOY_APPROVAL_MESSAGE = "Deploy job is awaiting approval before SharePoint files or site version metadata are changed.";
-const ROLLBACK_APPROVAL_MESSAGE = "Rollback job is awaiting approval before an older release overwrites the live SharePoint dist files.";
+const DEPLOY_OWNER_DIRECT_MESSAGE = "Deploy job queued in owner-direct mode. SharePoint upload, read-back verification, post-deploy health, audit, logs, and evidence still run.";
+const ROLLBACK_OWNER_DIRECT_MESSAGE = "Rollback job queued in owner-direct mode. Verify backup evidence before running rollback in production-safe mode.";
+const DEPLOY_ADVANCED_APPROVAL_MESSAGE = "Deploy job requires approval because advanced approvals are enabled.";
+const ROLLBACK_ADVANCED_APPROVAL_MESSAGE = "Rollback job requires approval because advanced approvals are enabled.";
 
 const buildDeployApproval = (params: {
   site: any;
@@ -25,7 +75,8 @@ const buildDeployApproval = (params: {
   createdBy: string;
   mode?: "deploy" | "rollback";
   reason?: string;
-  backupSafety: BackupSafetySnapshot;
+  backupSafety: BackupSafetySnapshot | DeploySafetySnapshot;
+  deployPolicy?: DeployPolicySnapshot;
   deployPlan?: Awaited<ReturnType<typeof buildSiteDeployPlan>>;
 }) => {
   const fromVersion = params.deployment.fromVersion || params.site.currentVersion || params.site.version || "0.1.0";
@@ -39,7 +90,7 @@ const buildDeployApproval = (params: {
       title: isRollback
         ? `Rollback ${params.site.displayName || params.site.siteCode} to ${toVersion}`
         : `Deploy ${toVersion} to ${params.site.displayName || params.site.siteCode}`,
-      message: isRollback ? ROLLBACK_APPROVAL_MESSAGE : DEPLOY_APPROVAL_MESSAGE,
+      message: isRollback ? ROLLBACK_ADVANCED_APPROVAL_MESSAGE : DEPLOY_ADVANCED_APPROVAL_MESSAGE,
       operation: isRollback ? "version-rollback" : "version-upgrade",
       siteId: params.site._id.toString(),
       siteCode: params.site.siteCode,
@@ -77,6 +128,7 @@ const buildDeployApproval = (params: {
         rollbackReason: isRollback ? params.reason || "" : undefined
       },
       backupSafety: params.backupSafety,
+      deployPolicy: params.deployPolicy,
       targetDistInventory: targetDistInventory
         ? {
             ...targetDistInventory,
@@ -113,7 +165,45 @@ const buildDeployApproval = (params: {
   };
 };
 
+const assertDeployPolicyUsable = (deployPolicy: DeployPolicySnapshot) => {
+  if (deployPolicy.blockers.length > 0) {
+    throw new Error(deployPolicy.blockers[0]);
+  }
+};
+
 const getSiteCurrentVersion = (site: any) => site.currentVersion || site.version || "0.1.0";
+
+const getSiteEnvironment = (site: any) => String(site.environment || "unknown");
+
+const normalizeTargetSiteIds = (targetSiteIds?: string[]) =>
+  Array.from(new Set((targetSiteIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
+
+const resolveBatchTargetSites = async (params: {
+  targetMode: BatchDeployTargetMode;
+  targetSiteIds?: string[];
+}) => {
+  if (params.targetMode === "all") {
+    return Site.find({ status: { $ne: "archived" } });
+  }
+
+  const targetSiteIds = normalizeTargetSiteIds(params.targetSiteIds);
+  if (params.targetMode === "single" && targetSiteIds.length !== 1) {
+    throw new Error("batch-deploy-single-target-required");
+  }
+  if (params.targetMode === "selected" && targetSiteIds.length === 0) {
+    throw new Error("batch-deploy-selected-targets-required");
+  }
+
+  const sites = await Site.find({ _id: { $in: targetSiteIds }, status: { $ne: "archived" } });
+  const sitesById = new Map(sites.map((site: any) => [site._id.toString(), site]));
+  const orderedSites = targetSiteIds.map((id) => sitesById.get(id)).filter(Boolean);
+  if (orderedSites.length !== targetSiteIds.length) {
+    throw new Error("batch-deploy-target-sites-not-found");
+  }
+  return orderedSites;
+};
+
+const dedupeMessages = (messages: string[]) => Array.from(new Set(messages.filter(Boolean)));
 
 const assertRollbackTargetOlder = (site: any, release: any) => {
   const currentVersion = getSiteCurrentVersion(site);
@@ -167,7 +257,7 @@ export async function createRelease(input: {
 
   if (!version) {
     const base = input.autoIncrementPatchFrom || (await getLatestVersion()) || "0.1.0";
-    version = bumpPatch(base);
+    version = bumpVersion(base, input.releaseType);
   }
 
   const existing = await Release.findOne({ version });
@@ -234,9 +324,327 @@ export async function buildVersionStatus() {
   return status;
 }
 
+export async function buildBatchDeployPlan(params: {
+  releaseId: string;
+  targetMode: BatchDeployTargetMode;
+  targetSiteIds?: string[];
+  deployMode?: DeployMode | string;
+  connectorMode?: SharePointConnectorMode | string;
+}) {
+  logger.info("releases", "Building batch deploy plan", {
+    releaseId: params.releaseId,
+    targetMode: params.targetMode,
+    targetSiteIds: normalizeTargetSiteIds(params.targetSiteIds),
+    deployMode: params.deployMode,
+    connectorMode: params.connectorMode
+  });
+
+  const release = await Release.findById(params.releaseId);
+  if (!release) throw new Error("release-not-found");
+
+  const deployPolicy = buildDeployPolicy(params.deployMode || "local-dev-owner");
+  const connectorMode: SharePointConnectorMode = params.connectorMode === "browser-sharepoint" ? "browser-sharepoint" : "backend-sharepoint";
+  const sites = await resolveBatchTargetSites({
+    targetMode: params.targetMode,
+    targetSiteIds: params.targetSiteIds
+  });
+  const targetSiteIds = sites.map((site: any) => site._id.toString());
+  const releaseArtifactRef = String(release.artifactRef || "").trim();
+
+  const results: BatchDeployPlanRow[] = [];
+  for (const site of sites as any[]) {
+    const siteId = site._id.toString();
+    const currentVersion = getSiteCurrentVersion(site);
+    const versionComparison = compareSemver(currentVersion, release.version);
+    const baseRow = {
+      siteId,
+      siteCode: site.siteCode,
+      displayName: site.displayName,
+      environment: getSiteEnvironment(site),
+      currentVersion,
+      targetVersion: release.version
+    };
+
+    if (versionComparison === 0) {
+      results.push({
+        ...baseRow,
+        alreadyUpToDate: true,
+        included: false,
+        status: "up_to_date",
+        blockers: [],
+        warnings: ["האתר כבר נמצא בגרסה הזו ולא ייפרס מחדש."]
+      });
+      continue;
+    }
+
+    if (versionComparison > 0) {
+      results.push({
+        ...baseRow,
+        alreadyUpToDate: false,
+        included: false,
+        status: "blocked",
+        blockers: ["האתר נמצא בגרסה חדשה יותר מהגרסה שנבחרה. השתמשו ב-Rollback מתוכנן במקום Deploy רגיל."],
+        warnings: []
+      });
+      continue;
+    }
+
+    if (!releaseArtifactRef) {
+      results.push({
+        ...baseRow,
+        alreadyUpToDate: false,
+        included: false,
+        status: "blocked",
+        blockers: ["Deploy cannot run because the release artifact is missing."],
+        warnings: []
+      });
+      continue;
+    }
+
+    try {
+      const plan = await buildSiteDeployPlan(siteId, release._id.toString(), {
+        deployMode: deployPolicy.mode,
+        connectorMode
+      });
+      const blockers = dedupeMessages([
+        ...deployPolicy.blockers,
+        ...plan.blockers,
+        ...plan.missingRequirements,
+        !plan.summary.readyForDeployExecution ? "Dry-run did not pass all execution gates." : ""
+      ]);
+      if (deployPolicy.requiresRecentVerifiedBackup) {
+        try {
+          await assertRecentVerifiedBackupForDangerousWrite({
+            siteId: site._id,
+            operation: "deploy"
+          });
+        } catch (error) {
+          blockers.push(error instanceof Error ? error.message : "recent-verified-backup-required");
+        }
+      }
+      const warnings = dedupeMessages([
+        plan.targetInventory?.readOk === false ? "קריאת inventory ב-SharePoint חלקית; יש לבדוק stale files לפני ביצוע." : "",
+        plan.summary.staleTargetFilesCount ? `${plan.summary.staleTargetFilesCount} קבצי יעד ישנים יישארו כברירת מחדל.` : "",
+        plan.deployPolicy?.warning || ""
+      ]);
+      const ready = blockers.length === 0;
+      results.push({
+        ...baseRow,
+        alreadyUpToDate: false,
+        included: ready,
+        status: ready ? (warnings.length ? "warning" : "ready") : "blocked",
+        blockers,
+        warnings,
+        plan
+      });
+    } catch (error) {
+      results.push({
+        ...baseRow,
+        alreadyUpToDate: false,
+        included: false,
+        status: "blocked",
+        blockers: [error instanceof Error ? error.message : "deploy-plan-failed"],
+        warnings: []
+      });
+    }
+  }
+
+  const readySites = results.filter((row) => row.status === "ready" || row.status === "warning").length;
+  const blockedSites = results.filter((row) => row.status === "blocked").length;
+  const warningSites = results.filter((row) => row.status === "warning").length;
+  const alreadyUpToDateSites = results.filter((row) => row.status === "up_to_date").length;
+  const plan: BatchDeployPlan = {
+    generatedAt: new Date().toISOString(),
+    dryRun: true,
+    releaseId: release._id.toString(),
+    releaseVersion: release.version,
+    targetMode: params.targetMode,
+    targetSiteIds,
+    deployMode: deployPolicy.mode,
+    connectorMode,
+    summary: {
+      totalSelectedSites: results.length,
+      readySites,
+      blockedSites,
+      warningSites,
+      alreadyUpToDateSites,
+      executionReady: readySites > 0 && blockedSites === 0
+    },
+    results,
+    blockers: dedupeMessages([
+      blockedSites ? `${blockedSites} target site(s) are blocked.` : "",
+      readySites === 0 ? "No target sites are ready for deploy execution." : "",
+      ...deployPolicy.blockers
+    ]),
+    warnings: dedupeMessages([
+      warningSites ? `${warningSites} target site(s) have warnings.` : "",
+      alreadyUpToDateSites ? `${alreadyUpToDateSites} target site(s) are already up to date and will be skipped.` : ""
+    ])
+  };
+
+  logger.info("releases", "Batch deploy plan built", {
+    releaseId: plan.releaseId,
+    releaseVersion: plan.releaseVersion,
+    targetMode: plan.targetMode,
+    totalSelectedSites: plan.summary.totalSelectedSites,
+    readySites,
+    blockedSites,
+    warningSites,
+    alreadyUpToDateSites,
+    executionReady: plan.summary.executionReady
+  });
+  return plan;
+}
+
+const queueBatchDeployForSite = async (params: {
+  site: any;
+  release: any;
+  deployPolicy: DeployPolicySnapshot;
+  backupSafety: BackupSafetySnapshot | DeploySafetySnapshot;
+  deployPlan?: Awaited<ReturnType<typeof buildSiteDeployPlan>>;
+  createdBy: string;
+}) => {
+  const deployment = await SiteVersionDeployment.create({
+    siteId: params.site._id,
+    releaseId: params.release._id,
+    fromVersion: getSiteCurrentVersion(params.site),
+    toVersion: params.release.version,
+    deploymentKind: "deploy",
+    status: "queued",
+    triggeredBy: params.createdBy,
+    logLines: [{
+      level: params.deployPolicy.localDevOwnerMode ? "warn" : "info",
+      message: params.deployPolicy.localDevOwnerMode
+        ? "Batch deployment queued in owner-direct mode; approval is skipped by policy."
+        : "Batch deployment queued",
+      at: new Date()
+    }]
+  });
+
+  const approval = buildDeployApproval({
+    site: params.site,
+    release: params.release,
+    deployment,
+    createdBy: params.createdBy,
+    backupSafety: params.backupSafety,
+    deployPolicy: params.deployPolicy,
+    deployPlan: params.deployPlan
+  });
+  const jobInput: Parameters<typeof createJob>[0] = {
+    type: "version-upgrade",
+    siteId: params.site._id.toString(),
+    createdBy: params.createdBy,
+    requiresApproval: params.deployPolicy.requiresApproval,
+    approvalSummary: params.deployPolicy.requiresApproval ? approval.approvalSummary : undefined,
+    approvalSnapshot: params.deployPolicy.requiresApproval ? approval.approvalSnapshot : {
+      ...approval.approvalSnapshot,
+      approvalSkipped: true,
+      approvalSkippedReason: "owner-direct-mode"
+    },
+    payload: {
+      releaseId: params.release._id.toString(),
+      deploymentId: deployment._id.toString(),
+      targetVersion: params.release.version,
+      deployMode: params.deployPolicy.mode,
+      deployPolicy: params.deployPolicy,
+      backupSafety: params.backupSafety,
+      batchDeploy: true
+    }
+  };
+
+  const job = await createJob(jobInput);
+  await SiteVersionDeployment.findByIdAndUpdate(deployment._id, { jobId: job._id });
+  return { job, deployment };
+};
+
+export async function enqueueBatchDeploy(params: {
+  releaseId: string;
+  targetMode: BatchDeployTargetMode;
+  targetSiteIds?: string[];
+  deployMode?: DeployMode | string;
+  confirmNoPartial?: boolean;
+  createdBy: string;
+}) {
+  logger.info("releases", "Queueing batch deploy", {
+    releaseId: params.releaseId,
+    targetMode: params.targetMode,
+    targetSiteIds: normalizeTargetSiteIds(params.targetSiteIds),
+    deployMode: params.deployMode,
+    confirmNoPartial: params.confirmNoPartial
+  });
+  const plan = await buildBatchDeployPlan(params);
+  const executableRows = plan.results.filter((row) => row.status === "ready" || row.status === "warning");
+  if ((params.confirmNoPartial ?? true) && plan.summary.blockedSites > 0) {
+    throw new Error("batch-deploy-plan-has-blockers");
+  }
+  if (executableRows.length === 0) {
+    throw new Error("batch-deploy-plan-has-no-ready-sites");
+  }
+
+  const [release, sites] = await Promise.all([
+    Release.findById(params.releaseId),
+    Site.find({ _id: { $in: executableRows.map((row) => row.siteId) }, status: { $ne: "archived" } })
+  ]);
+  if (!release) throw new Error("release-not-found");
+
+  const deployPolicy = buildDeployPolicy(plan.deployMode);
+  assertDeployPolicyUsable(deployPolicy);
+  assertSharePointWriteAvailable();
+  await assertReleaseArtifactReady(release._id.toString());
+
+  const sitesById = new Map((sites as any[]).map((site) => [site._id.toString(), site]));
+  const backupSafetyBySiteId = new Map<string, BackupSafetySnapshot | DeploySafetySnapshot>();
+  for (const row of executableRows) {
+    const site = sitesById.get(row.siteId);
+    if (!site) throw new Error("batch-deploy-target-sites-not-found");
+    const backupSafety = deployPolicy.requiresRecentVerifiedBackup
+      ? await assertRecentVerifiedBackupForDangerousWrite({
+          siteId: site._id,
+          operation: "deploy"
+        })
+      : buildLocalDevDeploySafetySnapshot("deploy");
+    backupSafetyBySiteId.set(row.siteId, backupSafety);
+  }
+
+  const jobs = [];
+  const deployments = [];
+  for (const row of executableRows) {
+    const site = sitesById.get(row.siteId);
+    const queued = await queueBatchDeployForSite({
+      site,
+      release,
+      deployPolicy,
+      backupSafety: backupSafetyBySiteId.get(row.siteId)!,
+      deployPlan: row.plan,
+      createdBy: params.createdBy
+    });
+    jobs.push(queued.job);
+    deployments.push(queued.deployment);
+  }
+
+  logger.info("releases", "Batch deploy queued", {
+    releaseId: release._id.toString(),
+    version: release.version,
+    queued: jobs.length,
+    skippedUpToDate: plan.summary.alreadyUpToDateSites,
+    requiresApproval: jobs.some((job) => job.requiresApproval)
+  });
+  return {
+    plan,
+    queued: jobs.length,
+    skippedUpToDate: plan.summary.alreadyUpToDateSites,
+    jobs,
+    deployments,
+    requiresApproval: jobs.some((job) => job.requiresApproval),
+    approvalStatus: jobs.some((job) => job.requiresApproval) ? "pending" : "not-required",
+    message: `${jobs.length} batch deploy job${jobs.length === 1 ? "" : "s"} queued.`
+  };
+}
+
 export async function enqueueDeployAll(params: {
   releaseId: string;
   onlyOutdated: boolean;
+  deployMode?: DeployMode | string;
   createdBy: string;
 }) {
   logger.info("releases", "Queueing deploy all", {
@@ -246,6 +654,8 @@ export async function enqueueDeployAll(params: {
   });
   const release = await Release.findById(params.releaseId);
   if (!release) throw new Error("release-not-found");
+  const deployPolicy = buildDeployPolicy(params.deployMode || "production-safe");
+  assertDeployPolicyUsable(deployPolicy);
   assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
 
@@ -254,15 +664,19 @@ export async function enqueueDeployAll(params: {
     ? sites.filter((site) => compareSemver(site.currentVersion || site.version || "0.1.0", release.version) < 0)
     : sites;
 
-  const backupSafetyBySiteId = new Map<string, BackupSafetySnapshot>();
+  const backupSafetyBySiteId = new Map<string, BackupSafetySnapshot | DeploySafetySnapshot>();
   const deployPlanBySiteId = new Map<string, Awaited<ReturnType<typeof buildSiteDeployPlan>>>();
   for (const site of targetSites) {
-    const safety = await assertRecentVerifiedBackupForDangerousWrite({
-      siteId: site._id,
-      operation: "deploy"
-    });
+    const safety = deployPolicy.requiresRecentVerifiedBackup
+      ? await assertRecentVerifiedBackupForDangerousWrite({
+          siteId: site._id,
+          operation: "deploy"
+        })
+      : buildLocalDevDeploySafetySnapshot("deploy");
     backupSafetyBySiteId.set(site._id.toString(), safety);
-    const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString());
+    const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString(), {
+      deployMode: deployPolicy.mode
+    });
     deployPlanBySiteId.set(site._id.toString(), deployPlan);
   }
 
@@ -285,23 +699,27 @@ export async function enqueueDeployAll(params: {
       deployment,
       createdBy: params.createdBy,
       backupSafety: backupSafetyBySiteId.get(site._id.toString())!,
+      deployPolicy,
       deployPlan: deployPlanBySiteId.get(site._id.toString())
     });
     const jobInput: ApprovalGatedJobInput = {
       type: "version-upgrade",
       siteId: site._id.toString(),
       createdBy: params.createdBy,
-      requiresApproval: true,
+      requiresApproval: deployPolicy.requiresApproval,
       approvalSummary: approval.approvalSummary,
       approvalSnapshot: approval.approvalSnapshot,
       payload: {
         releaseId: release._id.toString(),
         deploymentId: deployment._id.toString(),
-        targetVersion: release.version
+        targetVersion: release.version,
+        deployMode: deployPolicy.mode,
+        deployPolicy,
+        backupSafety: backupSafetyBySiteId.get(site._id.toString())
       }
     };
 
-    logger.info("jobs", "Approval required for deploy job", {
+    logger.info("jobs", deployPolicy.requiresApproval ? "Approval required for deploy job" : "Owner-direct deploy job", {
       type: jobInput.type,
       siteId: site._id.toString(),
       siteCode: site.siteCode,
@@ -315,14 +733,14 @@ export async function enqueueDeployAll(params: {
     const job = await createJob(jobInput);
 
     await SiteVersionDeployment.findByIdAndUpdate(deployment._id, { jobId: job._id });
-    logger.info("releases", "Deploy job queued awaiting approval", {
+    logger.info("releases", "Deploy job queued", {
       siteId: site._id.toString(),
       siteCode: site.siteCode,
       releaseId: release._id.toString(),
       version: release.version,
       jobId: job._id.toString(),
       deploymentId: deployment._id.toString(),
-      requiresApproval: true
+      requiresApproval: job.requiresApproval
     });
     jobs.push(job);
   }
@@ -332,16 +750,16 @@ export async function enqueueDeployAll(params: {
     version: release.version,
     queued: jobs.length,
     scannedSites: sites.length,
-    requiresApproval: true,
-    approvalStatus: "pending"
+    requiresApproval: jobs.some((job) => job.requiresApproval),
+    approvalStatus: jobs.some((job) => job.requiresApproval) ? "pending" : "not-required"
   });
   return {
     queued: jobs.length,
     jobs,
-    requiresApproval: true,
-    approvalStatus: "pending",
+    requiresApproval: jobs.some((job) => job.requiresApproval),
+    approvalStatus: jobs.some((job) => job.requiresApproval) ? "pending" : "not-required",
     message: jobs.length
-      ? `${jobs.length} deploy job${jobs.length === 1 ? "" : "s"} awaiting approval before SharePoint writes start.`
+      ? `${jobs.length} deploy job${jobs.length === 1 ? "" : "s"} queued.`
       : "No deploy jobs were queued."
   };
 }
@@ -349,6 +767,7 @@ export async function enqueueDeployAll(params: {
 export async function enqueueDeploySite(params: {
   siteId: string;
   releaseId: string;
+  deployMode?: DeployMode | string;
   createdBy: string;
 }) {
   logger.info("releases", "Queueing deploy site", {
@@ -361,13 +780,19 @@ export async function enqueueDeploySite(params: {
 
   const release = await Release.findById(params.releaseId);
   if (!release) throw new Error("release-not-found");
+  const deployPolicy = buildDeployPolicy(params.deployMode);
+  assertDeployPolicyUsable(deployPolicy);
   assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
-  const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString());
-  const backupSafety = await assertRecentVerifiedBackupForDangerousWrite({
-    siteId: site._id,
-    operation: "deploy"
+  const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString(), {
+    deployMode: deployPolicy.mode
   });
+  const backupSafety = deployPolicy.requiresRecentVerifiedBackup
+    ? await assertRecentVerifiedBackupForDangerousWrite({
+        siteId: site._id,
+        operation: "deploy"
+      })
+    : buildLocalDevDeploySafetySnapshot("deploy");
 
   const deployment = await SiteVersionDeployment.create({
     siteId: site._id,
@@ -377,25 +802,38 @@ export async function enqueueDeploySite(params: {
     deploymentKind: "deploy",
     status: "queued",
     triggeredBy: params.createdBy,
-    logLines: [{ level: "info", message: "Deployment queued", at: new Date() }]
+    logLines: [{
+      level: deployPolicy.localDevOwnerMode ? "warn" : "info",
+      message: deployPolicy.localDevOwnerMode
+        ? "Deployment queued in owner-direct mode; approval is skipped by policy."
+        : "Deployment queued",
+      at: new Date()
+    }]
   });
 
-  const approval = buildDeployApproval({ site, release, deployment, createdBy: params.createdBy, backupSafety, deployPlan });
-  const jobInput: ApprovalGatedJobInput = {
+  const approval = buildDeployApproval({ site, release, deployment, createdBy: params.createdBy, backupSafety, deployPolicy, deployPlan });
+  const jobInput: Parameters<typeof createJob>[0] = {
     type: "version-upgrade",
     siteId: site._id.toString(),
     createdBy: params.createdBy,
-    requiresApproval: true,
-    approvalSummary: approval.approvalSummary,
-    approvalSnapshot: approval.approvalSnapshot,
+    requiresApproval: deployPolicy.requiresApproval,
+    approvalSummary: deployPolicy.requiresApproval ? approval.approvalSummary : undefined,
+    approvalSnapshot: deployPolicy.requiresApproval ? approval.approvalSnapshot : {
+      ...approval.approvalSnapshot,
+      approvalSkipped: true,
+      approvalSkippedReason: "owner-direct-mode"
+    },
     payload: {
       releaseId: release._id.toString(),
       deploymentId: deployment._id.toString(),
-      targetVersion: release.version
+      targetVersion: release.version,
+      deployMode: deployPolicy.mode,
+      deployPolicy,
+      backupSafety
     }
   };
 
-  logger.info("jobs", "Approval required for deploy job", {
+  logger.info("jobs", deployPolicy.requiresApproval ? "Approval required for deploy job" : "Owner-direct deploy job", {
     type: jobInput.type,
     siteId: site._id.toString(),
     siteCode: site.siteCode,
@@ -410,22 +848,26 @@ export async function enqueueDeploySite(params: {
 
   await SiteVersionDeployment.findByIdAndUpdate(deployment._id, { jobId: job._id });
 
-  logger.info("releases", "Site deploy queued awaiting approval", {
+  logger.info("releases", "Site deploy queued", {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     releaseId: release._id.toString(),
     version: release.version,
     jobId: job._id.toString(),
     deploymentId: deployment._id.toString(),
-    requiresApproval: true,
-    approvalStatus: "pending"
+    requiresApproval: deployPolicy.requiresApproval,
+    approvalStatus: deployPolicy.requiresApproval ? "pending" : "not-required"
   });
   return {
     job,
     deployment,
-    requiresApproval: true,
-    approvalStatus: "pending",
-    message: DEPLOY_APPROVAL_MESSAGE
+    requiresApproval: deployPolicy.requiresApproval,
+    approvalStatus: deployPolicy.requiresApproval ? "pending" : "not-required",
+    deployMode: deployPolicy.mode,
+    deployPolicy,
+    message: deployPolicy.requiresApproval
+      ? "Deploy job queued and requires approval because advanced approvals are enabled."
+      : DEPLOY_OWNER_DIRECT_MESSAGE
   };
 }
 
@@ -454,10 +896,13 @@ export async function enqueueRollbackSite(params: {
   assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
   const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString());
-  const backupSafety = await assertRecentVerifiedBackupForDangerousWrite({
-    siteId: site._id,
-    operation: "rollback"
-  });
+  const deployPolicy = buildDeployPolicy();
+  const backupSafety = deployPolicy.requiresRecentVerifiedBackup
+    ? await assertRecentVerifiedBackupForDangerousWrite({
+        siteId: site._id,
+        operation: "rollback"
+      })
+    : buildLocalDevDeploySafetySnapshot("rollback");
 
   const deployment = await SiteVersionDeployment.create({
     siteId: site._id,
@@ -479,13 +924,14 @@ export async function enqueueRollbackSite(params: {
     mode: "rollback",
     reason,
     backupSafety,
+    deployPolicy,
     deployPlan
   });
   const jobInput: ApprovalGatedJobInput = {
     type: "version-rollback",
     siteId: site._id.toString(),
     createdBy: params.createdBy,
-    requiresApproval: true,
+    requiresApproval: deployPolicy.requiresApproval,
     approvalSummary: approval.approvalSummary,
     approvalSnapshot: approval.approvalSnapshot,
     payload: {
@@ -493,11 +939,13 @@ export async function enqueueRollbackSite(params: {
       deploymentId: deployment._id.toString(),
       targetVersion: release.version,
       rollback: true,
-      rollbackReason: reason
+      rollbackReason: reason,
+      deployPolicy,
+      backupSafety
     }
   };
 
-  logger.warn("jobs", "Approval required for rollback job", {
+  logger.warn("jobs", deployPolicy.requiresApproval ? "Approval required for rollback job" : "Owner-direct rollback job", {
     type: jobInput.type,
     siteId: site._id.toString(),
     siteCode: site.siteCode,
@@ -512,8 +960,9 @@ export async function enqueueRollbackSite(params: {
 
   const job = await createJob(jobInput);
   await SiteVersionDeployment.findByIdAndUpdate(deployment._id, { jobId: job._id });
+  const requiresApproval = Boolean(job.requiresApproval || job.status === "awaiting-approval");
 
-  logger.warn("releases", "Site rollback queued awaiting approval", {
+  logger.warn("releases", "Site rollback queued", {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     releaseId: release._id.toString(),
@@ -521,16 +970,16 @@ export async function enqueueRollbackSite(params: {
     targetVersion: release.version,
     jobId: job._id.toString(),
     deploymentId: deployment._id.toString(),
-    requiresApproval: true,
-    approvalStatus: "pending"
+    requiresApproval,
+    approvalStatus: requiresApproval ? "pending" : "not-required"
   });
 
   return {
     job,
     deployment,
-    requiresApproval: true,
-    approvalStatus: "pending",
-    message: ROLLBACK_APPROVAL_MESSAGE
+    requiresApproval,
+    approvalStatus: requiresApproval ? "pending" : "not-required",
+    message: requiresApproval ? "Rollback job requires approval because advanced approvals are enabled." : ROLLBACK_OWNER_DIRECT_MESSAGE
   };
 }
 

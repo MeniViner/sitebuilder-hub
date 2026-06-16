@@ -22,6 +22,9 @@ import {
   runReadOnlySharePointHealthCheck,
   SharePointReadOnlyHealthResult
 } from "./sharepointHealth.service";
+import { buildDeployPolicy, DeployMode, DeployPolicySnapshot } from "./deployPolicy.service";
+
+type DeployConnectorMode = "backend-sharepoint" | "browser-sharepoint";
 
 type DeployPlanFile = {
   relativePath: string;
@@ -114,6 +117,43 @@ type ReleaseArtifactValidationResult = {
   notes: string[];
 };
 
+export type ReleaseArtifactManifestFile = {
+  relativePath: string;
+  targetRelativePath: string;
+  sizeBytes: number;
+  contentType: string;
+  sha256: string;
+  deployable: boolean;
+};
+
+export type ReleaseArtifactManifest = {
+  generatedAt: string;
+  releaseId: string;
+  version: string;
+  artifactRef: string;
+  artifactRoot: string;
+  files: ReleaseArtifactManifestFile[];
+  summary: {
+    filesCount: number;
+    deployableFilesCount: number;
+    totalSizeBytes: number;
+    hasIndexHtml: boolean;
+    hasManifest: boolean;
+    readyForDeploy: boolean;
+  };
+};
+
+export type ReleaseArtifactFileHandle = {
+  releaseId: string;
+  version: string;
+  artifactRoot: string;
+  relativePath: string;
+  absolutePath: string;
+  sizeBytes: number;
+  contentType: string;
+  sha256: string;
+};
+
 type ReleaseHydratedDocument = HydratedDocument<ReleaseDocument>;
 
 type DeployVerificationEvidence = {
@@ -148,12 +188,33 @@ type DeployPostHealthSummary = {
 
 export type SiteDeployPlan = {
   generatedAt: string;
+  deployMode: DeployMode;
+  connectorMode: DeployConnectorMode;
+  deployPolicy: DeployPolicySnapshot;
   releaseId: string;
   releaseVersion: string;
   artifactRef: string;
   artifactRoot: string;
   siteId: string;
   siteCode: string;
+  target: {
+    siteId: string;
+    siteCode: string;
+    siteDisplayName: string;
+    environment: string;
+    sharePointSiteUrl: string;
+    finalAppUrl: string;
+    currentKnownVersion: string;
+    currentVersionSource: "hub-metadata" | "unknown";
+    releaseVersion: string;
+    artifactPath: string;
+    targetDistPath: string;
+    sharePointWriteConfigured: boolean;
+    backupRequired: boolean;
+    mode: DeployMode;
+    productionSafeMode: boolean;
+    localDevOwnerMode: boolean;
+  };
   resolvedPaths: SiteBuilderResolvedPaths;
   files: DeployPlanFile[];
   summary: {
@@ -170,7 +231,16 @@ export type SiteDeployPlan = {
   targetDistInventory?: TargetDistInventory;
   staleFilePolicy?: TargetDistInventory["staleFilePolicy"];
   capabilities: ReturnType<typeof getSharePointOperationCapabilities>;
+  browserConnector?: {
+    connectorMode: "browser-sharepoint";
+    backendSharePointRequired: false;
+    artifactManifestRequired: true;
+    digestRequiredPerTargetSite: true;
+    uploadImplementedInBrowser: true;
+    readinessSource: "browser-digest-and-upload";
+  };
   blockers: string[];
+  missingRequirements: string[];
   notes: string[];
 };
 
@@ -618,7 +688,7 @@ const validateAndPersistReleaseArtifact = async (release: ReleaseHydratedDocumen
   }
 };
 
-const contentTypeFor = (relativePath: string) => {
+export const contentTypeFor = (relativePath: string) => {
   const ext = path.extname(relativePath).toLowerCase();
   if (ext === ".html") return "text/html;charset=utf-8";
   if (ext === ".js" || ext === ".mjs") return "text/javascript;charset=utf-8";
@@ -710,6 +780,193 @@ const buildPostDeployHealthSummary = (health: SharePointReadOnlyHealthResult): D
   evidence: withHealthCheckedAt(health)
 });
 
+export type BrowserSharePointDeploymentEvidenceInput = {
+  releaseId: string;
+  deployMode?: DeployMode | string;
+  connectorMode: "browser-sharepoint";
+  targetSite?: {
+    siteId?: string;
+    siteCode?: string;
+    sharePointSiteUrl?: string;
+  };
+  targetPaths?: {
+    targetDistPath?: string;
+    finalAppUrl?: string;
+  };
+  uploadedFilesEvidence?: Array<Record<string, unknown>>;
+  readBackEvidence?: Array<Record<string, unknown>>;
+  errors?: Array<Record<string, unknown> | string>;
+  startedAt?: string;
+  completedAt?: string;
+  finalStatus: "success" | "failed";
+  versionBefore?: string;
+  versionAfter?: string;
+};
+
+const stringValue = (value: unknown) => String(value || "").trim();
+const numberValue = (value: unknown, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const dateValue = (value: unknown, fallback = new Date()) => {
+  const parsed = value ? new Date(String(value)) : fallback;
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed;
+};
+
+const evidenceErrorMessage = (errors?: BrowserSharePointDeploymentEvidenceInput["errors"]) =>
+  (errors || [])
+    .map((item) => typeof item === "string" ? item : stringValue(item?.error || item?.message || item?.relativePath))
+    .filter(Boolean)
+    .join("; ")
+    .slice(0, 1000);
+
+const browserEvidenceFromPayload = (
+  manifestFile: ReleaseArtifactManifestFile,
+  planFile: DeployPlanFile | undefined,
+  payload: Record<string, unknown> | undefined
+): DeployVerificationEvidence => ({
+  relativePath: manifestFile.relativePath,
+  sourcePath: stringValue(payload?.sourcePath) || `artifact:${manifestFile.relativePath}`,
+  targetPath: stringValue(payload?.targetPath) || planFile?.targetPath || manifestFile.targetRelativePath,
+  status: payload?.status === "verified" ? "verified" : "failed",
+  checkedAt: dateValue(payload?.checkedAt),
+  expectedSizeBytes: numberValue(payload?.expectedSizeBytes, manifestFile.sizeBytes),
+  actualSizeBytes: numberValue(payload?.actualSizeBytes),
+  expectedSha256: stringValue(payload?.expectedSha256) || manifestFile.sha256,
+  actualSha256: stringValue(payload?.actualSha256),
+  sizeMatches: Boolean(payload?.sizeMatches),
+  sha256Matches: Boolean(payload?.sha256Matches),
+  httpStatus: payload?.httpStatus === undefined ? undefined : numberValue(payload.httpStatus),
+  httpStatusText: stringValue(payload?.httpStatusText),
+  contentType: stringValue(payload?.contentType) || manifestFile.contentType,
+  etag: stringValue(payload?.etag),
+  lastModified: stringValue(payload?.lastModified),
+  error: stringValue(payload?.error)
+});
+
+export async function recordBrowserSharePointDeploymentEvidence(params: {
+  siteId: string;
+  input: BrowserSharePointDeploymentEvidenceInput;
+  actor: string;
+}) {
+  if (params.input.connectorMode !== "browser-sharepoint") throw new Error("browser-deploy-connector-mode-required");
+  if (!params.input.releaseId) throw new Error("releaseId-required");
+
+  const { site, release, resolvedPaths } = await resolveSiteAndRelease(params.siteId, params.input.releaseId);
+  const manifest = await getReleaseArtifactManifest(release._id.toString());
+  if (!manifest.summary.readyForDeploy) throw new Error("release-artifact-not-ready");
+  if (params.input.targetSite?.siteId && params.input.targetSite.siteId !== site._id.toString()) throw new Error("browser-deploy-site-mismatch");
+  if (params.input.versionAfter && params.input.finalStatus === "success" && params.input.versionAfter !== release.version) {
+    throw new Error("browser-deploy-version-after-mismatch");
+  }
+
+  const planFiles = manifest.files.map((file) => ({
+    relativePath: file.relativePath,
+    sourcePath: `artifact:${file.relativePath}`,
+    targetPath: `${resolvedPaths.finalDistRoot}/${file.relativePath}`,
+    sizeBytes: file.sizeBytes,
+    sha256: file.sha256
+  }));
+  const planFilesByRelativePath = new Map(planFiles.map((file) => [file.relativePath, file]));
+  const evidencePayloads = new Map(
+    (params.input.readBackEvidence || params.input.uploadedFilesEvidence || [])
+      .map((item) => [stringValue(item.relativePath), item] as const)
+      .filter(([relativePath]) => Boolean(relativePath))
+  );
+  const verificationEvidence = manifest.files
+    .filter((file) => file.deployable)
+    .map((file) => browserEvidenceFromPayload(file, planFilesByRelativePath.get(file.relativePath), evidencePayloads.get(file.relativePath)));
+  const totalSizeBytes = manifest.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+  const allVerified =
+    verificationEvidence.length === manifest.summary.deployableFilesCount &&
+    verificationEvidence.length > 0 &&
+    verificationEvidence.every((item) => item.status === "verified" && item.sizeMatches && item.sha256Matches);
+  const successRequested = params.input.finalStatus === "success";
+  if (successRequested && !allVerified) throw new Error("browser-deploy-success-evidence-invalid");
+
+  const startedAt = dateValue(params.input.startedAt);
+  const finishedAt = dateValue(params.input.completedAt, new Date());
+  const fromVersion = params.input.versionBefore || site.currentVersion || site.version || "";
+  const errorMessage = successRequested ? "" : evidenceErrorMessage(params.input.errors) || "browser-deploy-failed";
+  const deploymentStatus = successRequested ? "succeeded" : "failed";
+  const verificationStatus = successRequested ? "verified" : "failed";
+
+  const deployment = await SiteVersionDeployment.create({
+    siteId: site._id,
+    releaseId: release._id,
+    fromVersion,
+    toVersion: release.version,
+    deploymentKind: "deploy",
+    status: deploymentStatus,
+    startedAt,
+    finishedAt,
+    triggeredBy: params.actor || "browser-sharepoint",
+    error: errorMessage,
+    verification: buildDeployVerification(verificationEvidence, totalSizeBytes, verificationStatus),
+    logLines: [
+      {
+        level: successRequested ? "info" : "error",
+        message: successRequested
+          ? `Browser SharePoint deploy succeeded (${verificationEvidence.length} files verified)`
+          : `Browser SharePoint deploy failed: ${errorMessage}`,
+        at: finishedAt
+      }
+    ]
+  });
+
+  if (successRequested) {
+    site.currentVersion = release.version;
+    site.version = release.version;
+    site.latestKnownVersion = release.version;
+    site.versionStatus = "up_to_date";
+    site.lastUpgradeAt = finishedAt;
+    site.lastDeployAt = finishedAt;
+    site.lastVersionCheckAt = finishedAt;
+    site.sharePointStatus = {
+      ...(site.sharePointStatus as any),
+      deployStatus: "succeeded" as any
+    };
+    site.filesCount = manifest.summary.deployableFilesCount;
+    site.lastError = "";
+  } else {
+    site.versionStatus = "failed";
+    site.sharePointStatus = {
+      ...(site.sharePointStatus as any),
+      deployStatus: "failed" as any
+    };
+    site.lastError = errorMessage;
+  }
+  await site.save();
+
+  logger[successRequested ? "info" : "warn"]("releases", "Browser SharePoint deployment evidence recorded", {
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    releaseId: release._id.toString(),
+    releaseVersion: release.version,
+    deploymentId: deployment._id.toString(),
+    finalStatus: params.input.finalStatus,
+    connectorMode: params.input.connectorMode,
+    filesCount: verificationEvidence.length,
+    verifiedFilesCount: verificationEvidence.filter((item) => item.status === "verified").length,
+    failedFilesCount: verificationEvidence.filter((item) => item.status !== "verified").length
+  });
+
+  return {
+    site,
+    release,
+    deployment,
+    summary: {
+      connectorMode: "browser-sharepoint" as const,
+      finalStatus: params.input.finalStatus,
+      filesCount: verificationEvidence.length,
+      verifiedFilesCount: verificationEvidence.filter((item) => item.status === "verified").length,
+      failedFilesCount: verificationEvidence.filter((item) => item.status !== "verified").length,
+      siteVersionUpdated: successRequested
+    }
+  };
+}
+
 const resolveSiteAndRelease = async (siteId: string, releaseId: string) => {
   const [site, release] = await Promise.all([
     Site.findById(siteId),
@@ -733,31 +990,105 @@ const resolveSiteAndRelease = async (siteId: string, releaseId: string) => {
   return { site, release, resolvedPaths };
 };
 
-export async function buildSiteDeployPlan(siteId: string, releaseId: string): Promise<SiteDeployPlan> {
+export async function buildSiteDeployPlan(
+  siteId: string,
+  releaseId: string,
+  options: { deployMode?: DeployMode | string; connectorMode?: DeployConnectorMode | string } = {}
+): Promise<SiteDeployPlan> {
   const { site, release, resolvedPaths } = await resolveSiteAndRelease(siteId, releaseId);
+  const deployPolicy = buildDeployPolicy(options.deployMode);
+  const connectorMode: DeployConnectorMode = options.connectorMode === "browser-sharepoint" ? "browser-sharepoint" : "backend-sharepoint";
   const artifactValidation = await validateAndPersistReleaseArtifact(release, "deploy-plan");
   const files: DeployPlanFile[] = artifactValidation.files.map((file) => ({
     ...file,
     targetPath: `${resolvedPaths.finalDistRoot}/${file.relativePath}`
   }));
   const targetInventory = await readTargetDistInventory(resolvedPaths, files);
-  const capabilities = getSharePointOperationCapabilities();
+  const staticCapabilities = getSharePointOperationCapabilities();
+  let digestWorks = false;
+  let digestError = "";
+  if (connectorMode === "backend-sharepoint" && staticCapabilities.writeAvailable && staticCapabilities.digest.canRequest) {
+    try {
+      await getRequestDigest(resolvedPaths);
+      digestWorks = true;
+    } catch (error) {
+      digestError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const capabilities = connectorMode === "browser-sharepoint"
+    ? {
+        ...staticCapabilities,
+        writeVerified: false,
+        reason: staticCapabilities.reason
+      }
+    : {
+        ...staticCapabilities,
+        writeAvailable: staticCapabilities.writeAvailable && digestWorks,
+        writeVerified: digestWorks,
+        digest: {
+          ...staticCapabilities.digest,
+          canRequest: staticCapabilities.digest.canRequest && digestWorks,
+          reason: digestWorks ? undefined : digestError || staticCapabilities.digest.reason
+        },
+        reason: digestWorks ? undefined : digestError || staticCapabilities.reason
+      };
   const readyForDeploy = artifactValidation.summary.readyForDeploy;
-  const readyForDeployExecution = readyForDeploy && capabilities.writeAvailable && capabilities.digest.canRequest;
+  const readyForDeployExecution =
+    connectorMode === "browser-sharepoint"
+      ? readyForDeploy && deployPolicy.blockers.length === 0
+      : readyForDeploy && capabilities.writeAvailable && capabilities.digest.canRequest && deployPolicy.blockers.length === 0;
   const blockers = [
+    ...deployPolicy.blockers,
     ...artifactValidation.blockers,
-    !capabilities.writeAvailable ? "sharepoint-write-not-configured" : "",
-    !capabilities.digest.canRequest ? "sharepoint-request-digest-not-available" : ""
+    connectorMode === "backend-sharepoint" && !capabilities.writeAvailable ? "sharepoint-write-not-configured" : "",
+    connectorMode === "backend-sharepoint" && !capabilities.digest.canRequest ? "sharepoint-request-digest-not-available" : ""
+  ].filter(Boolean);
+  const currentKnownVersion = site.currentVersion || site.version || "";
+  const targetDistPath = resolvedPaths.finalDistRoot;
+  const missingRequirements = [
+    !artifactValidation.artifactRef ? "Deploy cannot run because the release artifact is missing." : "",
+    artifactValidation.artifactRef && !readyForDeploy
+      ? `Deploy cannot run because the release artifact is invalid: ${artifactValidation.blockers.join(", ")}`
+      : "",
+    connectorMode === "backend-sharepoint" && !capabilities.writeAvailable ? "Deploy cannot run because SharePoint write is not configured." : "",
+    connectorMode === "backend-sharepoint" && staticCapabilities.writeEnabled && !capabilities.writeVerified
+      ? digestError === "sharepoint-digest-failed:401"
+        ? "כתיבה ל-SharePoint מוגדרת אבל ההתחברות נכשלה."
+        : "Deploy cannot run because SharePoint request digest is not available."
+      : "",
+    connectorMode === "browser-sharepoint" ? "Browser deploy requires browser Digest and per-file upload verification at execution time." : "",
+    ...deployPolicy.blockers
   ].filter(Boolean);
 
   return {
     generatedAt: new Date().toISOString(),
+    deployMode: deployPolicy.mode,
+    connectorMode,
+    deployPolicy,
     releaseId: release._id.toString(),
     releaseVersion: release.version,
     artifactRef: artifactValidation.artifactRef,
     artifactRoot: artifactValidation.artifactRoot,
     siteId: site._id.toString(),
     siteCode: site.siteCode,
+    target: {
+      siteId: site._id.toString(),
+      siteCode: site.siteCode,
+      siteDisplayName: site.displayName,
+      environment: String((site as any).environment || "unknown"),
+      sharePointSiteUrl: site.sharePointSiteUrl,
+      finalAppUrl: resolvedPaths.finalAppUrl,
+      currentKnownVersion: currentKnownVersion || "Unknown",
+      currentVersionSource: currentKnownVersion ? "hub-metadata" : "unknown",
+      releaseVersion: release.version,
+      artifactPath: artifactValidation.artifactRef,
+      targetDistPath,
+      sharePointWriteConfigured: staticCapabilities.writeEnabled,
+      backupRequired: deployPolicy.requiresRecentVerifiedBackup,
+      mode: deployPolicy.mode,
+      productionSafeMode: deployPolicy.productionSafeMode,
+      localDevOwnerMode: deployPolicy.localDevOwnerMode
+    },
     resolvedPaths,
     files,
     summary: {
@@ -774,14 +1105,28 @@ export async function buildSiteDeployPlan(siteId: string, releaseId: string): Pr
     targetDistInventory: targetInventory,
     staleFilePolicy: targetInventory.staleFilePolicy,
     capabilities,
+    browserConnector: connectorMode === "browser-sharepoint" ? {
+      connectorMode: "browser-sharepoint",
+      backendSharePointRequired: false,
+      artifactManifestRequired: true,
+      digestRequiredPerTargetSite: true,
+      uploadImplementedInBrowser: true,
+      readinessSource: "browser-digest-and-upload"
+    } : undefined,
     blockers,
+    missingRequirements,
     notes: [
+      deployPolicy.warning,
       artifactValidation.summary.hasManifest ? "Deploy file list was loaded from sharepoint-deploy-manifest.json." : "No deploy manifest was found; file inventory was generated from the artifact folder.",
       "Deploy execution overwrites listed files in final dist but does not mirror-delete files that are absent from the artifact.",
       ...targetInventory.notes,
       "Deploy execution reads every uploaded file back from SharePoint and compares sha256/size before marking success.",
-      "SharePoint writes require SHAREPOINT_WRITE_ENABLED plus auth material."
+      connectorMode === "backend-sharepoint" && digestError ? `SharePoint contextinfo/digest check failed: ${digestError}` : "",
+      connectorMode === "backend-sharepoint" ? "SharePoint writes require SHAREPOINT_WRITE_ENABLED plus auth material and a successful contextinfo/digest check." : "",
+      connectorMode === "browser-sharepoint" ? "Browser deploy uses the user's SharePoint browser session, per-site contextinfo Digest, Files/add upload, and browser read-back evidence." : "",
+      connectorMode === "browser-sharepoint" && staticCapabilities.reason ? `Backend SharePoint is separate and not required for browser deploy: ${staticCapabilities.reason}` : ""
     ]
+      .filter(Boolean)
   };
 }
 
@@ -804,6 +1149,80 @@ export async function validateReleaseArtifact(releaseId: string) {
     missingFiles: artifactValidation.missingFiles,
     sampleFiles: artifactValidation.files.slice(0, 100),
     notes: artifactValidation.notes
+  };
+}
+
+const assertInsideRoot = async (root: string, candidate: string) => {
+  const [rootRealPath, candidateRealPath] = await Promise.all([
+    fs.realpath(root),
+    fs.realpath(candidate)
+  ]);
+  const relative = path.relative(rootRealPath, candidateRealPath);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("release-artifact-path-traversal-blocked");
+  }
+  return candidateRealPath;
+};
+
+export async function getReleaseArtifactManifest(releaseId: string): Promise<ReleaseArtifactManifest> {
+  const release = await Release.findById(releaseId);
+  if (!release) throw new Error("release-not-found");
+
+  const artifactValidation = await validateAndPersistReleaseArtifact(release, "artifact-manifest");
+  const files: ReleaseArtifactManifestFile[] = artifactValidation.files.map((file) => ({
+    relativePath: file.relativePath,
+    targetRelativePath: file.relativePath,
+    sizeBytes: file.sizeBytes,
+    contentType: contentTypeFor(file.relativePath),
+    sha256: file.sha256,
+    deployable: true
+  }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    releaseId: release._id.toString(),
+    version: release.version,
+    artifactRef: artifactValidation.artifactRef,
+    artifactRoot: artifactValidation.artifactRoot,
+    files,
+    summary: {
+      filesCount: files.length,
+      deployableFilesCount: files.filter((file) => file.deployable).length,
+      totalSizeBytes: artifactValidation.summary.totalSizeBytes,
+      hasIndexHtml: artifactValidation.summary.hasIndexHtml,
+      hasManifest: artifactValidation.summary.hasManifest,
+      readyForDeploy: artifactValidation.summary.readyForDeploy
+    }
+  };
+}
+
+export async function getReleaseArtifactFile(releaseId: string, relativePathInput: string): Promise<ReleaseArtifactFileHandle> {
+  const relativePath = normalizeRelative(String(relativePathInput || "").trim());
+  if (!isSafeRelativeFile(relativePath)) throw new Error("release-artifact-file-path-invalid");
+
+  const manifest = await getReleaseArtifactManifest(releaseId);
+  const manifestFile = manifest.files.find((file) => file.deployable && file.relativePath === relativePath);
+  if (!manifestFile) throw new Error("release-artifact-file-not-in-manifest");
+
+  const absolutePath = path.resolve(manifest.artifactRoot, relativePath);
+  const safeAbsolutePath = await assertInsideRoot(manifest.artifactRoot, absolutePath);
+  const stat = await fs.stat(safeAbsolutePath);
+  if (!stat.isFile()) throw new Error("release-artifact-file-not-found");
+
+  const hashed = await hashFile(safeAbsolutePath);
+  if (hashed.sha256 !== manifestFile.sha256 || hashed.sizeBytes !== manifestFile.sizeBytes) {
+    throw new Error("release-artifact-file-hash-mismatch");
+  }
+
+  return {
+    releaseId: manifest.releaseId,
+    version: manifest.version,
+    artifactRoot: manifest.artifactRoot,
+    relativePath,
+    absolutePath: safeAbsolutePath,
+    sizeBytes: hashed.sizeBytes,
+    contentType: manifestFile.contentType || contentTypeFor(relativePath),
+    sha256: hashed.sha256
   };
 }
 

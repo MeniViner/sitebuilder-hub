@@ -21,6 +21,10 @@ export type SiteBuilderResolvedPaths = {
   host: string;
   siteRoot: string;
   sharePointSiteUrl: string;
+  siteDbLibrary: string;
+  usersDbLibrary: string;
+  bootstrapLibrary: string;
+  bootstrapFolder: string;
   siteDbRoot: string;
   usersDbRoot: string;
   siteAssetsRoot: string;
@@ -43,6 +47,7 @@ export type SiteBuilderResolvedPaths = {
     theme: string;
     widgets: string;
     externalLinks: string;
+    gantt: string;
   };
 };
 
@@ -126,6 +131,10 @@ export const resolveSiteBuilderPaths = (input: SiteBuilderPathInput): SiteBuilde
     host,
     siteRoot,
     sharePointSiteUrl: buildAbsoluteUrl(host, siteRoot),
+    siteDbLibrary,
+    usersDbLibrary,
+    bootstrapLibrary,
+    bootstrapFolder,
     siteDbRoot,
     usersDbRoot,
     siteAssetsRoot,
@@ -147,7 +156,8 @@ export const resolveSiteBuilderPaths = (input: SiteBuilderPathInput): SiteBuilde
       siteContent: joinServerRelative(siteAssetsRoot, "site_content_data.txt"),
       theme: joinServerRelative(siteAssetsRoot, "theme_data.txt"),
       widgets: joinServerRelative(widgetsRoot, "widgets_data.txt"),
-      externalLinks: joinServerRelative(siteAssetsRoot, "external_links_data.txt")
+      externalLinks: joinServerRelative(siteAssetsRoot, "external_links_data.txt"),
+      gantt: joinServerRelative(siteAssetsRoot, "gantt_data.txt")
     }
   };
 };

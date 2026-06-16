@@ -206,7 +206,9 @@ describe("deploy stale file approval snapshot", () => {
     const jobInput = mocks.createJob.mock.calls[0][0];
     const approvalSnapshotJson = JSON.stringify(jobInput.approvalSnapshot);
 
-    expect(mocks.buildSiteDeployPlan).toHaveBeenCalledWith("site-1", "release-1");
+    expect(mocks.buildSiteDeployPlan).toHaveBeenCalledWith("site-1", "release-1", {
+      deployMode: "production-safe"
+    });
     expect(approvalSnapshotJson).toContain("assets/legacy.js");
     expect(approvalSnapshotJson).toContain("absent-from-release-artifact");
     expect(approvalSnapshotJson).toContain("read-only");
@@ -220,5 +222,74 @@ describe("deploy stale file approval snapshot", () => {
     expect(mocks.deleteSharePointFile).not.toHaveBeenCalled();
     expect(mocks.recycleSharePointFile).not.toHaveBeenCalled();
     expect(mocks.uploadSharePointFile).not.toHaveBeenCalled();
+  });
+
+  it("queues local/dev owner deploy without an approval gate or mandatory backup", async () => {
+    const site = makeSite();
+    const release = makeRelease();
+    const deployment = makeDeployment();
+    const job = {
+      _id: idOf("job-local-1"),
+      status: "queued"
+    };
+
+    mocks.Site.findById.mockResolvedValue(site);
+    mocks.Release.findById.mockResolvedValue(release);
+    mocks.SiteVersionDeployment.create.mockResolvedValue(deployment);
+    mocks.createJob.mockResolvedValue(job);
+    mocks.assertReleaseArtifactReady.mockResolvedValue({ summary: { readyForDeploy: true } });
+    mocks.buildSiteDeployPlan.mockResolvedValue({
+      ...makeDeployPlan(),
+      deployMode: "local-dev-owner",
+      deployPolicy: {
+        mode: "local-dev-owner",
+        label: "Local/dev owner deploy",
+        productionSafeMode: false,
+        localDevOwnerMode: true,
+        requiresApproval: false,
+        requiresRecentVerifiedBackup: false,
+        ownerOverrideAllowed: true,
+        checkedAt: "2026-05-14T10:00:00.000Z",
+        warning: "local/dev override",
+        blockers: []
+      },
+      summary: {
+        ...makeDeployPlan().summary,
+        readyForDeployExecution: true
+      },
+      capabilities: {
+        readAvailable: true,
+        writeAvailable: true,
+        digest: {
+          canRequest: true
+        }
+      },
+      blockers: []
+    });
+
+    const { enqueueDeploySite } = await import("../server/src/services/releases.service");
+    const result = await enqueueDeploySite({
+      siteId: "site-1",
+      releaseId: "release-1",
+      deployMode: "local-dev-owner",
+      createdBy: "owner"
+    });
+
+    const jobInput = mocks.createJob.mock.calls[0][0];
+
+    expect(mocks.assertRecentVerifiedBackupForDangerousWrite).not.toHaveBeenCalled();
+    expect(mocks.buildSiteDeployPlan).toHaveBeenCalledWith("site-1", "release-1", {
+      deployMode: "local-dev-owner"
+    });
+    expect(jobInput.requiresApproval).toBe(false);
+    expect(jobInput.payload.deployMode).toBe("local-dev-owner");
+    expect(jobInput.payload.backupSafety).toMatchObject({
+      policy: "local-dev-owner-override",
+      required: false,
+      satisfied: true
+    });
+    expect(result.requiresApproval).toBe(false);
+    expect(result.approvalStatus).toBe("not-required");
+    expect(result.deployMode).toBe("local-dev-owner");
   });
 });

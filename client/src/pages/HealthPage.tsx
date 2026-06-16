@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { HeartPulse, RefreshCcw, ShieldCheck } from "lucide-react";
-import { SharePointHealthResult, sitesApi } from "../api/sitesApi";
+import { SharePointHealthEvidence, SharePointHealthResult, sitesApi } from "../api/sitesApi";
 import { Site } from "../types/site";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataTableColumn } from "../components/DataTable";
+import { DetailsDrawer } from "../components/DetailsDrawer";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
 import { HealthBadge } from "../components/HealthBadge";
+import { HelpLabel } from "../components/help/HelpLabel";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
@@ -14,6 +16,7 @@ import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatDateTime, formatNumber } from "../utils/format";
+import { runBrowserSharePointHealthCheck } from "../utils/sharepointBrowserConnector";
 
 export function HealthPage() {
   const [sites, setSites] = useState<Site[]>([]);
@@ -56,15 +59,19 @@ export function HealthPage() {
     setScheduleInterval(schedule?.intervalMinutes || 60);
   }, [selectedSite?._id, selectedSite?.maintenanceSchedule?.healthCheck?.enabled, selectedSite?.maintenanceSchedule?.healthCheck?.intervalMinutes]);
 
-  const runReadOnly = async () => {
-    if (!selectedSiteId) return;
-    setBusyAction("readonly");
+  const runReadOnlyFor = async (siteId = selectedSiteId) => {
+    if (!siteId) return;
+    setSelectedSiteId(siteId);
+    setBusyAction(`readonly-${siteId}`);
     setError("");
     setMessage("");
     try {
-      const result = await sitesApi.runSharePointReadOnlyHealth(selectedSiteId);
-      setHealthResult(result.data);
-      setMessage("בדיקת SharePoint read-only הסתיימה");
+      const site = sites.find((row) => row._id === siteId);
+      if (!site) throw new Error("האתר לא נמצא ברשימת ה־Hub");
+      const browserResult = await runBrowserSharePointHealthCheck(site);
+      setHealthResult(browserResult);
+      await sitesApi.recordBrowserSharePointHealth(siteId, browserResult);
+      setMessage("בדיקת Browser SharePoint read-only הסתיימה ונשמרה");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "שגיאה בהרצת בדיקת SharePoint");
@@ -72,6 +79,8 @@ export function HealthPage() {
       setBusyAction("");
     }
   };
+
+  const runReadOnly = async () => runReadOnlyFor(selectedSiteId);
 
   const saveSchedule = async () => {
     if (!selectedSiteId) return;
@@ -101,11 +110,120 @@ export function HealthPage() {
     }
   };
 
+  const siteHealthColumns: DataTableColumn<Site>[] = [
+    {
+      key: "site",
+      header: "אתר",
+      helpKey: "sites.registry",
+      render: (site) => (
+        <div>
+          <p className="font-bold" style={{ color: "var(--text-strong)" }}>{site.displayName}</p>
+          <p className="num text-xs muted">{site.siteCode}</p>
+        </div>
+      )
+    },
+    {
+      key: "status",
+      header: "סטטוס",
+      helpKey: "job.status",
+      render: (site) => <StatusBadge status={site.status} />
+    },
+    {
+      key: "health",
+      header: "תקינות",
+      helpKey: "health",
+      render: (site) => <HealthBadge status={site.derivedHealthStatus} />
+    },
+    {
+      key: "checked",
+      header: "בדיקה אחרונה",
+      helpKey: "health.readOnly",
+      render: (site) => <span className="num text-xs">{formatDateTime(site.lastHealthCheckAt)}</span>
+    },
+    {
+      key: "siteDb",
+      header: "siteDB",
+      helpKey: "site.mongodb",
+      render: (site) => <span className={`badge ${site.health?.siteDbExists ? "badge-success" : "badge-neutral"}`}>{site.health?.siteDbExists ? "כן" : "לא/לא ידוע"}</span>
+    },
+    {
+      key: "dist",
+      header: "dist",
+      helpKey: "site.finalDistPath",
+      render: (site) => <span className={`badge ${site.health?.distExists && site.health?.indexExists ? "badge-success" : "badge-neutral"}`}>{site.health?.distExists && site.health?.indexExists ? "כן" : "לא/לא ידוע"}</span>
+    },
+    {
+      key: "txt",
+      header: "TXT",
+      helpKey: "site.txtAdmins",
+      render: (site) => <span className={`badge ${site.health?.txtFilesExist ? "badge-success" : "badge-neutral"}`}>{site.health?.txtFilesExist ? "כן" : "לא/לא ידוע"}</span>
+    },
+    {
+      key: "actions",
+      header: "פעולה",
+      helpKey: "operations",
+      render: (site) => (
+        <div className="flex flex-wrap gap-2">
+          <button className="btn btn-primary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `readonly-${site._id}`} onClick={() => void runReadOnlyFor(site._id)} type="button">בדוק</button>
+          <Link className="btn btn-secondary min-h-0 px-2 py-1 text-xs" to={`/sites/${site._id}`}>פרטים</Link>
+        </div>
+      )
+    }
+  ];
+
+  const siteHealthMobileCard = (site: Site) => (
+    <div className="space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate font-bold" style={{ color: "var(--text-strong)" }}>{site.displayName}</p>
+          <p className="num text-xs muted">{site.siteCode}</p>
+        </div>
+        <HealthBadge status={site.derivedHealthStatus} />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge status={site.status} />
+        <span className="badge badge-neutral">Last: {formatDateTime(site.lastHealthCheckAt)}</span>
+      </div>
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <span className={`badge ${site.health?.siteDbExists ? "badge-success" : "badge-neutral"}`}>siteDB</span>
+        <span className={`badge ${site.health?.distExists && site.health?.indexExists ? "badge-success" : "badge-neutral"}`}>dist</span>
+        <span className={`badge ${site.health?.txtFilesExist ? "badge-success" : "badge-neutral"}`}>TXT</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button className="btn btn-primary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `readonly-${site._id}`} onClick={() => void runReadOnlyFor(site._id)} type="button">בדוק</button>
+        <Link className="btn btn-secondary min-h-0 px-2 py-1 text-xs" to={`/sites/${site._id}`}>פרטים</Link>
+      </div>
+    </div>
+  );
+
+  const healthEvidenceColumns: DataTableColumn<SharePointHealthEvidence>[] = [
+    {
+      key: "check",
+      header: "בדיקה",
+      helpKey: "health.readOnly",
+      render: (item) => (
+        <div>
+          <p className="font-bold">{item.label || item.key}</p>
+          {item.key ? <p className="num text-xs muted">{item.key}</p> : null}
+        </div>
+      )
+    },
+    {
+      key: "result",
+      header: "תוצאה",
+      helpKey: "health",
+      render: (item) => <span className={`badge ${item.ok ? "badge-success" : item.authBlocked ? "badge-warning" : "badge-danger"}`}>{item.ok ? "OK" : item.authBlocked ? "AUTH" : "FAIL"} {item.status || ""}</span>
+    },
+    { key: "url", header: "URL", helpKey: "sharepoint.read", render: (item) => <code className="num block max-w-[520px] truncate text-xs muted" title={item.url}>{item.url}</code> },
+    { key: "error", header: "שגיאה", helpKey: "diagnostics", render: (item) => item.error ? <code className="num block max-w-[240px] truncate text-xs" style={{ color: "var(--danger)" }} title={item.error}>{item.error}</code> : <span className="muted">-</span> }
+  ];
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="בדיקות תקינות"
-        subtitle="תצוגה רוחבית של health לכל האתרים והרצת בדיקת SharePoint read-only לאתר נבחר."
+        subtitle="תצוגה רוחבית של health לכל האתרים והרצת בדיקת Browser SharePoint read-only לאתר נבחר."
+        helpKey="health"
         actions={<MetadataOnlyBadge mode="readonly" />}
       />
 
@@ -116,52 +234,35 @@ export function HealthPage() {
       {!loading && !error ? (
         <>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard title="תקינים" value={formatNumber(counts.healthy)} icon={<ShieldCheck size={18} />} description="Health healthy" tone="success" />
-            <KpiCard title="אזהרה" value={formatNumber(counts.warning)} icon={<HeartPulse size={18} />} description="דורשים בדיקה" tone={counts.warning ? "warning" : "success"} />
-            <KpiCard title="נכשלו" value={formatNumber(counts.failed)} icon={<HeartPulse size={18} />} description="Health failed" tone={counts.failed ? "danger" : "success"} />
-            <KpiCard title="לא נבדקו" value={formatNumber(counts.unknown)} icon={<HeartPulse size={18} />} description="אין health אחרון" tone="neutral" />
+            <KpiCard variant="inline" title="תקינים" value={formatNumber(counts.healthy)} icon={<ShieldCheck size={18} />} description="Health healthy" tone="success" helpKey="health" />
+            <KpiCard variant="inline" title="אזהרה" value={formatNumber(counts.warning)} icon={<HeartPulse size={18} />} description="דורשים בדיקה" tone={counts.warning ? "warning" : "success"} helpKey="health" />
+            <KpiCard variant="inline" title="נכשלו" value={formatNumber(counts.failed)} icon={<HeartPulse size={18} />} description="Health failed" tone={counts.failed ? "danger" : "success"} helpKey="health.pathFailure" />
+            <KpiCard variant="inline" title="לא נבדקו" value={formatNumber(counts.unknown)} icon={<HeartPulse size={18} />} description="אין health אחרון" tone="neutral" helpKey="health.readOnly" />
           </div>
 
-          <SectionCard title="הרצת בדיקה Read-only" subtitle="בודקת ספריות, dist, index, assets וקבצי TXT ללא כתיבה ל־SharePoint.">
+          <SectionCard title="הרצת בדיקה Read-only" subtitle="בודקת דרך הדפדפן ספריות, dist, index, assets וקבצי TXT ללא כתיבה ל־SharePoint." helpKey="health.readOnly">
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
               <label className="block">
-                <span className="field-label">אתר</span>
+                <span className="field-label"><HelpLabel helpKey="sites.registry">אתר</HelpLabel></span>
                 <select className="control" value={selectedSiteId} onChange={(e) => { setSelectedSiteId(e.target.value); setHealthResult(null); }}>
                   {sites.map((site) => <option key={site._id} value={site._id}>{site.displayName} ({site.siteCode})</option>)}
                 </select>
               </label>
-              <button className="btn btn-primary" disabled={!selectedSiteId || busyAction === "readonly"} onClick={runReadOnly} type="button">הרץ בדיקה</button>
+              <button className="btn btn-primary" disabled={!selectedSiteId || busyAction === `readonly-${selectedSiteId}`} onClick={() => void runReadOnly()} type="button">הרץ בדיקה</button>
               <button className="btn btn-secondary" onClick={load} type="button"><RefreshCcw size={15} />רענן</button>
             </div>
-            {healthResult ? (
-              <div className="mt-5">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <HealthBadge status={healthResult.derivedHealthStatus as any} />
-                  <span className="num text-xs muted">{formatDateTime(healthResult.checkedAt)}</span>
-                </div>
-                <DataTable columns={["בדיקה", "תוצאה", "URL"]} minWidth={820}>
-                  {healthResult.evidence.map((item) => (
-                    <tr key={`${item.label}-${item.url}`}>
-                      <td>{item.label}</td>
-                      <td><span className={`badge ${item.ok ? "badge-success" : item.authBlocked ? "badge-warning" : "badge-danger"}`}>{item.ok ? "OK" : item.authBlocked ? "AUTH" : "FAIL"} {item.status || ""}</span></td>
-                      <td><code className="num block max-w-[520px] truncate text-xs muted" title={item.url}>{item.url}</code></td>
-                    </tr>
-                  ))}
-                </DataTable>
-              </div>
-            ) : null}
           </SectionCard>
 
-          <SectionCard title="תזמון בדיקות חוזרות" subtitle="השרת ייצור health-check jobs לקריאה בלבד לפי המרווח שנשמר לאתר.">
+          <SectionCard title="תזמון בדיקות חוזרות" subtitle="השרת ייצור health-check jobs לקריאה בלבד לפי המרווח שנשמר לאתר." helpKey="backup.schedule">
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
               <label className="block">
-                <span className="field-label">אתר</span>
+                <span className="field-label"><HelpLabel helpKey="sites.registry">אתר</HelpLabel></span>
                 <select className="control" value={selectedSiteId} onChange={(e) => { setSelectedSiteId(e.target.value); setHealthResult(null); }}>
                   {sites.map((site) => <option key={site._id} value={site._id}>{site.displayName} ({site.siteCode})</option>)}
                 </select>
               </label>
               <label className="block">
-                <span className="field-label">מרווח בדקות</span>
+                <span className="field-label"><HelpLabel helpKey="backup.schedule">מרווח בדקות</HelpLabel></span>
                 <input className="control num" min={5} type="number" value={scheduleInterval} onChange={(e) => setScheduleInterval(Number(e.target.value))} />
               </label>
               <label className="flex min-h-[44px] items-center gap-2">
@@ -177,29 +278,51 @@ export function HealthPage() {
             </div>
           </SectionCard>
 
-          <SectionCard title="מצב תקינות לכל האתרים" subtitle="פתח אתר לפרטים וראיות מלאות">
-            <DataTable columns={["אתר", "סטטוס", "תקינות", "בדיקה אחרונה", "siteDB", "dist", "TXT", "פעולה"]} minWidth={1060}>
-              {sites.length === 0 ? (
-                <tr><td colSpan={8}><EmptyState title="אין אתרים" description="לא נמצאו אתרים ברשימת ה־Hub." /></td></tr>
-              ) : sites.map((site) => (
-                <tr key={site._id}>
-                  <td>
-                    <p className="font-bold" style={{ color: "var(--text-strong)" }}>{site.displayName}</p>
-                    <p className="num text-xs muted">{site.siteCode}</p>
-                  </td>
-                  <td><StatusBadge status={site.status} /></td>
-                  <td><HealthBadge status={site.derivedHealthStatus} /></td>
-                  <td className="num text-xs">{formatDateTime(site.lastHealthCheckAt)}</td>
-                  <td><span className={`badge ${site.health?.siteDbExists ? "badge-success" : "badge-neutral"}`}>{site.health?.siteDbExists ? "כן" : "לא/לא ידוע"}</span></td>
-                  <td><span className={`badge ${site.health?.distExists && site.health?.indexExists ? "badge-success" : "badge-neutral"}`}>{site.health?.distExists && site.health?.indexExists ? "כן" : "לא/לא ידוע"}</span></td>
-                  <td><span className={`badge ${site.health?.txtFilesExist ? "badge-success" : "badge-neutral"}`}>{site.health?.txtFilesExist ? "כן" : "לא/לא ידוע"}</span></td>
-                  <td><Link className="btn btn-secondary min-h-0 px-2 py-1 text-xs" to={`/sites/${site._id}`}>פרטים</Link></td>
-                </tr>
-              ))}
-            </DataTable>
+          <SectionCard title="מצב תקינות לכל האתרים" subtitle="פתח אתר לפרטים וראיות מלאות" helpKey="health">
+            {sites.length === 0 ? (
+              <EmptyState title="אין אתרים" description="לא נמצאו אתרים ברשימת ה־Hub." />
+            ) : (
+              <DataTable columns={siteHealthColumns} rows={sites} rowKey={(site) => site._id} mobileCard={siteHealthMobileCard} minWidth={1060} density="dense" />
+            )}
           </SectionCard>
         </>
       ) : null}
+
+      <DetailsDrawer open={Boolean(healthResult)} title="תוצאות בדיקת Health" subtitle={healthResult ? `${healthResult.siteCode} · ${healthResult.source || healthResult.connectorMode || "Backend SharePoint"} · ${formatDateTime(healthResult.checkedAt)}` : ""} onClose={() => setHealthResult(null)}>
+        {healthResult ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <HealthBadge status={healthResult.derivedHealthStatus as any} />
+              <span className="badge badge-info">{healthResult.source || "Backend SharePoint"}</span>
+              <span className="num text-xs muted">{formatDateTime(healthResult.checkedAt)}</span>
+            </div>
+            {healthResult.evidence.length === 0 ? (
+              <EmptyState title="אין Evidence להצגה" description="הבדיקה הסתיימה בלי שורות פירוט." />
+            ) : (
+              <DataTable
+                columns={healthEvidenceColumns}
+                rows={healthResult.evidence}
+                rowKey={(item) => `${item.key || item.label}-${item.url}`}
+                minWidth={820}
+                density="dense"
+                mobileCard={(item) => (
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-bold">{item.label || item.key}</p>
+                        <code className="num block max-w-full truncate text-xs muted" title={item.url}>{item.url}</code>
+                      </div>
+                      <span className={`badge shrink-0 ${item.ok ? "badge-success" : item.authBlocked ? "badge-warning" : "badge-danger"}`}>{item.ok ? "OK" : item.authBlocked ? "AUTH" : "FAIL"}</span>
+                    </div>
+                    {item.status || item.statusText ? <p className="text-xs muted">{item.status ? `HTTP ${item.status}` : ""} {item.statusText || ""}</p> : null}
+                    {item.error ? <code className="num block max-w-full truncate text-xs" style={{ color: "var(--danger)" }} title={item.error}>{item.error}</code> : null}
+                  </div>
+                )}
+              />
+            )}
+          </div>
+        ) : null}
+      </DetailsDrawer>
     </div>
   );
 }

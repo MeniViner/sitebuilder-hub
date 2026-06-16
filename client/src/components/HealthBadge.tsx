@@ -2,6 +2,7 @@ import { ShieldAlert, ShieldCheck, ShieldQuestion, ShieldX } from "lucide-react"
 import { ReactNode } from "react";
 import { DerivedHealthStatus } from "../types/site";
 import { healthStatusLabel } from "../utils/format";
+import { HelpIcon } from "./help/HelpIcon";
 
 export function HealthBadge({ status }: { status?: DerivedHealthStatus | string }) {
   const map: Record<string, { tone: string; icon: ReactNode }> = {
@@ -12,5 +13,5 @@ export function HealthBadge({ status }: { status?: DerivedHealthStatus | string 
   };
 
   const item = map[status || ""] ?? map.unknown;
-  return <span className={`badge ${item.tone}`}>{item.icon}{healthStatusLabel(status)}</span>;
+  return <span className={`badge ${item.tone}`}>{item.icon}{healthStatusLabel(status)}<HelpIcon helpKey="health" className="help-icon-in-token" /></span>;
 }

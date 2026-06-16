@@ -1,5 +1,6 @@
 export type SiteStatus = "active" | "warning" | "failed" | "draft" | "archived";
 export type DerivedHealthStatus = "healthy" | "warning" | "failed" | "unknown";
+export type SiteEnvironment = "unknown" | "local" | "dev" | "test" | "staging" | "production";
 
 export interface SiteHealth {
   siteDbExists?: boolean;
@@ -27,11 +28,19 @@ export interface SiteMaintenanceSchedule {
   healthCheck?: SiteMaintenanceTaskSchedule;
 }
 
+export interface SiteAdminIdentity {
+  displayName?: string;
+  personalNumber?: string;
+  email?: string;
+  loginName?: string;
+}
+
 export interface Site {
   _id: string;
   siteCode: string;
   displayName: string;
   description?: string;
+  environment?: SiteEnvironment;
   sharePointHost?: string;
   sharePointSiteUrl: string;
   finalAppUrl?: string;
@@ -72,6 +81,7 @@ export interface Site {
       theme?: string;
       widgets?: string;
       externalLinks?: string;
+      gantt?: string;
     };
   };
   ownerName?: string;
@@ -99,6 +109,9 @@ export interface Site {
   lastBackupId?: string;
   lastAdminSyncAt?: string;
   adminSyncStatus?: "unknown" | "idle" | "running" | "succeeded" | "failed";
+  txtAdmins?: SiteAdminIdentity[];
+  siteCollectionAdmins?: SiteAdminIdentity[];
+  ownersGroupAdmins?: SiteAdminIdentity[];
   createdAt: string;
   updatedAt: string;
   lastError?: string;

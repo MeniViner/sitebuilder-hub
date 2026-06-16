@@ -52,6 +52,7 @@ export type SiteBuilderResolvedPaths = {
     theme: string;
     widgets: string;
     externalLinks: string;
+    gantt: string;
   };
 };
 
@@ -182,7 +183,8 @@ export const resolveSiteBuilderPaths = (input: SiteBuilderPathInput): SiteBuilde
       siteContent: joinServerRelative(siteAssetsRoot, "site_content_data.txt"),
       theme: joinServerRelative(siteAssetsRoot, "theme_data.txt"),
       widgets: joinServerRelative(widgetsRoot, "widgets_data.txt"),
-      externalLinks: joinServerRelative(siteAssetsRoot, "external_links_data.txt")
+      externalLinks: joinServerRelative(siteAssetsRoot, "external_links_data.txt"),
+      gantt: joinServerRelative(siteAssetsRoot, "gantt_data.txt")
     }
   };
 };

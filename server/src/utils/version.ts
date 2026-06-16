@@ -1,4 +1,5 @@
 export type ParsedSemver = { major: number; minor: number; patch: number };
+export type ReleaseType = "patch" | "minor" | "major" | "hotfix";
 
 export function parseSemver(version: string): ParsedSemver | null {
   const match = String(version || "").trim().match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -15,10 +16,23 @@ export function semverToString(value: ParsedSemver): string {
 }
 
 export function bumpPatch(version: string): string {
+  return bumpVersion(version, "patch");
+}
+
+export function bumpVersion(version: string, releaseType: ReleaseType = "patch"): string {
   const parsed = parseSemver(version);
   if (!parsed) {
     throw new Error(`גרסה לא תקינה: ${version}`);
   }
+
+  if (releaseType === "major") {
+    return semverToString({ major: parsed.major + 1, minor: 0, patch: 0 });
+  }
+
+  if (releaseType === "minor") {
+    return semverToString({ major: parsed.major, minor: parsed.minor + 1, patch: 0 });
+  }
+
   return semverToString({ ...parsed, patch: parsed.patch + 1 });
 }
 

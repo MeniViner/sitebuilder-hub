@@ -5,6 +5,7 @@ import { Site } from "../types/site";
 import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
+import { HelpLabel } from "../components/help/HelpLabel";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
@@ -210,6 +211,7 @@ export function AdminsPage() {
       <PageHeader
         title="מנהלים"
         subtitle="ניהול מקורות הרשאה לאתר: TXT admins נשמרים במטא־דאטה, ו־Site Collection Admins / Owners Group נכתבים ל־SharePoint ומרעננים snapshot."
+        helpKey="site.admins"
         actions={<div className="flex flex-wrap gap-2"><MetadataOnlyBadge mode="metadata" /><span className="badge badge-warning">SharePoint write</span></div>}
       />
 
@@ -219,14 +221,14 @@ export function AdminsPage() {
 
       {!loading && !error ? (
         <>
-          <SectionCard title="בחירת אתר וקריאת מקורות" subtitle="Live read קורא מ־SharePoint ללא שינוי; Sync שומר snapshot/read results ב־Mongo.">
+          <SectionCard title="בחירת אתר וקריאת מקורות" subtitle="Live read קורא מ־SharePoint ללא שינוי; Sync שומר snapshot/read results ב־Mongo." helpKey="site.adminLiveRead">
             <div className="mb-4 flex flex-wrap gap-2">
               <MetadataOnlyBadge mode="readonly" />
               <MetadataOnlyBadge mode="metadata" />
             </div>
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
               <label className="block">
-                <span className="field-label">אתר</span>
+                <span className="field-label"><HelpLabel helpKey="sites.registry">אתר</HelpLabel></span>
                 <select className="control" value={selectedSiteId} onChange={(e) => { setLiveData(null); setTxtRepairPlan(null); setTxtRepairNotes(""); load(e.target.value); }}>
                   {sites.map((site) => <option key={site._id} value={site._id}>{site.displayName} ({site.siteCode})</option>)}
                 </select>
@@ -247,14 +249,14 @@ export function AdminsPage() {
           </SectionCard>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard title="מנהלים ייחודיים" value={formatNumber(adminsCount)} icon={<Users size={18} />} description={selectedSite?.displayName || "אתר נבחר"} tone="info" />
-            <KpiCard title="TXT admins" value={formatNumber((adminData?.txtAdmins || []).length)} icon={<Users size={18} />} description="מקור users_data.txt או Mongo snapshot" tone="neutral" />
-            <KpiCard title="Site Collection" value={formatNumber((adminData?.siteCollectionAdmins || []).length)} icon={<Users size={18} />} description="מקור SharePoint siteusers" tone="neutral" />
-            <KpiCard title="Owners Group" value={formatNumber((adminData?.ownersGroupAdmins || []).length)} icon={<Users size={18} />} description="Associated owners group" tone="neutral" />
+            <KpiCard title="מנהלים ייחודיים" value={formatNumber(adminsCount)} icon={<Users size={18} />} description={selectedSite?.displayName || "אתר נבחר"} tone="info" helpKey="site.admins" />
+            <KpiCard title="TXT admins" value={formatNumber((adminData?.txtAdmins || []).length)} icon={<Users size={18} />} description="מקור users_data.txt או Mongo snapshot" tone="neutral" helpKey="site.txtAdmins" />
+            <KpiCard title="Site Collection" value={formatNumber((adminData?.siteCollectionAdmins || []).length)} icon={<Users size={18} />} description="מקור SharePoint siteusers" tone="neutral" helpKey="site.siteCollectionAdmins" />
+            <KpiCard title="Owners Group" value={formatNumber((adminData?.ownersGroupAdmins || []).length)} icon={<Users size={18} />} description="Associated owners group" tone="neutral" helpKey="site.ownersGroup" />
           </div>
 
           {liveData ? (
-            <SectionCard title="תוצאות Live read" subtitle="קריאה ישירה מ־SharePoint, ללא פעולת כתיבה">
+            <SectionCard title="תוצאות Live read" subtitle="קריאה ישירה מ־SharePoint, ללא פעולת כתיבה" helpKey="site.adminLiveRead">
               <div className="mb-4 grid gap-3 md:grid-cols-4">
                 <div className="soft-panel p-3"><p className="text-xs font-bold muted">נלכד</p><p className="num text-sm">{formatDateTime(liveData.capturedAt)}</p></div>
                 <div className="soft-panel p-3"><p className="text-xs font-bold muted">Unique admins</p><p className="num text-sm">{liveData.adminsCount}</p></div>
@@ -266,7 +268,12 @@ export function AdminsPage() {
                   </div>
                 ))}
               </div>
-              <DataTable columns={["מקור", "תקין", "כמות", "שגיאה"]} minWidth={720}>
+              <DataTable columns={[
+                { header: "מקור", helpKey: "site.admins" },
+                { header: "תקין", helpKey: "sharepoint.read" },
+                { header: "כמות", helpKey: "site.admins" },
+                { header: "שגיאה", helpKey: "diagnostics" }
+              ]} minWidth={720}>
                 {sourceStatus.map((source) => (
                   <tr key={source.source}>
                     <td>{source.source}</td>
@@ -279,7 +286,7 @@ export function AdminsPage() {
             </SectionCard>
           ) : null}
 
-          <SectionCard title="תיקון TXT admins" subtitle="Plan הוא read-only ומציג את הדלתא הצפויה ב־users_data.txt. Queue יוצר Job תיקון TXT בלבד וממתין לאישור Admin במסך Jobs.">
+          <SectionCard title="תיקון TXT admins" subtitle="Plan הוא read-only ומציג את הדלתא הצפויה ב־users_data.txt. Queue יוצר Job תיקון TXT בלבד וממתין לאישור Admin במסך Jobs." helpKey="site.txtAdmins">
             <div className="mb-4 flex flex-wrap gap-2">
               <MetadataOnlyBadge mode="readonly" />
               <span className="badge badge-warning"><AlertTriangle size={12} />דורש אישור Admin</span>
@@ -287,7 +294,7 @@ export function AdminsPage() {
             </div>
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
               <label className="block">
-                <span className="field-label">הערת Queue</span>
+                <span className="field-label"><HelpLabel helpKey="job.approval">הערת Queue</HelpLabel></span>
                 <input
                   className="control"
                   placeholder="לדוגמה: תיקון TXT לפי פערים בין מקורות הרשאה"
@@ -319,19 +326,19 @@ export function AdminsPage() {
             {txtRepairPlan ? (
               <div className="mt-5 space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <KpiCard title="להוספה ל־TXT" value={formatNumber(txtRepairSummary.additionsCount)} icon={<FileText size={18} />} tone={txtRepairSummary.additionsCount ? "warning" : "success"} />
-                  <KpiCard title="להסרה מ־TXT" value={formatNumber(txtRepairSummary.removalsCount)} icon={<FileText size={18} />} tone={txtRepairSummary.removalsCount ? "warning" : "success"} />
-                  <KpiCard title="TXT נוכחי" value={formatNumber(txtRepairSummary.currentCount)} icon={<Users size={18} />} tone="neutral" />
-                  <KpiCard title="TXT אחרי תיקון" value={formatNumber(txtRepairSummary.targetCount)} icon={<Users size={18} />} tone={txtRepairSummary.changesCount ? "info" : "success"} />
+                  <KpiCard title="להוספה ל־TXT" value={formatNumber(txtRepairSummary.additionsCount)} icon={<FileText size={18} />} tone={txtRepairSummary.additionsCount ? "warning" : "success"} helpKey="site.txtAdmins" />
+                  <KpiCard title="להסרה מ־TXT" value={formatNumber(txtRepairSummary.removalsCount)} icon={<FileText size={18} />} tone={txtRepairSummary.removalsCount ? "warning" : "success"} helpKey="site.txtAdmins" />
+                  <KpiCard title="TXT נוכחי" value={formatNumber(txtRepairSummary.currentCount)} icon={<Users size={18} />} tone="neutral" helpKey="site.txtAdmins" />
+                  <KpiCard title="TXT אחרי תיקון" value={formatNumber(txtRepairSummary.targetCount)} icon={<Users size={18} />} tone={txtRepairSummary.changesCount ? "info" : "success"} helpKey="site.txtAdmins" />
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="soft-panel p-3">
-                    <p className="field-label">נוצר</p>
+                    <p className="field-label"><HelpLabel helpKey="job">נוצר</HelpLabel></p>
                     <p className="num text-sm">{formatDateTime(txtRepairPlan.generatedAt)}</p>
                   </div>
                   <div className="soft-panel p-3">
-                    <p className="field-label">קובץ יעד</p>
+                    <p className="field-label"><HelpLabel helpKey="site.txtAdmins">קובץ יעד</HelpLabel></p>
                     <code className="num block truncate text-xs muted" title={txtRepairSummary.targetPath}>{txtRepairSummary.targetPath || "users_data.txt"}</code>
                   </div>
                 </div>
@@ -342,7 +349,11 @@ export function AdminsPage() {
                   </div>
                 ) : null}
 
-                <DataTable columns={["דלתא", "כמות", "דוגמאות"]} minWidth={840}>
+                <DataTable columns={[
+                  { header: "דלתא", helpKey: "site.txtAdmins" },
+                  { header: "כמות", helpKey: "site.admins" },
+                  { header: "דוגמאות", helpKey: "audit.evidence" }
+                ]} minWidth={840}>
                   {[
                     ["יתווספו ל־TXT", txtRepairDiff.additions],
                     ["יוסרו מ־TXT", txtRepairDiff.removals],
@@ -362,7 +373,7 @@ export function AdminsPage() {
 
                 {txtRepairDiff.previewLines.length ? (
                   <div className="rounded-lg border p-3" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
-                    <p className="field-label">TXT preview</p>
+                    <p className="field-label"><HelpLabel helpKey="audit.evidence">TXT preview</HelpLabel></p>
                     <pre className="num mt-2 max-h-72 overflow-auto text-xs">{txtRepairDiff.previewLines.slice(0, 80).join("\n")}</pre>
                   </div>
                 ) : null}
@@ -375,30 +386,30 @@ export function AdminsPage() {
             ) : null}
           </SectionCard>
 
-          <SectionCard title="הוספת Admin" subtitle="TXT מעדכן מטא־דאטה ב־Hub. Site Collection ו־Owners Group מבצעים כתיבה אמיתית ל־SharePoint ואז קריאת אימות.">
+          <SectionCard title="הוספת Admin" subtitle="TXT מעדכן מטא־דאטה ב־Hub. Site Collection ו־Owners Group מבצעים כתיבה אמיתית ל־SharePoint ואז קריאת אימות." helpKey="site.admins">
             <div className="mb-4 flex flex-wrap gap-2">
               <MetadataOnlyBadge mode="metadata" />
               <span className="badge badge-warning">SharePoint write</span>
             </div>
             <div className="grid gap-3 md:grid-cols-5">
               <label className="block">
-                <span className="field-label">שם</span>
+                <span className="field-label"><HelpLabel helpKey="site.admins">שם</HelpLabel></span>
                 <input className="control" value={newAdmin.displayName} onChange={(e) => setNewAdmin((p) => ({ ...p, displayName: e.target.value }))} />
               </label>
               <label className="block">
-                <span className="field-label">מספר אישי</span>
+                <span className="field-label"><HelpLabel helpKey="site.admins">מספר אישי</HelpLabel></span>
                 <input className="control" placeholder="s1234567" value={newAdmin.personalNumber} onChange={(e) => setNewAdmin((p) => ({ ...p, personalNumber: e.target.value }))} />
               </label>
               <label className="block">
-                <span className="field-label">מייל</span>
+                <span className="field-label"><HelpLabel helpKey="site.admins">מייל</HelpLabel></span>
                 <input className="control" value={newAdmin.email} onChange={(e) => setNewAdmin((p) => ({ ...p, email: e.target.value }))} />
               </label>
               <label className="block">
-                <span className="field-label">Login</span>
+                <span className="field-label"><HelpLabel helpKey="site.admins">Login</HelpLabel></span>
                 <input className="control" value={newAdmin.loginName} onChange={(e) => setNewAdmin((p) => ({ ...p, loginName: e.target.value }))} />
               </label>
               <label className="block">
-                <span className="field-label">מקור</span>
+                <span className="field-label"><HelpLabel helpKey="site.admins">מקור</HelpLabel></span>
                 <select className="control" value={newAdmin.source} onChange={(e) => setNewAdmin((p) => ({ ...p, source: e.target.value as AdminSource }))}>
                   <option value="txt">TXT</option>
                   <option value="siteCollection">Site Collection</option>
@@ -421,8 +432,12 @@ export function AdminsPage() {
             <SourcePanel title="Owners Group" source="ownersGroup" rows={adminData?.ownersGroupAdmins || []} onRemove={removeAdmin} />
           </div>
 
-          <SectionCard title="פערים בין מקורות" subtitle="הפערים נגזרים מהמפתחות המנורמלים של הרשומות">
-            <DataTable columns={["פער", "כמות", "ערכים"]} minWidth={760}>
+          <SectionCard title="פערים בין מקורות" subtitle="הפערים נגזרים מהמפתחות המנורמלים של הרשומות" helpKey="site.admins">
+            <DataTable columns={[
+              { header: "פער", helpKey: "site.admins" },
+              { header: "כמות", helpKey: "site.admins" },
+              { header: "ערכים", helpKey: "audit.evidence" }
+            ]} minWidth={760}>
               {[
                 ["חסרים ב־TXT", diff.missingInTxt || []],
                 ["חסרים ב־Site Collection", diff.missingInSiteCollection || []],

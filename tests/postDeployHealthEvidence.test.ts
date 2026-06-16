@@ -205,6 +205,8 @@ describe("post-deploy SharePoint health evidence", () => {
       mocks.readSharePointFileEvidence.mock.invocationCallOrder[1]
     );
     expect(deployment.status).toBe("succeeded");
+    expect(site.currentVersion).toBe("1.2.4");
+    expect(site.version).toBe("1.2.4");
     expect(deployment.verification).toMatchObject({
       status: "verified",
       filesCount: 2,
@@ -257,6 +259,8 @@ describe("post-deploy SharePoint health evidence", () => {
     expect(mocks.readSharePointFileEvidence).toHaveBeenCalledTimes(2);
     expect(mocks.runReadOnlySharePointHealthCheck).toHaveBeenCalledWith("site-1");
     expect(deployment.status).toBe("failed");
+    expect(site.currentVersion).toBe("1.2.3");
+    expect(site.version).toBe("1.2.3");
     expect(deployment.error).toBe(`deploy-final-app-url-verification-failed:${finalAppUrl}`);
     expect(deployment.verification).toMatchObject({
       status: "failed",

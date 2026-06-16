@@ -15,6 +15,33 @@ export function normalizeError(error: unknown): { code: string; message: string;
     return { code: "NOT_FOUND", message: "Release לא נמצא", status: 404 };
   }
 
+  if (
+    error instanceof Error &&
+    [
+      "release-artifact-file-path-invalid",
+      "release-artifact-path-traversal-blocked",
+      "release-artifact-file-not-in-manifest",
+      "release-artifact-file-not-found",
+      "release-artifact-file-hash-mismatch"
+    ].includes(error.message)
+  ) {
+    return { code: "ARTIFACT_FILE_BLOCKED", message: "בקשת קובץ artifact אינה תקינה או אינה מותרת", status: 400 };
+  }
+
+  if (
+    error instanceof Error &&
+    [
+      "browser-deploy-connector-mode-required",
+      "releaseId-required",
+      "browser-deploy-site-mismatch",
+      "browser-deploy-version-after-mismatch",
+      "browser-deploy-success-evidence-invalid",
+      "release-artifact-not-ready"
+    ].includes(error.message)
+  ) {
+    return { code: "BROWSER_DEPLOY_EVIDENCE_INVALID", message: "Evidence של browser deploy אינו תקין", status: 400 };
+  }
+
   if (error instanceof Error && error.message === "backup-not-found") {
     return { code: "NOT_FOUND", message: "Backup לא נמצא", status: 404 };
   }
@@ -58,7 +85,7 @@ export function normalizeError(error: unknown): { code: string; message: string;
   ) {
     return {
       code: "JOB_REQUIRES_APPROVAL",
-      message: "This job must be approved by a separate admin before it can run.",
+      message: "This job must be approved before it can run.",
       status: 409
     };
   }
@@ -104,11 +131,11 @@ export function normalizeError(error: unknown): { code: string; message: string;
   }
 
   if (error instanceof Error && error.message === "job-already-awaiting-approval") {
-    return { code: "CONFLICT", message: "Job כבר ממתין לאישור", status: 409 };
+    return { code: "CONFLICT", message: "Job כבר נמצא במצב אישור מתקדם", status: 409 };
   }
 
   if (error instanceof Error && error.message === "job-approval-not-awaiting") {
-    return { code: "CONFLICT", message: "Job אינו ממתין לאישור", status: 409 };
+    return { code: "CONFLICT", message: "Job אינו במצב אישור מתקדם", status: 409 };
   }
 
   if (error instanceof Error && error.message === "job-approval-expired") {
@@ -122,7 +149,7 @@ export function normalizeError(error: unknown): { code: string; message: string;
   if (error instanceof Error && error.message === "job-self-approval-forbidden") {
     return {
       code: "JOB_SELF_APPROVAL_FORBIDDEN",
-      message: "מבקש הפעולה אינו יכול לאשר בעצמו Job מסוכן או כותב.",
+      message: "אישור עצמי חסום עבור Job זה.",
       status: 403
     };
   }
@@ -150,7 +177,7 @@ export function normalizeError(error: unknown): { code: string; message: string;
   if (error instanceof Error && error.message.startsWith("dangerous-write-backup-required:")) {
     return {
       code: "DANGEROUS_WRITE_BACKUP_REQUIRED",
-      message: "נדרש גיבוי מאומת ועדכני לפני פעולה כותבת מסוכנת.",
+      message: "אי אפשר להמשיך: אין גיבוי זמין.",
       status: 409
     };
   }
@@ -158,7 +185,7 @@ export function normalizeError(error: unknown): { code: string; message: string;
   if (error instanceof Error && error.message.startsWith("dangerous-write-backup-stale:")) {
     return {
       code: "DANGEROUS_WRITE_BACKUP_STALE",
-      message: "הגיבוי המאומת האחרון ישן מדי לפעולה כותבת מסוכנת.",
+      message: "אי אפשר להמשיך: הגיבוי הזמין ישן מדי.",
       status: 409
     };
   }
@@ -244,7 +271,12 @@ export function normalizeError(error: unknown): { code: string; message: string;
   }
 
   if (error instanceof Error && error.name === "SharePointWriteCapabilityError") {
-    return { code: "SHAREPOINT_WRITE_NOT_CONFIGURED", message: error.message, status: 409 };
+    return {
+      code: "SHAREPOINT_WRITE_NOT_CONFIGURED",
+      message: "Deploy cannot run because SharePoint write is not configured.",
+      status: 409,
+      details: { reason: error.message }
+    };
   }
 
   if (error instanceof Error && error.message === "real-deploy-not-implemented") {
@@ -256,21 +288,42 @@ export function normalizeError(error: unknown): { code: string; message: string;
   }
 
   if (error instanceof Error && error.message === "release-artifact-ref-missing") {
-    return { code: "RELEASE_ARTIFACT_MISSING", message: "ל-Release אין artifactRef לתיקיית dist או manifest.", status: 409 };
+    return {
+      code: "RELEASE_ARTIFACT_MISSING",
+      message: "Deploy cannot run because the release artifact is missing.",
+      status: 409
+    };
   }
 
   if (error instanceof Error && error.message.startsWith("release-artifact-not-found:")) {
-    return { code: "RELEASE_ARTIFACT_NOT_FOUND", message: "נתיב artifactRef של ה-Release לא נמצא בשרת.", status: 404 };
+    return {
+      code: "RELEASE_ARTIFACT_NOT_FOUND",
+      message: "Deploy cannot run because the release artifact path is invalid or missing on the server.",
+      status: 404,
+      details: { artifactRef: error.message.replace("release-artifact-not-found:", "") }
+    };
   }
 
   if (error instanceof Error && error.message === "deploy-plan-not-ready") {
-    return { code: "DEPLOY_PLAN_NOT_READY", message: "תוכנית deploy אינה מוכנה: חסרים קבצים או index.html.", status: 409 };
+    return {
+      code: "DEPLOY_PLAN_NOT_READY",
+      message: "Deploy cannot run because the release artifact is invalid.",
+      status: 409
+    };
   }
 
   if (error instanceof Error && error.message.startsWith("deploy-final-app-url-verification-failed:")) {
     return {
       code: "DEPLOY_FINAL_APP_URL_VERIFICATION_FAILED",
-      message: "Deploy כתב את הקבצים אך אימות URL האפליקציה הסופי נכשל.",
+      message: "Deploy uploaded files, but post-deploy verification failed.",
+      status: 409
+    };
+  }
+
+  if (error instanceof Error && error.message === "local-dev-owner-deploy-mode-disabled-in-production") {
+    return {
+      code: "LOCAL_DEV_OWNER_DEPLOY_MODE_DISABLED_IN_PRODUCTION",
+      message: "Local/dev owner deploy mode cannot run when NODE_ENV=production.",
       status: 409
     };
   }

@@ -98,7 +98,8 @@ vi.mock("../server/src/config/env", () => ({
   env: {
     JOB_WORKER_ENABLED: false,
     JOB_WORKER_POLL_MS: 3000
-  }
+  },
+  ownerDirectModeEnabled: () => false
 }));
 
 const idOf = (value: string) => ({ toString: () => value });
@@ -220,5 +221,62 @@ describe("site-bootstrap worker execution", () => {
       }),
       "Site bootstrap result recorded"
     );
+  });
+
+  it("executes owner-direct site-bootstrap jobs without approval fields", async () => {
+    const originalJob = {
+      _id: idOf("rerun-request-owner-1"),
+      type: "site-bootstrap",
+      status: "failed",
+      requiresApproval: false,
+      createdBy: "owner",
+      siteId: idOf("site-1")
+    };
+    const bootstrapJob = {
+      _id: idOf("job-bootstrap-owner-1"),
+      type: "site-bootstrap",
+      status: "queued",
+      requiresApproval: false,
+      createdBy: "owner",
+      siteId: idOf("site-1"),
+      payload: {
+        owner: "owner@example.test",
+        runProvisioning: true,
+        runPermissionsSetup: true
+      }
+    };
+    const finalJob = { ...bootstrapJob, status: "succeeded" };
+    const result = {
+      siteId: "site-1",
+      siteCode: "alpha",
+      resolvedPaths: {
+        sharePointSiteUrl: "https://portal.army.idf/sites/alpha",
+        finalAppUrl: "https://portal.army.idf/sites/alpha/siteDB/dist/index.html",
+        bootstrapUrl: "https://portal.army.idf/sites/alpha/SiteAssets/sitebuilder-bootstrap/dist/index.html#/admin/sharepoint-setup"
+      },
+      siteCollection: {
+        action: "created",
+        targetUrl: "https://portal.army.idf/sites/alpha"
+      },
+      provisioning: { completedSteps: [] },
+      permissions: { completedSteps: [] },
+      completedSteps: [
+        { key: "site-create", label: "Create SharePoint site collection if missing", target: "https://portal.army.idf/sites/alpha" }
+      ]
+    };
+
+    mocks.Job.findById.mockResolvedValueOnce(originalJob).mockResolvedValueOnce(finalJob);
+    mocks.Job.findByIdAndUpdate.mockResolvedValue({ ...originalJob, status: "queued" });
+    mocks.claimNextJob.mockResolvedValue(bootstrapJob);
+    mocks.setJobStatus.mockImplementation(async (_jobId, status) => ({ ...bootstrapJob, status }));
+    mocks.setJobSucceeded.mockResolvedValue(finalJob);
+    mocks.executeSiteBootstrap.mockResolvedValue(result);
+    mocks.writeSystemAuditLog.mockResolvedValue({ _id: idOf("audit-owner-1") });
+
+    const { runJobNow } = await import("../server/src/services/jobs.worker");
+    const output = await runJobNow("rerun-request-owner-1");
+
+    expect(output).toBe(finalJob);
+    expect(mocks.executeSiteBootstrap).toHaveBeenCalledWith("site-1", bootstrapJob.payload);
   });
 });

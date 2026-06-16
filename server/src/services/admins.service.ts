@@ -347,7 +347,7 @@ export async function enqueueAdminTxtRepair(params: {
 }) {
   const requestedBy = params.createdBy || "system";
   const reason = String(params.reason || params.notes || "").trim();
-  logger.info("admins", "Queueing approval-gated TXT admin repair", {
+  logger.info("admins", "Queueing TXT admin repair", {
     siteId: params.siteId,
     requestedBy,
     reason
@@ -428,7 +428,7 @@ export async function enqueueAdminTxtRepair(params: {
     }
   });
 
-  logger.info("admins", "TXT admin repair job queued for approval", {
+  logger.info("admins", "TXT admin repair job queued", {
     siteId: plan.siteId,
     siteCode: plan.siteCode,
     jobId: job._id.toString(),
@@ -436,19 +436,23 @@ export async function enqueueAdminTxtRepair(params: {
     missingInTxtCount: plan.missingInTxt.length
   });
 
-  logger.info("jobs", "Approval-gated admin TXT repair job created", {
+  logger.info("jobs", "Admin TXT repair job created", {
     jobId: job._id.toString(),
     siteId: plan.siteId,
     type: "repair",
     operation: "admin-txt-repair"
   });
 
+  const requiresApproval = Boolean(job.requiresApproval || job.status === "awaiting-approval");
+
   return {
     job,
     plan,
-    requiresApproval: true,
-    approvalStatus: "pending",
-    message: "TXT admin repair job queued and awaiting Admin approval"
+    requiresApproval,
+    approvalStatus: requiresApproval ? "pending" : "not-required",
+    message: requiresApproval
+      ? "TXT admin repair job queued and requires approval because advanced approvals are enabled"
+      : "TXT admin repair job queued in owner-direct mode"
   };
 }
 

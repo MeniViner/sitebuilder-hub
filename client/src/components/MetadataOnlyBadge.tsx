@@ -1,12 +1,12 @@
-import { Database, Eye, LockKeyhole, Share2 } from "lucide-react";
+import { StatusToken } from "./StatusToken";
 
 export function MetadataOnlyBadge({ mode = "metadata" }: { mode?: "metadata" | "readonly" | "soon" | "notConnected" }) {
   const config = {
-    metadata: { label: "מטא־דאטה בלבד", tone: "badge-warning", icon: <Database size={12} /> },
-    readonly: { label: "קריאה בלבד", tone: "badge-info", icon: <Eye size={12} /> },
-    soon: { label: "בקרוב", tone: "badge-neutral", icon: <LockKeyhole size={12} /> },
-    notConnected: { label: "לא מחובר ל־SharePoint", tone: "badge-danger", icon: <Share2 size={12} /> }
+    metadata: { label: "מטא־דאטה", kind: "metadata" as const, helpKey: "mode.metadataOnly" },
+    readonly: { label: "קריאה בלבד", kind: "readonly" as const, helpKey: "mode.readOnly" },
+    soon: { label: "בקרוב", kind: "neutral" as const, helpKey: undefined },
+    notConnected: { label: "חסר חיבור ל־SharePoint", kind: "blocked" as const, helpKey: "sharepoint.writeBlocked" }
   }[mode];
 
-  return <span className={`badge ${config.tone}`}>{config.icon}{config.label}</span>;
+  return <StatusToken kind={config.kind} label={config.label} helpKey={config.helpKey} />;
 }

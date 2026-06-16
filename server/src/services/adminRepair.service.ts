@@ -7,13 +7,15 @@ import { readLiveAdminSources } from "./liveAdminSources.service";
 import { assertSharePointWriteAvailable, writeSharePointTextFile } from "./sharepointOperationClient";
 
 type ApprovalGatedJobInput = Parameters<typeof createJob>[0] & {
-  requiresApproval: true;
+  requiresApproval: boolean;
   approvalSummary: Record<string, unknown>;
   approvalSnapshot: Record<string, unknown>;
 };
 
-const TXT_ADMIN_REPAIR_APPROVAL_MESSAGE =
-  "TXT admin repair job is awaiting approval before users_data.txt is changed in SharePoint.";
+const TXT_ADMIN_REPAIR_OWNER_DIRECT_MESSAGE =
+  "TXT admin repair job queued in owner-direct mode.";
+const TXT_ADMIN_REPAIR_ADVANCED_APPROVAL_MESSAGE =
+  "TXT admin repair job requires approval because advanced approvals are enabled.";
 
 const normalizeText = (value: unknown) => String(value || "").trim();
 
@@ -176,7 +178,7 @@ export async function enqueueTxtAdminRepair(params: {
 
   const approvalSummary = {
     title: `Repair TXT admins for ${plan.siteCode}`,
-    message: TXT_ADMIN_REPAIR_APPROVAL_MESSAGE,
+    message: TXT_ADMIN_REPAIR_ADVANCED_APPROVAL_MESSAGE,
     operation: "admin-txt-repair",
     siteId: plan.siteId,
     siteCode: plan.siteCode,
@@ -218,7 +220,7 @@ export async function enqueueTxtAdminRepair(params: {
     }
   };
 
-  logger.info("jobs", "Approval required for TXT admin repair job", {
+  logger.info("jobs", "TXT admin repair job queued", {
     type: jobInput.type,
     siteId: plan.siteId,
     siteCode: plan.siteCode,
@@ -227,21 +229,22 @@ export async function enqueueTxtAdminRepair(params: {
   });
   const job = await createJob(jobInput);
 
-  logger.info("admins", "TXT admin repair queued awaiting approval", {
+  logger.info("admins", "TXT admin repair queued", {
     siteId: plan.siteId,
     siteCode: plan.siteCode,
     jobId: job._id.toString(),
     targetPath: plan.targetPath,
-    requiresApproval: true,
-    approvalStatus: "pending"
+    requiresApproval: job.requiresApproval,
+    approvalStatus: job.requiresApproval ? "pending" : "not-required"
   });
+  const requiresApproval = Boolean(job.requiresApproval || job.status === "awaiting-approval");
 
   return {
     job,
     plan,
-    requiresApproval: true,
-    approvalStatus: "pending",
-    message: TXT_ADMIN_REPAIR_APPROVAL_MESSAGE
+    requiresApproval,
+    approvalStatus: requiresApproval ? "pending" : "not-required",
+    message: requiresApproval ? "TXT admin repair job queued and requires approval because advanced approvals are enabled." : TXT_ADMIN_REPAIR_OWNER_DIRECT_MESSAGE
   };
 }
 

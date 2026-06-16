@@ -16,13 +16,15 @@ import {
 import { logger } from "../utils/logger";
 
 type ApprovalGatedJobInput = Parameters<typeof createJob>[0] & {
-  requiresApproval: true;
+  requiresApproval: boolean;
   approvalSummary: Record<string, unknown>;
   approvalSnapshot: Record<string, unknown>;
 };
 
-const BACKUP_APPROVAL_MESSAGE = "Backup job is awaiting approval before SharePoint files are copied into the backup folder.";
-const RESTORE_APPROVAL_MESSAGE = "Restore job is awaiting approval before backup files overwrite live SharePoint files.";
+const BACKUP_OWNER_DIRECT_MESSAGE = "Backup job queued in owner-direct mode.";
+const RESTORE_OWNER_DIRECT_MESSAGE = "Restore job queued in owner-direct mode.";
+const BACKUP_ADVANCED_APPROVAL_MESSAGE = "Backup job requires approval because advanced approvals are enabled.";
+const RESTORE_ADVANCED_APPROVAL_MESSAGE = "Restore job requires approval because advanced approvals are enabled.";
 
 const buildBackupApproval = (params: {
   site: any;
@@ -32,7 +34,7 @@ const buildBackupApproval = (params: {
 }) => ({
   approvalSummary: {
     title: `Back up ${params.site.displayName || params.site.siteCode}`,
-    message: BACKUP_APPROVAL_MESSAGE,
+    message: BACKUP_ADVANCED_APPROVAL_MESSAGE,
     operation: "backup",
     siteId: params.site._id.toString(),
     siteCode: params.site.siteCode,
@@ -109,7 +111,7 @@ const buildRestoreApproval = (params: {
   return {
     approvalSummary: {
       title: `Restore ${params.site.displayName || params.site.siteCode} from ${params.backup.backupId}`,
-      message: RESTORE_APPROVAL_MESSAGE,
+      message: RESTORE_ADVANCED_APPROVAL_MESSAGE,
       operation: "restore",
       backupId: params.backup._id.toString(),
       backupExternalId: params.backup.backupId,
@@ -212,7 +214,7 @@ export async function enqueueSiteBackup(params: {
     }
   };
 
-  logger.info("jobs", "Approval required for backup job", {
+  logger.info("jobs", "Backup job queued", {
     type: jobInput.type,
     siteId: site._id.toString(),
     siteCode: site.siteCode,
@@ -223,20 +225,20 @@ export async function enqueueSiteBackup(params: {
   const job = await createJob(jobInput);
 
   await Site.findByIdAndUpdate(site._id, { backupStatus: "queued" });
-  logger.info("backups", "Site backup queued awaiting approval", {
+  logger.info("backups", "Site backup queued", {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     jobId: job._id.toString(),
     sourcePathCount: sourcePaths.length,
-    requiresApproval: true,
-    approvalStatus: "pending"
+    requiresApproval: job.requiresApproval,
+    approvalStatus: job.requiresApproval ? "pending" : "not-required"
   });
 
   return {
     job,
-    requiresApproval: true,
-    approvalStatus: "pending",
-    message: BACKUP_APPROVAL_MESSAGE
+    requiresApproval: job.requiresApproval,
+    approvalStatus: job.requiresApproval ? "pending" : "not-required",
+    message: job.requiresApproval ? "Backup job queued and requires approval because advanced approvals are enabled." : BACKUP_OWNER_DIRECT_MESSAGE
   };
 }
 
@@ -287,7 +289,7 @@ export async function enqueueAllBackups(params: {
       }
     };
 
-    logger.info("jobs", "Approval required for backup job", {
+    logger.info("jobs", "Backup job queued", {
       type: jobInput.type,
       siteId: site._id.toString(),
       siteCode: site.siteCode,
@@ -298,29 +300,29 @@ export async function enqueueAllBackups(params: {
     const job = await createJob(jobInput);
 
     await Site.findByIdAndUpdate(site._id, { backupStatus: "queued" });
-    logger.info("backups", "Backup job queued awaiting approval", {
+    logger.info("backups", "Backup job queued", {
       siteId: site._id.toString(),
       siteCode: site.siteCode,
       jobId: job._id.toString(),
       sourcePathCount: sourcePaths.length,
-      requiresApproval: true,
-      approvalStatus: "pending"
+      requiresApproval: job.requiresApproval,
+      approvalStatus: job.requiresApproval ? "pending" : "not-required"
     });
     jobs.push(job);
   }
 
-  logger.info("backups", "All backup jobs queued awaiting approval", {
+  logger.info("backups", "All backup jobs queued", {
     queued: jobs.length,
-    requiresApproval: true,
-    approvalStatus: "pending"
+    requiresApproval: jobs.some((job) => job.requiresApproval),
+    approvalStatus: jobs.some((job) => job.requiresApproval) ? "pending" : "not-required"
   });
   return {
     queued: jobs.length,
     jobs,
-    requiresApproval: true,
-    approvalStatus: "pending",
+    requiresApproval: jobs.some((job) => job.requiresApproval),
+    approvalStatus: jobs.some((job) => job.requiresApproval) ? "pending" : "not-required",
     message: jobs.length
-      ? `${jobs.length} backup job${jobs.length === 1 ? "" : "s"} awaiting approval before SharePoint writes start.`
+      ? `${jobs.length} backup job${jobs.length === 1 ? "" : "s"} queued.`
       : "No backup jobs were queued."
   };
 }
@@ -424,7 +426,7 @@ export async function enqueueBackupRestore(params: {
     }
   };
 
-  logger.info("jobs", "Approval required for restore job", {
+  logger.info("jobs", "Restore job queued", {
     type: jobInput.type,
     siteId: site._id.toString(),
     siteCode: site.siteCode,
@@ -438,7 +440,7 @@ export async function enqueueBackupRestore(params: {
 
   const job = await createJob(jobInput);
 
-  logger.info("backups", "Restore job queued awaiting approval", {
+  logger.info("backups", "Restore job queued", {
     backupId: backup._id.toString(),
     backupExternalId: backup.backupId,
     preRestoreBackupId: preRestoreBackupSafety.backup?.id,
@@ -447,9 +449,11 @@ export async function enqueueBackupRestore(params: {
     siteCode: site.siteCode,
     jobId: job._id.toString(),
     fileCount: files.length,
-    requiresApproval: true,
-    approvalStatus: "pending"
+    requiresApproval: job.requiresApproval,
+    approvalStatus: job.requiresApproval ? "pending" : "not-required"
   });
+
+  const requiresApproval = Boolean(job.requiresApproval || job.status === "awaiting-approval");
 
   return {
     job,
@@ -461,9 +465,9 @@ export async function enqueueBackupRestore(params: {
     pathSummary: summarizeRestorePaths(files),
     risks: approval.approvalSnapshot.risks,
     preRestoreBackupSafety,
-    requiresApproval: true,
-    approvalStatus: "pending",
-    message: RESTORE_APPROVAL_MESSAGE
+    requiresApproval,
+    approvalStatus: requiresApproval ? "pending" : "not-required",
+    message: requiresApproval ? "Restore job requires approval because advanced approvals are enabled." : RESTORE_OWNER_DIRECT_MESSAGE
   };
 }
 

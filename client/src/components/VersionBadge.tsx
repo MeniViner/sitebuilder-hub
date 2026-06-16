@@ -1,6 +1,7 @@
 import { CheckCircle2, Clock3, GitBranch, RotateCw, XCircle } from "lucide-react";
 import { ReactNode } from "react";
 import { versionStatusLabel } from "../utils/format";
+import { HelpIcon } from "./help/HelpIcon";
 
 export function VersionBadge({ status }: { status?: string }) {
   const map: Record<string, { tone: string; icon: ReactNode }> = {
@@ -12,5 +13,6 @@ export function VersionBadge({ status }: { status?: string }) {
   };
 
   const item = map[status || ""] ?? map.unknown;
-  return <span className={`badge ${item.tone}`}>{item.icon}{versionStatusLabel(status)}</span>;
+  const helpKey = status === "outdated" ? "version.outdated" : "version.status";
+  return <span className={`badge ${item.tone}`}>{item.icon}{versionStatusLabel(status)}<HelpIcon helpKey={helpKey} className="help-icon-in-token" /></span>;
 }

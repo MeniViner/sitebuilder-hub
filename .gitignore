@@ -12,3 +12,4 @@ artifacts/
 *.zip
 *.7z
 artifacts/
+tmp/

@@ -12,7 +12,7 @@ import { fail, ok } from "../utils/http";
 import { logger } from "../utils/logger";
 import { normalizeError } from "../utils/errors";
 import { writeAuditLog } from "../services/audit.service";
-import { runReadOnlySharePointHealthCheck } from "../services/sharepointHealth.service";
+import { recordBrowserSharePointHealthCheck, runReadOnlySharePointHealthCheck } from "../services/sharepointHealth.service";
 import { createJob } from "../services/jobs.service";
 import { buildSiteProvisionPlan } from "../services/siteProvisioning.service";
 import { getSharePointOperationCapabilities } from "../services/sharepointOperationClient";
@@ -20,17 +20,18 @@ import { buildPermissionsSetupPlan } from "../services/permissionsSetup.service"
 import { buildSiteBootstrapPlan, normalizeSiteBootstrapOptions } from "../services/siteBootstrap.service";
 
 type ApprovalGatedJobInput = Parameters<typeof createJob>[0] & {
-  requiresApproval: true;
+  requiresApproval: boolean;
   approvalSummary: Record<string, unknown>;
   approvalSnapshot: Record<string, unknown>;
 };
 
 const SITE_PROVISION_APPROVAL_MESSAGE =
-  "Site provisioning job is awaiting approval before SharePoint libraries, folders, or default TXT files are changed.";
+  "Site provisioning job requires approval because advanced approvals are enabled.";
 const SITE_BOOTSTRAP_APPROVAL_MESSAGE =
-  "Site bootstrap job is awaiting approval before a SharePoint site is created and Site Builder structure is provisioned.";
+  "Site bootstrap job requires approval because advanced approvals are enabled.";
 const PERMISSIONS_APPROVAL_MESSAGE =
-  "Permissions setup job is awaiting approval before SharePoint role inheritance, role assignments, or marker files are changed.";
+  "Permissions setup job requires approval because advanced approvals are enabled.";
+const ownerDirectMessage = (operation: string) => `${operation} job queued in owner-direct mode.`;
 
 const handleError = async (error: unknown, req: Request, res: Response) => {
   if (error instanceof ZodError) {
@@ -194,6 +195,30 @@ export const readOnlySharePointHealthCheck = async (req: Request, res: Response)
   }
 };
 
+export const browserSharePointHealthCheckEvidence = async (req: Request, res: Response) => {
+  try {
+    const result = await recordBrowserSharePointHealthCheck(req.params.id, req.body || {});
+
+    await writeAuditLog({
+      req,
+      action: "sites.sharepoint-health-browser",
+      entityType: "Site",
+      entityId: result.siteId,
+      metadata: {
+        siteCode: result.siteCode,
+        connectorMode: "browser-sharepoint",
+        derivedHealthStatus: result.derivedHealthStatus,
+        checks: result.evidence.length,
+        authBlocked: result.evidence.filter((item) => item.authBlocked).length
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
 export const getSiteBootstrapPlan = async (req: Request, res: Response) => {
   try {
     const options = siteBootstrapSchema.parse(req.query || {});
@@ -282,7 +307,7 @@ export const queueSiteBootstrap = async (req: Request, res: Response) => {
       }
     };
 
-    logger.info("jobs", "Approval required for SharePoint site bootstrap job", {
+    logger.info("jobs", "SharePoint site bootstrap job queued", {
       type: jobInput.type,
       siteId: site._id.toString(),
       siteCode: site.siteCode,
@@ -291,13 +316,13 @@ export const queueSiteBootstrap = async (req: Request, res: Response) => {
     });
 
     const job = await createJob(jobInput);
-    logger.info("sites", "SharePoint site bootstrap job queued awaiting approval", {
+    logger.info("sites", "SharePoint site bootstrap job queued", {
       siteId: site._id.toString(),
       siteCode: site.siteCode,
       jobId: job._id.toString(),
       totalSteps: plan.summary.totalSteps,
-      requiresApproval: true,
-      approvalStatus: "pending"
+      requiresApproval: job.requiresApproval,
+      approvalStatus: job.requiresApproval ? "pending" : "not-required"
     });
 
     await writeAuditLog({
@@ -309,15 +334,25 @@ export const queueSiteBootstrap = async (req: Request, res: Response) => {
         jobId: job._id.toString(),
         siteCode: site.siteCode,
         sharePointSiteUrl: plan.targetWeb.sharePointSiteUrl,
-        requiresApproval: true,
-        approvalStatus: "pending"
+        requiresApproval: job.requiresApproval,
+        approvalStatus: job.requiresApproval ? "pending" : "not-required"
       }
     });
 
     return ok(
       res,
-      { job, plan, requiresApproval: true, approvalStatus: "pending", message: SITE_BOOTSTRAP_APPROVAL_MESSAGE },
-      { requiresApproval: true, approvalStatus: "pending", message: SITE_BOOTSTRAP_APPROVAL_MESSAGE },
+      {
+        job,
+        plan,
+        requiresApproval: job.requiresApproval,
+        approvalStatus: job.requiresApproval ? "pending" : "not-required",
+        message: job.requiresApproval ? SITE_BOOTSTRAP_APPROVAL_MESSAGE : ownerDirectMessage("Site bootstrap")
+      },
+      {
+        requiresApproval: job.requiresApproval,
+        approvalStatus: job.requiresApproval ? "pending" : "not-required",
+        message: job.requiresApproval ? SITE_BOOTSTRAP_APPROVAL_MESSAGE : ownerDirectMessage("Site bootstrap")
+      },
       202
     );
   } catch (error) {
@@ -395,7 +430,7 @@ export const queueSiteProvision = async (req: Request, res: Response) => {
       }
     };
 
-    logger.info("jobs", "Approval required for site provisioning job", {
+    logger.info("jobs", "Site provisioning job queued", {
       type: jobInput.type,
       siteId: site._id.toString(),
       siteCode: site.siteCode,
@@ -403,13 +438,13 @@ export const queueSiteProvision = async (req: Request, res: Response) => {
     });
 
     const job = await createJob(jobInput);
-    logger.info("sites", "Site provisioning job queued awaiting approval", {
+    logger.info("sites", "Site provisioning job queued", {
       siteId: site._id.toString(),
       siteCode: site.siteCode,
       jobId: job._id.toString(),
       totalSteps: plan.summary.totalSteps,
-      requiresApproval: true,
-      approvalStatus: "pending"
+      requiresApproval: job.requiresApproval,
+      approvalStatus: job.requiresApproval ? "pending" : "not-required"
     });
 
     await writeAuditLog({
@@ -420,15 +455,24 @@ export const queueSiteProvision = async (req: Request, res: Response) => {
       metadata: {
         jobId: job._id.toString(),
         siteCode: site.siteCode,
-        requiresApproval: true,
-        approvalStatus: "pending"
+        requiresApproval: job.requiresApproval,
+        approvalStatus: job.requiresApproval ? "pending" : "not-required"
       }
     });
 
     return ok(
       res,
-      { job, requiresApproval: true, approvalStatus: "pending", message: SITE_PROVISION_APPROVAL_MESSAGE },
-      { requiresApproval: true, approvalStatus: "pending", message: SITE_PROVISION_APPROVAL_MESSAGE },
+      {
+        job,
+        requiresApproval: job.requiresApproval,
+        approvalStatus: job.requiresApproval ? "pending" : "not-required",
+        message: job.requiresApproval ? SITE_PROVISION_APPROVAL_MESSAGE : ownerDirectMessage("Site provisioning")
+      },
+      {
+        requiresApproval: job.requiresApproval,
+        approvalStatus: job.requiresApproval ? "pending" : "not-required",
+        message: job.requiresApproval ? SITE_PROVISION_APPROVAL_MESSAGE : ownerDirectMessage("Site provisioning")
+      },
       202
     );
   } catch (error) {
@@ -505,7 +549,7 @@ export const queuePermissionsSetup = async (req: Request, res: Response) => {
       }
     };
 
-    logger.info("jobs", "Approval required for permissions setup job", {
+    logger.info("jobs", "Permissions setup job queued", {
       type: jobInput.type,
       siteId: site._id.toString(),
       siteCode: site.siteCode,
@@ -514,13 +558,13 @@ export const queuePermissionsSetup = async (req: Request, res: Response) => {
     });
 
     const job = await createJob(jobInput);
-    logger.info("sites", "Permissions setup job queued awaiting approval", {
+    logger.info("sites", "Permissions setup job queued", {
       siteId: site._id.toString(),
       siteCode: site.siteCode,
       jobId: job._id.toString(),
       steps: plan.steps.length,
-      requiresApproval: true,
-      approvalStatus: "pending"
+      requiresApproval: job.requiresApproval,
+      approvalStatus: job.requiresApproval ? "pending" : "not-required"
     });
 
     await writeAuditLog({
@@ -531,15 +575,24 @@ export const queuePermissionsSetup = async (req: Request, res: Response) => {
       metadata: {
         jobId: job._id.toString(),
         siteCode: site.siteCode,
-        requiresApproval: true,
-        approvalStatus: "pending"
+        requiresApproval: job.requiresApproval,
+        approvalStatus: job.requiresApproval ? "pending" : "not-required"
       }
     });
 
     return ok(
       res,
-      { job, requiresApproval: true, approvalStatus: "pending", message: PERMISSIONS_APPROVAL_MESSAGE },
-      { requiresApproval: true, approvalStatus: "pending", message: PERMISSIONS_APPROVAL_MESSAGE },
+      {
+        job,
+        requiresApproval: job.requiresApproval,
+        approvalStatus: job.requiresApproval ? "pending" : "not-required",
+        message: job.requiresApproval ? PERMISSIONS_APPROVAL_MESSAGE : ownerDirectMessage("Permissions setup")
+      },
+      {
+        requiresApproval: job.requiresApproval,
+        approvalStatus: job.requiresApproval ? "pending" : "not-required",
+        message: job.requiresApproval ? PERMISSIONS_APPROVAL_MESSAGE : ownerDirectMessage("Permissions setup")
+      },
       202
     );
   } catch (error) {

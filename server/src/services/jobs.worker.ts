@@ -17,6 +17,7 @@ import {
   assertDistinctRecentVerifiedBackupForRestore,
   assertRecentVerifiedBackupForDangerousWrite
 } from "./writeSafety.service";
+import { buildDeployPolicy, buildLocalDevDeploySafetySnapshot } from "./deployPolicy.service";
 import { writeSystemAuditLog } from "./audit.service";
 import {
   claimNextJob,
@@ -199,6 +200,11 @@ async function handleVersionUpgrade(job: any) {
     releaseId?: string;
     deploymentId?: string;
     targetVersion?: string;
+    deployMode?: string;
+    deployPolicy?: {
+      requiresRecentVerifiedBackup?: boolean;
+      mode?: string;
+    };
   };
 
   if (!job.siteId || !payload.releaseId || !payload.deploymentId) {
@@ -215,15 +221,24 @@ async function handleVersionUpgrade(job: any) {
     throw new Error("Site/Release/Deployment not found");
   }
 
+  const deployPolicy = payload.deployPolicy?.mode
+    ? { ...buildDeployPolicy(payload.deployPolicy.mode), ...payload.deployPolicy }
+    : buildDeployPolicy(payload.deployMode);
   await setJobProgress(
     job._id.toString(),
     15,
-    isRollback ? "Checking recent verified backup before SharePoint rollback" : "Checking recent verified backup before SharePoint deploy"
+    deployPolicy.requiresRecentVerifiedBackup
+      ? isRollback
+        ? "Checking recent verified backup before SharePoint rollback"
+        : "Checking recent verified backup before SharePoint deploy"
+      : "Local/dev owner deploy: backup policy is recorded as not required"
   );
-  const backupSafety = await assertRecentVerifiedBackupForDangerousWrite({
-    siteId: site._id,
-    operation: isRollback ? "rollback" : "deploy"
-  });
+  const backupSafety = deployPolicy.requiresRecentVerifiedBackup
+    ? await assertRecentVerifiedBackupForDangerousWrite({
+        siteId: site._id,
+        operation: isRollback ? "rollback" : "deploy"
+      })
+    : buildLocalDevDeploySafetySnapshot(isRollback ? "rollback" : "deploy");
   logger.info("backups", "Execution-time dangerous write backup safety satisfied", {
     jobId: job._id.toString(),
     siteId: site._id.toString(),
@@ -236,8 +251,8 @@ async function handleVersionUpgrade(job: any) {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     operation: isRollback ? "rollback" : "deploy",
-    backupId: backupSafety.backup?.id,
-    backupExternalId: backupSafety.backup?.backupId
+    backupId: "backup" in backupSafety ? backupSafety.backup?.id : undefined,
+    backupExternalId: "backup" in backupSafety ? backupSafety.backup?.backupId : undefined
   });
 
   site.targetVersion = release.version;
@@ -455,17 +470,9 @@ async function handleSiteBootstrap(job: any) {
     payload: logger.isPayloadLoggingEnabled() ? job.payload : undefined
   });
   assertSharePointWriteAvailable();
+  assertApprovedForExecution(job, "site-bootstrap-job-requires-approval");
 
   if (!job.siteId) throw new Error("Missing siteId for site bootstrap job");
-  if (!job.requiresApproval || !job.approvedAt || !job.approvedBy) {
-    logger.error("jobs", "Site bootstrap job blocked because approval is missing", {
-      jobId: job._id.toString(),
-      siteId: job.siteId?.toString(),
-      requiresApproval: Boolean(job.requiresApproval),
-      approvedAt: job.approvedAt
-    });
-    throw new Error("site-bootstrap-job-requires-approval");
-  }
 
   await setJobProgress(job._id.toString(), 10, "Starting SharePoint site collection creation and bootstrap");
   const result = await executeSiteBootstrap(job.siteId.toString(), job.payload || {});
