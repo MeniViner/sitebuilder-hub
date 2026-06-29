@@ -262,98 +262,23 @@ describe("admin TXT repair approval gating", () => {
     });
   });
 
-  it("queues TXT repair jobs with approval metadata and a stable repair snapshot", async () => {
-    const job = {
-      _id: idOf("job-repair-1"),
-      status: "awaiting-approval"
-    };
-
+  it("blocks TXT repair queue by default instead of creating a backend digest job", async () => {
     const site = makeSite();
     mocks.Site.findById.mockResolvedValue(site);
     mocks.readLiveAdminSources.mockResolvedValue(makeLiveAdminRead());
-    mocks.createJob.mockResolvedValue(job);
 
     const adminsService = await import("../server/src/services/admins.service");
     const enqueueAdminTxtRepair = (adminsService as any).enqueueAdminTxtRepair;
     expect(enqueueAdminTxtRepair).toBeTypeOf("function");
 
-    const result = await enqueueAdminTxtRepair({
+    await expect(enqueueAdminTxtRepair({
       siteId: "site-1",
       createdBy: "operator",
       reason: "Repair missing admins in users_data.txt"
-    });
+    })).rejects.toThrow("browser-sharepoint-operation-not-implemented");
 
-    expect(mocks.createJob).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "repair",
-        siteId: "site-1",
-        createdBy: "operator",
-        requiresApproval: true,
-        payload: expect.objectContaining({
-          repairType: "admin-txt",
-          targetPath: usersTxtTargetPath,
-          missingInTxt: [
-            "login:i:0#.f|membership|bob@example.test",
-            "login:i:0#.f|membership|dana@example.test"
-          ],
-          mergedTxtAdmins
-        })
-      })
-    );
-
-    const jobInput = mocks.createJob.mock.calls[0][0];
-    expect(jobInput.approvalSummary).toMatchObject({
-      title: "Repair Alpha Site admin TXT source",
-      operation: "admin-txt-repair",
-      siteId: "site-1",
-      siteCode: "alpha",
-      targetPath: usersTxtTargetPath,
-      missingInTxtCount: 2,
-      requestedBy: "operator",
-      reason: "Repair missing admins in users_data.txt"
-    });
-    expect(jobInput.approvalSnapshot).toMatchObject({
-      operation: "admin-txt-repair",
-      site: {
-        id: "site-1",
-        siteCode: "alpha",
-        displayName: "Alpha Site",
-        sharePointSiteUrl: "https://portal.army.idf/sites/alpha"
-      },
-      targetPath: usersTxtTargetPath,
-      missingInTxt: [
-        "login:i:0#.f|membership|bob@example.test",
-        "login:i:0#.f|membership|dana@example.test"
-      ],
-      mergedTxtAdmins,
-      liveRead: expect.objectContaining({
-        capturedAt: "2026-05-14T08:00:00.000Z",
-        adminsCount: 3,
-        sourceStatus: expect.arrayContaining([
-          { source: "txt", ok: true, count: 1 },
-          { source: "siteCollection", ok: true, count: 2 },
-          { source: "ownersGroup", ok: true, count: 2 }
-        ])
-      }),
-      requestedBy: "operator",
-      reason: "Repair missing admins in users_data.txt"
-    });
-    expect(jobInput.approvalSnapshot.writeOperations).toContain(
-      "Overwrite users_data.txt with the merged TXT, Site Collection admin, and Owners Group admin list"
-    );
-
-    expect(result).toMatchObject({
-      job,
-      requiresApproval: true,
-      approvalStatus: "pending",
-      plan: expect.objectContaining({
-        targetPath: usersTxtTargetPath,
-        missingInTxt: [
-          "login:i:0#.f|membership|bob@example.test",
-          "login:i:0#.f|membership|dana@example.test"
-        ]
-      })
-    });
+    expect(mocks.createJob).not.toHaveBeenCalled();
+    expect(mocks.writeSharePointTextFile).not.toHaveBeenCalled();
   });
 
   it("executes approved repair jobs by writing merged users_data.txt and recording refreshed live evidence", async () => {
@@ -482,87 +407,36 @@ describe("admin TXT repair approval gating", () => {
 });
 
 describe("admin sync read-only and live SharePoint admin writes", () => {
-  it("queues read-only admin sync without mutating Site status and runs the job without snapshot persistence", async () => {
-    const readOnlyJob = {
-      _id: idOf("job-admin-readonly-1"),
-      type: "admin-sync",
-      status: "failed",
-      requiresApproval: false,
-      createdBy: "operator",
-      siteId: idOf("site-1"),
-      payload: { mode: "read-only" }
-    };
-    const finalJob = { ...readOnlyJob, status: "succeeded" };
-
+  it("blocks read-only admin sync by default instead of creating a backend SharePoint read job", async () => {
     mocks.Site.findById.mockResolvedValue(makeSite());
-    mocks.createJob.mockResolvedValue(readOnlyJob);
 
     const adminsService = await import("../server/src/services/admins.service");
     const enqueueAdminSync = (adminsService as any).enqueueAdminSync;
-    await enqueueAdminSync({
+    await expect(enqueueAdminSync({
       siteId: "site-1",
       createdBy: "operator",
       mode: "read-only"
-    });
+    })).rejects.toThrow("admin-sync-backend-service-auth-or-browser-required");
 
     expect(mocks.Site.findByIdAndUpdate).not.toHaveBeenCalled();
-    expect(mocks.createJob).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "admin-sync",
-        siteId: "site-1",
-        payload: { mode: "read-only" }
-      })
-    );
-
-    mocks.Job.findById.mockResolvedValueOnce(readOnlyJob).mockResolvedValueOnce(finalJob);
-    mocks.Job.findByIdAndUpdate.mockResolvedValue({ ...readOnlyJob, status: "queued" });
-    mocks.claimNextJob.mockResolvedValue(readOnlyJob);
-    mocks.setJobStatus.mockImplementation(async (_jobId, status) => ({ ...readOnlyJob, status }));
-    mocks.setJobSucceeded.mockResolvedValue(finalJob);
-    mocks.readLiveAdminSources.mockResolvedValue(makeLiveAdminRead());
-    mocks.writeSystemAuditLog.mockResolvedValue({ _id: idOf("audit-readonly-1") });
-
-    const { runJobNow } = await import("../server/src/services/jobs.worker");
-    await expect(runJobNow("job-admin-readonly-1")).resolves.toBe(finalJob);
-
-    expect(mocks.readLiveAdminSources).toHaveBeenCalledWith("site-1", {
-      persist: false,
-      jobId: "job-admin-readonly-1",
-      capturedBy: "operator"
-    });
-    expect(mocks.setJobResult).toHaveBeenCalledWith(
-      "job-admin-readonly-1",
-      expect.objectContaining({
-        mode: "read-only",
-        readOnly: true,
-        persistedSnapshot: false,
-        adminsCount: 3
-      }),
-      "Admin sync result recorded"
-    );
-    expect(mocks.Site.findByIdAndUpdate).not.toHaveBeenCalled();
+    expect(mocks.createJob).not.toHaveBeenCalled();
+    expect(mocks.readLiveAdminSources).not.toHaveBeenCalled();
   });
 
-  it("queues sync admin sync by marking the Site status as running", async () => {
-    const job = {
-      _id: idOf("job-admin-sync-1"),
-      type: "admin-sync",
-      status: "queued"
-    };
-
+  it("blocks sync admin sync by default instead of creating a backend SharePoint read job", async () => {
     const site = makeSite();
     mocks.Site.findById.mockResolvedValue(site);
-    mocks.createJob.mockResolvedValue(job);
 
     const adminsService = await import("../server/src/services/admins.service");
     const enqueueAdminSync = (adminsService as any).enqueueAdminSync;
-    await enqueueAdminSync({
+    await expect(enqueueAdminSync({
       siteId: "site-1",
       createdBy: "operator",
       mode: "sync"
-    });
+    })).rejects.toThrow("admin-sync-backend-service-auth-or-browser-required");
 
-    expect(mocks.Site.findByIdAndUpdate).toHaveBeenCalledWith(site._id, { adminSyncStatus: "running" });
+    expect(mocks.Site.findByIdAndUpdate).not.toHaveBeenCalledWith(site._id, { adminSyncStatus: "running" });
+    expect(mocks.createJob).not.toHaveBeenCalled();
   });
 
   it("runs health-check jobs through the worker and stores read-only evidence", async () => {
@@ -665,7 +539,7 @@ describe("admin sync read-only and live SharePoint admin writes", () => {
     expect(mocks.setJobFailed).toHaveBeenCalledWith("job-backup-unapproved-1", "backup-job-requires-approval");
   });
 
-  it("adds Site Collection admins through SharePoint and verifies the refreshed snapshot", async () => {
+  it("blocks Site Collection admin writes by default unless backend service auth is explicitly selected", async () => {
     const ensuredUser = {
       id: 42,
       displayName: siteCollectionOnlyAdmin.displayName,
@@ -683,30 +557,17 @@ describe("admin sync read-only and live SharePoint admin writes", () => {
 
     const adminsService = await import("../server/src/services/admins.service");
     const addSiteAdmin = (adminsService as any).addSiteAdmin;
-    await addSiteAdmin({
+    await expect(addSiteAdmin({
       siteId: "site-1",
       admin: { ...siteCollectionOnlyAdmin, source: "siteCollection" }
-    });
+    })).rejects.toThrow("backend-sharepoint-service-auth-required");
 
-    expect(mocks.assertSharePointWriteAvailable).toHaveBeenCalledTimes(1);
-    expect(mocks.ensureSharePointUser).toHaveBeenCalledWith(
-      expect.objectContaining({ siteCode: "alpha" }),
-      siteCollectionOnlyAdmin.loginName,
-      "digest-value"
-    );
-    expect(mocks.setSharePointSiteCollectionAdmin).toHaveBeenCalledWith(
-      expect.objectContaining({ siteCode: "alpha" }),
-      ensuredUser,
-      true,
-      "digest-value"
-    );
-    expect(mocks.readLiveAdminSources).toHaveBeenCalledWith("site-1", {
-      persist: true,
-      capturedBy: "system"
-    });
+    expect(mocks.assertSharePointWriteAvailable).not.toHaveBeenCalled();
+    expect(mocks.ensureSharePointUser).not.toHaveBeenCalled();
+    expect(mocks.setSharePointSiteCollectionAdmin).not.toHaveBeenCalled();
   });
 
-  it("removes Owners Group admins through SharePoint and verifies absence after refresh", async () => {
+  it("blocks Owners Group admin writes by default unless backend service auth is explicitly selected", async () => {
     mocks.Site.findById.mockResolvedValue(makeSite({
       ownersGroupAdmins: [ownersGroupOnlyAdmin]
     }));
@@ -725,23 +586,14 @@ describe("admin sync read-only and live SharePoint admin writes", () => {
 
     const adminsService = await import("../server/src/services/admins.service");
     const removeSiteAdmin = (adminsService as any).removeSiteAdmin;
-    await removeSiteAdmin({
+    await expect(removeSiteAdmin({
       siteId: "site-1",
       adminId: ownersGroupOnlyAdmin.personalNumber,
       source: "ownersGroup"
-    });
+    })).rejects.toThrow("backend-sharepoint-service-auth-required");
 
-    expect(mocks.assertSharePointWriteAvailable).toHaveBeenCalledTimes(1);
-    expect(mocks.getAssociatedOwnerGroupId).toHaveBeenCalledWith(expect.objectContaining({ siteCode: "alpha" }));
-    expect(mocks.removeSharePointUserFromGroup).toHaveBeenCalledWith(
-      expect.objectContaining({ siteCode: "alpha" }),
-      7,
-      ownersGroupOnlyAdmin.loginName,
-      "digest-value"
-    );
-    expect(mocks.readLiveAdminSources).toHaveBeenCalledWith("site-1", {
-      persist: true,
-      capturedBy: "system"
-    });
+    expect(mocks.assertSharePointWriteAvailable).not.toHaveBeenCalled();
+    expect(mocks.getAssociatedOwnerGroupId).not.toHaveBeenCalled();
+    expect(mocks.removeSharePointUserFromGroup).not.toHaveBeenCalled();
   });
 });

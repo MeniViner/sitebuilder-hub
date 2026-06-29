@@ -286,21 +286,73 @@ Updated:
 
 ## Deploy Implications
 
-Browser read/Digest is implemented now.
+Browser read/Digest/upload is implemented now.
 
-Browser upload/deploy is not implemented yet. Deploy execution still uses the backend uploader:
+Deploy readiness now prefers the connector that works:
 
-- `server/src/services/deployArtifact.service.ts`
-  - `executeSharePointDeploy`
-  - `uploadSharePointFile`
+- Browser deploy requires target-site Digest from the browser.
+- Browser deploy uploads files from the release artifact to SharePoint using the browser session and `X-RequestDigest`.
+- Browser deploy reads uploaded files back and compares size/sha256.
+- Browser deploy reports upload/read-back evidence to the backend.
+- The backend stores deployment results and updates site version only after verified browser evidence.
 
-Corrected readiness/copy:
+Corrected readiness/copy and browser evidence storage:
 
 - `client/src/utils/deployMvp.ts`
 - `client/src/pages/ReleasesPage.tsx`
+- `client/src/utils/sharepointBrowserConnector.ts`
+- `client/src/api/sitesApi.ts`
 - `server/src/services/deployArtifact.service.ts`
+- `server/src/controllers/releases.controller.ts`
+- `server/src/validators/release.schema.ts`
 
-The UI/report now states that browser Digest may be healthy, but browser upload is not implemented. Deploy is not faked as successful when backend SharePoint write is 401/unavailable.
+Deploy is not faked as successful when backend SharePoint write is 401/unavailable. Browser deploy success requires real browser upload and read-back evidence.
+
+## Backup Changes
+
+The Backup page was still using backend SharePoint REST for plan, inventory, execution, and manual verify. This produced the observed `SHAREPOINT_401` even while browser Diagnostics showed current user/read/Digest all working.
+
+Fixed:
+
+- `client/src/pages/BackupsPage.tsx`
+  - Backup plan now uses browser SharePoint reads with `credentials: "include"`.
+  - Backup execution now reads each canonical source file from the browser.
+  - Backup execution requests Digest from the target site itself.
+  - Backup execution creates/ensures the target backup folder hierarchy from the browser.
+  - Backup execution uploads files through browser `Files/add(...)` with `X-RequestDigest`.
+  - Backup execution reads files back from SharePoint and compares size/sha256.
+  - Backup inventory now reads folders/files from the browser.
+  - Manual backup verify now reads existing backup files from the browser.
+  - UI labels now show `Browser SharePoint`, `credentials include`, and `Digest per target site`.
+  - Backend 401 is shown as diagnostic information, not as a blocker for browser backup.
+- `client/src/utils/sharepointBrowserConnector.ts`
+  - `buildBrowserSharePointBackupPlan`
+  - `backupSiteToSharePointBrowser`
+  - `ensureSharePointFolderHierarchyBrowser`
+  - `readSharePointFileBrowser`
+  - `listBrowserSharePointBackupInventory`
+  - `verifyBackupToSharePointBrowser`
+- `server/src/services/backups.service.ts`
+  - `recordBrowserSharePointBackupEvidence`
+  - `recordBrowserSharePointBackupVerification`
+  - validates browser evidence against canonical source paths and expected backup target folder
+  - stores backup/deployment metadata only after verified evidence
+- `server/src/controllers/backups.controller.ts`
+  - `recordBrowserBackupEvidence`
+  - `postBrowserVerifyBackup`
+- `server/src/routes/sites.routes.ts`
+  - `POST /api/sites/:id/backups/browser-evidence`
+- `server/src/routes/backups.routes.ts`
+  - `POST /api/backups/:id/browser-verify`
+- `server/src/validators/backup.schema.ts`
+  - browser backup evidence payload validation
+
+Important behavior:
+
+- The backend no longer needs Digest for browser backup.
+- The backend does not call SharePoint while recording browser backup evidence.
+- A browser backup cannot be stored as successful unless every canonical source file is verified by read-back evidence.
+- The old backend backup job path still exists, but the Backup UI now uses the working browser path in SharePoint-hosted mode.
 
 ## Manual Auth/Header Fixes Preserved
 
@@ -336,15 +388,21 @@ Primary connector/diagnostics/health/deploy files:
 - `client/src/App.tsx`
 - `client/src/pages/DiagnosticsPage.tsx`
 - `client/src/pages/HealthPage.tsx`
+- `client/src/pages/BackupsPage.tsx`
 - `client/src/pages/ReleasesPage.tsx`
 - `client/src/utils/deployMvp.ts`
 - `server/src/services/diagnostics.service.ts`
 - `server/src/services/sharepointHealth.service.ts`
+- `server/src/services/backups.service.ts`
 - `server/src/controllers/sites.controller.ts`
+- `server/src/controllers/backups.controller.ts`
 - `server/src/routes/sites.routes.ts`
+- `server/src/routes/backups.routes.ts`
 - `server/src/middlewares/auth.ts`
 - `server/src/services/deployArtifact.service.ts`
+- `server/src/validators/backup.schema.ts`
 - `tests/sharepointBrowserConnector.test.ts`
+- `tests/browserBackupEvidence.test.ts`
 - `tests/sharepointFrontendAuthFixes.test.ts`
 - `docs/sitebuilder-hub-digest-connector-audit-and-fix-report.md`
 
@@ -360,7 +418,13 @@ The worktree also contains many pre-existing unrelated local edits. They were no
   - each target site gets its own Digest URL/cache key
   - backend 401 does not override browser connector success
   - health check uses browser connector results
-  - deploy/write readiness remains blocked until real browser upload exists or backend write works
+  - browser deploy uploads with `X-RequestDigest`
+  - browser backup plan uses target-site Digest and `credentials: "include"`
+  - browser backup creates folders, uploads files, and verifies read-back evidence
+  - browser backup inventory uses browser `credentials: "include"`
+- `tests/browserBackupEvidence.test.ts`
+  - backend stores successful browser backup evidence without backend SharePoint auth
+  - claimed browser backup success is rejected when a canonical source file is missing
 - `tests/sharepointFrontendAuthFixes.test.ts`
   - no raw Hebrew title header
   - no `x-sharepoint-title`
@@ -373,8 +437,8 @@ The worktree also contains many pre-existing unrelated local edits. They were no
 
 - `npm test`
   - passed
-  - 23 test files
-  - 119 tests
+  - 28 test files
+  - 141 tests
 - `npm run build`
   - passed
   - server TypeScript build passed
@@ -383,10 +447,12 @@ The worktree also contains many pre-existing unrelated local edits. They were no
 
 ## Remaining Blockers
 
-- Browser upload/deploy is not implemented yet.
-- Backend deploy/backup/restore/permissions/site-bootstrap flows still use `backend-sharepoint`.
+- Browser deploy/upload is implemented and verified by tests.
+- Browser backup/plan/inventory/verify is implemented and verified by tests.
+- Restore execution still uses `backend-sharepoint` and remains a protected backend job path.
+- Permissions setup/site-bootstrap/site-provisioning/admin repair still use `backend-sharepoint`.
 - A real dev-site deploy should wait until either:
-  - browser upload is implemented and verified with `X-RequestDigest`, or
+  - browser upload is tested in the real SharePoint-hosted classified environment, or
   - backend SharePoint auth material is configured and backend Digest succeeds.
 
 ## Readiness
@@ -394,4 +460,5 @@ The worktree also contains many pre-existing unrelated local edits. They were no
 - Ready for real SharePoint-hosted browser diagnostics on `alphateam`: yes.
 - Ready for real SharePoint-hosted browser diagnostics on `schedule`: yes.
 - Ready for browser read-only health checks: yes.
-- Ready for one real deploy test through browser upload: no, upload path still not implemented.
+- Ready for browser backup test on one real dev site: yes.
+- Ready for one real deploy test through browser upload: yes, preferably first on one non-production/dev target site.

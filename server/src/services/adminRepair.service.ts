@@ -5,6 +5,7 @@ import { AdminIdentity, buildAdminDiff, normalizeAdminKey } from "./admins.servi
 import { createJob } from "./jobs.service";
 import { readLiveAdminSources } from "./liveAdminSources.service";
 import { assertSharePointWriteAvailable, writeSharePointTextFile } from "./sharepointOperationClient";
+import { getDangerousValidationBypassEnvVar } from "./dangerousBackupBypass.service";
 
 type ApprovalGatedJobInput = Parameters<typeof createJob>[0] & {
   requiresApproval: boolean;
@@ -150,6 +151,16 @@ export async function buildTxtAdminRepairPlan(params: {
 }
 
 const assertPlanReadyForQueue = (plan: Awaited<ReturnType<typeof buildTxtAdminRepairPlan>>) => {
+  const bypassEnvVar = getDangerousValidationBypassEnvVar("admin-repair-gates");
+  if (bypassEnvVar) {
+    logger.warn("admins", "TXT admin repair queue gates bypassed by dangerous env", {
+      siteId: plan.siteId,
+      siteCode: plan.siteCode,
+      envVar: bypassEnvVar,
+      blockers: plan.blockers
+    });
+    return;
+  }
   if (plan.blockers.includes("admin-txt-repair-no-missing-admins")) {
     throw new Error("admin-txt-repair-not-needed");
   }

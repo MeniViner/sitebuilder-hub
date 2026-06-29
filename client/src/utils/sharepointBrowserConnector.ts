@@ -1,7 +1,16 @@
 import type {
+  Backup,
+  BackupPlan,
+  BackupPlanSource,
+  BackupSourceEvidence,
+  BackupVerificationEvidence,
+  DeploymentFinalAppUrlVerification,
   DeploymentVerificationEvidence,
   ReleaseArtifactFileResponse,
   ReleaseArtifactManifestFile,
+  SharePointBackupInventory,
+  SharePointBackupInventoryFile,
+  SharePointBackupInventoryFolder,
   SharePointHealthEvidence,
   SharePointHealthResult,
   SharePointDiagnosticsCheck
@@ -132,7 +141,39 @@ export type BrowserSharePointDeployResult = {
   finalStatus: "success" | "failed";
   uploadedFilesEvidence: DeploymentVerificationEvidence[];
   readBackEvidence: DeploymentVerificationEvidence[];
+  finalAppUrlVerification?: DeploymentFinalAppUrlVerification;
   errors: Array<{ relativePath?: string; targetPath?: string; error: string; status?: number }>;
+};
+
+export type BrowserSharePointBackupProgressEvent = {
+  siteId: string;
+  siteCode: string;
+  sourcePath?: string;
+  targetPath?: string;
+  status: "reading" | "uploading" | "verifying" | "verified" | "failed";
+  error?: string;
+};
+
+export type BrowserSharePointBackupResult = {
+  siteId: string;
+  siteCode: string;
+  connectorMode: "browser-sharepoint";
+  targetSiteUrl: string;
+  backupId: string;
+  target: {
+    backupsRoot: string;
+    backupFolder: string;
+  };
+  startedAt: string;
+  completedAt: string;
+  finalStatus: "success" | "failed";
+  sourcePaths: BackupSourceEvidence[];
+  verificationEvidence: BackupVerificationEvidence[];
+  errors: Array<{ sourcePath?: string; targetPath?: string; error: string; status?: number }>;
+};
+
+export type BrowserSharePointBackupOptions = {
+  onFileProgress?: (event: BrowserSharePointBackupProgressEvent) => void;
 };
 
 type DigestCacheEntry = {
@@ -209,6 +250,14 @@ const extractDigestTimeoutSeconds = (payload: any) => {
 const digestPreview = (digest: string) => String(digest || "").slice(0, 10);
 
 const payloadData = (payload: any) => payload?.d || payload;
+
+const odataResults = (payload: any) => {
+  const data = payloadData(payload);
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.value)) return data.value;
+  if (Array.isArray(payload?.value)) return payload.value;
+  return [];
+};
 
 const summarizeCurrentUserPayload = (payload: any) => {
   const user = payloadData(payload);
@@ -439,6 +488,19 @@ const serverRelativeFileName = (serverRelativePath: string) => {
   return normalized.split("/").filter(Boolean).pop() || normalized;
 };
 
+const contentTypeForSharePointPath = (serverRelativePath: string) => {
+  const lower = serverRelativePath.toLowerCase();
+  if (lower.endsWith(".html")) return "text/html;charset=utf-8";
+  if (lower.endsWith(".css")) return "text/css;charset=utf-8";
+  if (lower.endsWith(".js") || lower.endsWith(".mjs")) return "text/javascript;charset=utf-8";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".json")) return "application/json;charset=utf-8";
+  if (lower.endsWith(".txt")) return "text/plain;charset=utf-8";
+  return "application/octet-stream";
+};
+
 export function buildSharePointFilesAddUrl(targetSiteUrl: string, targetPath: string) {
   const folder = serverRelativeParent(targetPath);
   const fileName = serverRelativeFileName(targetPath);
@@ -449,7 +511,7 @@ export function buildSharePointFilesAddUrl(targetSiteUrl: string, targetPath: st
   );
 }
 
-const absoluteSharePointFileUrl = (targetSiteUrl: string, serverRelativePath: string) => {
+export const absoluteSharePointFileUrl = (targetSiteUrl: string, serverRelativePath: string) => {
   const siteUrl = new URL(normalizeSharePointSiteUrl(targetSiteUrl));
   return encodeSpaces(`${siteUrl.origin}${serverRelativePath}`);
 };
@@ -468,6 +530,670 @@ const sha256Hex = async (body: ArrayBuffer) => {
   const hash = await globalThis.crypto.subtle.digest("SHA-256", body);
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 };
+
+const parentFolder = (serverRelativePath: string) =>
+  serverRelativePath.split("/").filter(Boolean).slice(0, -1).join("/");
+
+const createableFolderChain = (paths: SiteBuilderResolvedPaths, serverRelativeFolder: string) => {
+  const normalized = serverRelativeFolder.startsWith("/") ? serverRelativeFolder : `/${serverRelativeFolder}`;
+  const bootstrapLibraryRoot = `${paths.siteRoot}/${paths.bootstrapLibrary}`.replace(/\/+/g, "/");
+  const roots = [paths.siteDbRoot, paths.usersDbRoot, bootstrapLibraryRoot].sort((a, b) => b.length - a.length);
+  const root = roots.find((candidate) => normalized === candidate || normalized.startsWith(`${candidate}/`));
+  if (!root || normalized === root) return [];
+
+  const suffix = normalized.slice(root.length).split("/").filter(Boolean);
+  const chain: string[] = [];
+  let current = root;
+  for (const segment of suffix) {
+    current = `${current}/${segment}`;
+    chain.push(current);
+  }
+  return chain;
+};
+
+export async function ensureSharePointFolderHierarchyBrowser(paths: SiteBuilderResolvedPaths, serverRelativeFolder: string) {
+  const digest = await getBrowserRequestDigest(paths.sharePointSiteUrl);
+  const folders = createableFolderChain(paths, serverRelativeFolder);
+  for (const folder of folders) {
+    const response = await fetch(buildSharePointApiUrl(paths.sharePointSiteUrl, "/_api/web/folders"), {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        Accept: ODATA_ACCEPT,
+        "Content-Type": ODATA_CONTENT_TYPE,
+        "X-RequestDigest": digest
+      },
+      body: JSON.stringify({
+        __metadata: { type: "SP.Folder" },
+        ServerRelativeUrl: folder
+      })
+    });
+    if (response.ok || response.status === 409) continue;
+    const text = await responseTextSafe(response);
+    throw new Error(text ? summarizeErrorText(text) : `browser-sharepoint-create-folder-failed:${response.status}:${folder}`);
+  }
+}
+
+export type BrowserSharePointLibraryEnsureResult = {
+  connectorMode: "browser-sharepoint";
+  title: string;
+  expectedRootUrl: string;
+  rootServerRelativeUrl: string;
+  status: "exists" | "created";
+  httpStatus?: number;
+};
+
+const listByTitleEndpoint = (targetSiteUrl: string, title: string) =>
+  buildSharePointApiUrl(
+    targetSiteUrl,
+    `/_api/web/lists/GetByTitle('${escapeODataString(title)}')?$select=Id,Title,BaseTemplate,DefaultViewUrl,OnQuickLaunch,RootFolder/ServerRelativeUrl,RootFolder/WelcomePage&$expand=RootFolder`
+  );
+
+const libraryRootFromPayload = (payload: any) => {
+  const item = payloadData(payload);
+  return String(item?.RootFolder?.ServerRelativeUrl || item?.rootFolder?.serverRelativeUrl || "");
+};
+
+const libraryBaseTemplateFromPayload = (payload: any) => Number(payloadData(payload)?.BaseTemplate || payloadData(payload)?.baseTemplate || 0);
+
+export async function ensureSharePointDocumentLibraryBrowser(
+  paths: SiteBuilderResolvedPaths,
+  title: string,
+  expectedRootUrl: string
+): Promise<BrowserSharePointLibraryEnsureResult> {
+  const targetSiteUrl = paths.sharePointSiteUrl;
+  const readUrl = listByTitleEndpoint(targetSiteUrl, title);
+  const existing = await fetchBrowserJson(readUrl);
+
+  if (existing.exists) {
+    const baseTemplate = libraryBaseTemplateFromPayload(existing.payload);
+    const rootServerRelativeUrl = libraryRootFromPayload(existing.payload) || expectedRootUrl;
+    if (baseTemplate && baseTemplate !== 101) {
+      throw new Error(`browser-sharepoint-library-not-document-library:${title}:BaseTemplate=${baseTemplate}`);
+    }
+    if (rootServerRelativeUrl !== expectedRootUrl) {
+      throw new Error(`browser-sharepoint-library-root-mismatch:${title}:${rootServerRelativeUrl}`);
+    }
+    return {
+      connectorMode: "browser-sharepoint",
+      title,
+      expectedRootUrl,
+      rootServerRelativeUrl,
+      status: "exists",
+      httpStatus: existing.status
+    };
+  }
+
+  if (existing.status !== 404) {
+    throw new Error(existing.error || `browser-sharepoint-library-check-failed:${title}:${existing.status || "unknown"}`);
+  }
+
+  const digest = await getBrowserRequestDigest(targetSiteUrl);
+  const createUrl = buildSharePointApiUrl(targetSiteUrl, "/_api/web/lists");
+  const createResponse = await fetch(createUrl, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: ODATA_ACCEPT,
+      "Content-Type": ODATA_CONTENT_TYPE,
+      "X-RequestDigest": digest
+    },
+    body: JSON.stringify({
+      __metadata: { type: "SP.List" },
+      BaseTemplate: 101,
+      Title: title,
+      Description: "Site Builder system document library",
+      OnQuickLaunch: true
+    })
+  });
+
+  if (!createResponse.ok) {
+    const text = await responseTextSafe(createResponse);
+    const existsLikeError = createResponse.status === 409 || /exist|already|name|שכבר|A list/i.test(text);
+    if (!existsLikeError) {
+      throw new Error(text ? summarizeErrorText(text) : `browser-sharepoint-create-library-failed:${title}:${createResponse.status}`);
+    }
+    const recheck = await fetchBrowserJson(readUrl);
+    if (!recheck.exists) {
+      throw new Error(text ? summarizeErrorText(text) : `browser-sharepoint-create-library-duplicate-unverified:${title}`);
+    }
+  }
+
+  const created = await fetchBrowserJson(readUrl);
+  if (!created.exists) {
+    throw new Error(`browser-sharepoint-create-library-verification-failed:${title}`);
+  }
+  const rootServerRelativeUrl = libraryRootFromPayload(created.payload) || expectedRootUrl;
+  if (rootServerRelativeUrl !== expectedRootUrl) {
+    throw new Error(`browser-sharepoint-library-root-mismatch:${title}:${rootServerRelativeUrl}`);
+  }
+
+  return {
+    connectorMode: "browser-sharepoint",
+    title,
+    expectedRootUrl,
+    rootServerRelativeUrl,
+    status: "created",
+    httpStatus: created.status
+  };
+}
+
+export type BrowserSharePointFileReadResult = {
+  connectorMode: "browser-sharepoint";
+  sourcePath: string;
+  url: string;
+  ok: boolean;
+  status?: number;
+  statusText?: string;
+  authBlocked?: boolean;
+  sizeBytes?: number;
+  sha256?: string;
+  bytes?: ArrayBuffer;
+  contentType?: string;
+  etag?: string;
+  lastModified?: string;
+  error?: string;
+};
+
+export async function readSharePointFileBrowser(targetSiteUrl: string, serverRelativePath: string): Promise<BrowserSharePointFileReadResult> {
+  const url = absoluteSharePointFileUrl(targetSiteUrl, serverRelativePath);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store"
+    });
+    const base = {
+      connectorMode: "browser-sharepoint" as const,
+      sourcePath: serverRelativePath,
+      url,
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      authBlocked: response.status === 401 || response.status === 403,
+      contentType: response.headers.get("content-type") || "",
+      etag: response.headers.get("etag") || "",
+      lastModified: response.headers.get("last-modified") || ""
+    };
+    if (!response.ok) {
+      const text = await responseTextSafe(response);
+      return { ...base, error: text ? summarizeErrorText(text) : `browser-sharepoint-file-read-failed:${response.status}` };
+    }
+
+    const bytes = await response.arrayBuffer();
+    return {
+      ...base,
+      sizeBytes: bytes.byteLength,
+      sha256: await sha256Hex(bytes),
+      bytes
+    };
+  } catch (error) {
+    return {
+      connectorMode: "browser-sharepoint",
+      sourcePath: serverRelativePath,
+      url,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+export type BrowserSharePointTextEnsureResult = Omit<BrowserSharePointUploadResult, "status"> & {
+  status: "uploaded" | "failed" | "exists";
+};
+
+export async function ensureSharePointTextFileIfMissingBrowser(params: {
+  paths: SiteBuilderResolvedPaths;
+  targetPath: string;
+  content: string;
+  contentType?: string;
+}): Promise<BrowserSharePointTextEnsureResult> {
+  const targetSiteUrl = params.paths.sharePointSiteUrl;
+  const existing = await readSharePointFileBrowser(targetSiteUrl, params.targetPath);
+  if (existing.ok && existing.bytes) {
+    const text = new TextDecoder().decode(existing.bytes);
+    if (text.trim().length > 0) {
+      return {
+        connectorMode: "browser-sharepoint",
+        relativePath: serverRelativeFileName(params.targetPath),
+        targetPath: params.targetPath,
+        uploadUrl: absoluteSharePointFileUrl(targetSiteUrl, params.targetPath),
+        status: "exists",
+        httpStatus: existing.status,
+        httpStatusText: existing.statusText,
+        etag: existing.etag
+      };
+    }
+  } else if (existing.status && existing.status !== 404) {
+    return {
+      connectorMode: "browser-sharepoint",
+      relativePath: serverRelativeFileName(params.targetPath),
+      targetPath: params.targetPath,
+      uploadUrl: absoluteSharePointFileUrl(targetSiteUrl, params.targetPath),
+      status: "failed",
+      httpStatus: existing.status,
+      httpStatusText: existing.statusText,
+      error: existing.error || `browser-sharepoint-file-read-failed:${existing.status}`
+    };
+  }
+
+  await ensureSharePointFolderHierarchyBrowser(params.paths, serverRelativeParent(params.targetPath));
+  const bytes = new TextEncoder().encode(`${params.content.replace(/\s*$/g, "")}\n`);
+  return uploadFileToSharePointBrowser({
+    targetSiteUrl,
+    targetPath: params.targetPath,
+    relativePath: serverRelativeFileName(params.targetPath),
+    body: bytes,
+    contentType: params.contentType || contentTypeForSharePointPath(params.targetPath),
+    expectedSizeBytes: bytes.byteLength
+  });
+}
+
+const sourceEntriesForBackup = (paths: SiteBuilderResolvedPaths) => Object.entries(paths.txtFiles);
+
+export async function buildBrowserSharePointBackupPlan(site: Site): Promise<BackupPlan> {
+  const paths = resolvePathsForSite(site);
+  const generatedAt = new Date();
+  const backupIdPreview = `backup-${generatedAt.toISOString().replace(/[:.]/g, "-")}`;
+  const targetSiteUrl = normalizeSharePointSiteUrl(paths.sharePointSiteUrl || site.sharePointSiteUrl);
+  const digestProbe = await requestBrowserDigest(targetSiteUrl);
+  const sources = await Promise.all(
+    sourceEntriesForBackup(paths).map(async ([key, serverRelativePath]): Promise<BackupPlanSource> => {
+      const result = await readSharePointFileBrowser(targetSiteUrl, serverRelativePath);
+      return {
+        key,
+        label: key,
+        serverRelativePath,
+        url: result.url,
+        required: true,
+        exists: result.ok,
+        status: result.status,
+        statusText: result.statusText,
+        sizeBytes: result.sizeBytes,
+        authBlocked: result.authBlocked,
+        error: result.error
+      };
+    })
+  );
+
+  const authBlockedSources = sources.filter((source) => source.authBlocked).length;
+  const missingSources = sources.filter((source) => !source.exists && !source.authBlocked).length;
+  const existingSources = sources.filter((source) => source.exists).length;
+  const knownSizeBytes = sources.reduce((sum, source) => sum + (source.sizeBytes || 0), 0);
+  const readyForBackup = missingSources === 0 && authBlockedSources === 0;
+
+  return {
+    generatedAt: generatedAt.toISOString(),
+    siteId: site._id,
+    siteCode: site.siteCode,
+    backupIdPreview,
+    target: {
+      backupsRoot: paths.backupsRoot,
+      backupFolder: `${paths.backupsRoot}/${backupIdPreview}`
+    },
+    sources,
+    summary: {
+      totalSources: sources.length,
+      existingSources,
+      missingSources,
+      authBlockedSources,
+      knownSizeBytes,
+      readyForBackup,
+      readyForBackupExecution: readyForBackup && digestProbe.ok && digestProbe.digestFound
+    },
+    notes: [
+      "Browser SharePoint Connector: הקבצים נקראו מהדפדפן עם credentials include.",
+      digestProbe.ok && digestProbe.digestFound
+        ? "Digest התקבל מאתר היעד עצמו, לא מאתר ה־Hub ולא מהשרת."
+        : `Digest דרך הדפדפן לא תקין: ${digestProbe.error || digestProbe.status || "unknown"}`,
+      authBlockedSources > 0
+        ? "SharePoint חסם חלק מקריאות הדפדפן; בדקו הרשאות משתמש לאתר היעד."
+        : "",
+      missingSources > 0 ? "חסרים קבצי TXT/JSON נדרשים באתר היעד." : ""
+    ].filter(Boolean)
+  };
+}
+
+const backupEvidenceFromReadBack = (
+  sourcePath: string,
+  targetPath: string,
+  source: BrowserSharePointFileReadResult,
+  readBack: DeploymentVerificationEvidence
+): BackupVerificationEvidence => ({
+  sourcePath,
+  targetPath,
+  status: readBack.status,
+  checkedAt: readBack.checkedAt,
+  sourceSizeBytes: source.sizeBytes || 0,
+  sourceSha256: source.sha256 || "",
+  expectedBackupSizeBytes: source.sizeBytes || 0,
+  expectedBackupSha256: source.sha256 || "",
+  backupSizeBytes: readBack.actualSizeBytes || 0,
+  backupSha256: readBack.actualSha256 || "",
+  sizeMatches: Boolean(readBack.sizeMatches),
+  sha256Matches: Boolean(readBack.sha256Matches),
+  httpStatus: readBack.httpStatus,
+  httpStatusText: readBack.httpStatusText,
+  contentType: readBack.contentType,
+  etag: readBack.etag,
+  lastModified: readBack.lastModified,
+  error: readBack.error
+});
+
+const failedBackupEvidence = (
+  sourcePath: string,
+  targetPath: string,
+  error: unknown,
+  sourceSizeBytes = 0,
+  sourceSha256 = "",
+  httpStatus?: number,
+  httpStatusText?: string
+): BackupVerificationEvidence => ({
+  sourcePath,
+  targetPath,
+  status: "failed",
+  checkedAt: new Date().toISOString(),
+  sourceSizeBytes,
+  sourceSha256,
+  expectedBackupSizeBytes: sourceSizeBytes,
+  expectedBackupSha256: sourceSha256,
+  backupSizeBytes: 0,
+  backupSha256: "",
+  sizeMatches: false,
+  sha256Matches: false,
+  httpStatus,
+  httpStatusText,
+  error: error instanceof Error ? error.message : String(error)
+});
+
+export async function backupSiteToSharePointBrowser(site: Site, options: BrowserSharePointBackupOptions = {}): Promise<BrowserSharePointBackupResult> {
+  const startedAt = new Date().toISOString();
+  const paths = resolvePathsForSite(site);
+  const targetSiteUrl = normalizeSharePointSiteUrl(paths.sharePointSiteUrl || site.sharePointSiteUrl);
+  const backupId = `backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  const backupFolder = `${paths.backupsRoot}/${backupId}`;
+  const sourcePaths: BackupSourceEvidence[] = [];
+  const verificationEvidence: BackupVerificationEvidence[] = [];
+  const errors: BrowserSharePointBackupResult["errors"] = [];
+
+  await getBrowserRequestDigest(targetSiteUrl);
+  await ensureSharePointFolderHierarchyBrowser(paths, backupFolder);
+
+  for (const [, sourcePath] of sourceEntriesForBackup(paths)) {
+    const targetPath = `${backupFolder}/${serverRelativeFileName(sourcePath)}`;
+    let source: BrowserSharePointFileReadResult | undefined;
+    try {
+      options.onFileProgress?.({ siteId: site._id, siteCode: site.siteCode, sourcePath, targetPath, status: "reading" });
+      source = await readSharePointFileBrowser(targetSiteUrl, sourcePath);
+      if (!source.ok || !source.bytes) {
+        throw new Error(source.error || `browser-sharepoint-source-read-failed:${source.status || "unknown"}`);
+      }
+
+      options.onFileProgress?.({ siteId: site._id, siteCode: site.siteCode, sourcePath, targetPath, status: "uploading" });
+      const upload = await uploadFileToSharePointBrowser({
+        targetSiteUrl,
+        targetPath,
+        relativePath: serverRelativeFileName(sourcePath),
+        body: source.bytes,
+        contentType: source.contentType || contentTypeForSharePointPath(sourcePath),
+        expectedSizeBytes: source.sizeBytes,
+        expectedSha256: source.sha256
+      });
+      if (upload.status !== "uploaded") {
+        throw new Error(upload.error || `browser-sharepoint-backup-upload-failed:${upload.httpStatus || "unknown"}`);
+      }
+
+      options.onFileProgress?.({ siteId: site._id, siteCode: site.siteCode, sourcePath, targetPath, status: "verifying" });
+      const readBack = await readBackSharePointFileBrowser({
+        targetSiteUrl,
+        targetPath,
+        relativePath: serverRelativeFileName(sourcePath),
+        body: source.bytes,
+        contentType: source.contentType || contentTypeForSharePointPath(sourcePath),
+        expectedSizeBytes: source.sizeBytes,
+        expectedSha256: source.sha256
+      });
+      const evidence = backupEvidenceFromReadBack(sourcePath, targetPath, source, readBack);
+      verificationEvidence.push(evidence);
+      sourcePaths.push({
+        path: sourcePath,
+        exists: true,
+        targetPath,
+        status: evidence.status,
+        sourceSizeBytes: source.sizeBytes || 0,
+        sourceSha256: source.sha256 || "",
+        backupSizeBytes: evidence.backupSizeBytes || 0,
+        backupSha256: evidence.backupSha256 || "",
+        error: evidence.error
+      });
+
+      if (evidence.status === "verified" && evidence.sizeMatches && evidence.sha256Matches) {
+        options.onFileProgress?.({ siteId: site._id, siteCode: site.siteCode, sourcePath, targetPath, status: "verified" });
+      } else {
+        errors.push({ sourcePath, targetPath, error: evidence.error || "browser-sharepoint-backup-readback-mismatch", status: evidence.httpStatus });
+        options.onFileProgress?.({ siteId: site._id, siteCode: site.siteCode, sourcePath, targetPath, status: "failed", error: evidence.error });
+      }
+    } catch (error) {
+      const failed = failedBackupEvidence(sourcePath, targetPath, error, source?.sizeBytes || 0, source?.sha256 || "", source?.status, source?.statusText);
+      verificationEvidence.push(failed);
+      sourcePaths.push({
+        path: sourcePath,
+        exists: Boolean(source?.ok),
+        targetPath,
+        status: "failed",
+        sourceSizeBytes: source?.sizeBytes || 0,
+        sourceSha256: source?.sha256 || "",
+        backupSizeBytes: 0,
+        backupSha256: "",
+        error: failed.error
+      });
+      errors.push({ sourcePath, targetPath, error: failed.error || "browser-sharepoint-backup-file-failed", status: failed.httpStatus });
+      options.onFileProgress?.({ siteId: site._id, siteCode: site.siteCode, sourcePath, targetPath, status: "failed", error: failed.error });
+    }
+  }
+
+  const finalStatus =
+    verificationEvidence.length === sourceEntriesForBackup(paths).length &&
+    verificationEvidence.every((item) => item.status === "verified" && item.sizeMatches && item.sha256Matches)
+      ? "success"
+      : "failed";
+
+  return {
+    siteId: site._id,
+    siteCode: site.siteCode,
+    connectorMode: "browser-sharepoint",
+    targetSiteUrl,
+    backupId,
+    target: {
+      backupsRoot: paths.backupsRoot,
+      backupFolder
+    },
+    startedAt,
+    completedAt: new Date().toISOString(),
+    finalStatus,
+    sourcePaths,
+    verificationEvidence,
+    errors
+  };
+}
+
+export async function verifyBackupToSharePointBrowser(site: Site, backup: Backup) {
+  const paths = resolvePathsForSite(site);
+  const targetSiteUrl = normalizeSharePointSiteUrl(paths.sharePointSiteUrl || site.sharePointSiteUrl);
+  const rows = (backup.verification?.evidence?.length ? backup.verification.evidence : (backup.sourcePaths || []).map((row) => ({
+    sourcePath: row.path,
+    targetPath: row.targetPath || "",
+    sourceSizeBytes: row.sourceSizeBytes || 0,
+    sourceSha256: row.sourceSha256 || "",
+    expectedBackupSizeBytes: row.backupSizeBytes || row.sourceSizeBytes || 0,
+    expectedBackupSha256: row.backupSha256 || row.sourceSha256 || ""
+  }))).filter((row) => row.sourcePath || row.targetPath);
+
+  const evidence = await Promise.all(rows.map(async (row): Promise<BackupVerificationEvidence> => {
+    if (!row.targetPath) {
+      return failedBackupEvidence(row.sourcePath || "", "", "backup-target-path-missing", row.sourceSizeBytes || 0, row.sourceSha256 || "");
+    }
+    const expectedSize = row.expectedBackupSizeBytes || row.sourceSizeBytes || 0;
+    const expectedSha = row.expectedBackupSha256 || row.sourceSha256 || "";
+    const readBack = await readBackSharePointFileBrowser({
+      targetSiteUrl,
+      targetPath: row.targetPath,
+      relativePath: serverRelativeFileName(row.targetPath),
+      body: new ArrayBuffer(0),
+      expectedSizeBytes: expectedSize,
+      expectedSha256: expectedSha
+    });
+    return {
+      sourcePath: row.sourcePath || "",
+      targetPath: row.targetPath,
+      status: readBack.status,
+      checkedAt: readBack.checkedAt,
+      sourceSizeBytes: row.sourceSizeBytes || 0,
+      sourceSha256: row.sourceSha256 || "",
+      expectedBackupSizeBytes: expectedSize,
+      expectedBackupSha256: expectedSha,
+      backupSizeBytes: readBack.actualSizeBytes || 0,
+      backupSha256: readBack.actualSha256 || "",
+      sizeMatches: Boolean(readBack.sizeMatches),
+      sha256Matches: Boolean(readBack.sha256Matches),
+      httpStatus: readBack.httpStatus,
+      httpStatusText: readBack.httpStatusText,
+      contentType: readBack.contentType,
+      etag: readBack.etag,
+      lastModified: readBack.lastModified,
+      error: readBack.error
+    };
+  }));
+
+  return {
+    backupId: backup._id,
+    connectorMode: "browser-sharepoint" as const,
+    targetSiteUrl,
+    verificationEvidence: evidence,
+    finalStatus: evidence.length > 0 && evidence.every((item) => item.status === "verified" && item.sizeMatches && item.sha256Matches) ? "success" as const : "failed" as const,
+    checkedAt: new Date().toISOString()
+  };
+}
+
+type BrowserJsonReadResult = {
+  exists: boolean;
+  status?: number;
+  statusText?: string;
+  authBlocked?: boolean;
+  payload?: any;
+  error?: string;
+};
+
+async function fetchBrowserJson(url: string): Promise<BrowserJsonReadResult> {
+  const response = await fetch(url, {
+    method: "GET",
+    credentials: "include",
+    cache: "no-store",
+    headers: { Accept: ODATA_ACCEPT }
+  });
+  const base = {
+    exists: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    authBlocked: response.status === 401 || response.status === 403
+  };
+  if (!response.ok) {
+    const text = await responseTextSafe(response);
+    return { ...base, payload: undefined, error: text ? summarizeErrorText(text) : `browser-sharepoint-json-read-failed:${response.status}` };
+  }
+  return { ...base, payload: await parseJsonSafe(response) };
+}
+
+const backupFolderFilesEndpoint = (targetSiteUrl: string, serverRelativePath: string) =>
+  buildSharePointApiUrl(
+    targetSiteUrl,
+    `/_api/web/GetFolderByServerRelativeUrl('${escapeODataString(serverRelativePath)}')/Files?$select=Name,ServerRelativeUrl,Length,TimeCreated,TimeLastModified,UniqueId,ETag`
+  );
+
+export async function listBrowserSharePointBackupInventory(site: Site, includeFiles = true): Promise<SharePointBackupInventory> {
+  const paths = resolvePathsForSite(site);
+  const targetSiteUrl = normalizeSharePointSiteUrl(paths.sharePointSiteUrl || site.sharePointSiteUrl);
+  const rootUrl = folderEndpoint(paths, paths.backupsRoot);
+  const root = await fetchBrowserJson(rootUrl);
+  const foldersApiUrl = buildSharePointApiUrl(
+    targetSiteUrl,
+    `/_api/web/GetFolderByServerRelativeUrl('${escapeODataString(paths.backupsRoot)}')/Folders?$select=Name,ServerRelativeUrl,ItemCount,TimeCreated,TimeLastModified,UniqueId`
+  );
+  const folderRead = root.exists ? await fetchBrowserJson(foldersApiUrl) : { exists: false, payload: undefined, error: root.error, status: root.status, statusText: root.statusText, authBlocked: root.authBlocked };
+  const folderRows = odataResults(folderRead.payload);
+  const folders: SharePointBackupInventoryFolder[] = await Promise.all(folderRows.map(async (row: any) => {
+    const serverRelativeUrl = String(row.ServerRelativeUrl || row.serverRelativeUrl || "");
+    const filesStatus = includeFiles ? await fetchBrowserJson(backupFolderFilesEndpoint(targetSiteUrl, serverRelativeUrl)) : undefined;
+    const files: SharePointBackupInventoryFile[] = includeFiles && filesStatus?.payload
+      ? odataResults(filesStatus.payload).map((file: any) => ({
+          name: String(file.Name || file.name || ""),
+          serverRelativeUrl: String(file.ServerRelativeUrl || file.serverRelativeUrl || ""),
+          url: absoluteSharePointFileUrl(targetSiteUrl, String(file.ServerRelativeUrl || file.serverRelativeUrl || "")),
+          sizeBytes: Number(file.Length || file.length || 0),
+          timeCreated: String(file.TimeCreated || file.timeCreated || ""),
+          timeLastModified: String(file.TimeLastModified || file.timeLastModified || ""),
+          uniqueId: String(file.UniqueId || file.uniqueId || ""),
+          etag: String(file.ETag || file.etag || "")
+        }))
+      : [];
+    return {
+      name: String(row.Name || row.name || serverRelativeFileName(serverRelativeUrl)),
+      serverRelativeUrl,
+      url: absoluteSharePointFileUrl(targetSiteUrl, serverRelativeUrl),
+      itemCount: Number(row.ItemCount || row.itemCount || 0),
+      timeCreated: String(row.TimeCreated || row.timeCreated || ""),
+      timeLastModified: String(row.TimeLastModified || row.timeLastModified || ""),
+      uniqueId: String(row.UniqueId || row.uniqueId || ""),
+      files,
+      filesStatus: includeFiles && filesStatus
+        ? {
+            exists: filesStatus.exists,
+            status: filesStatus.status,
+            statusText: filesStatus.statusText,
+            authBlocked: filesStatus.authBlocked,
+            error: filesStatus.error
+          }
+        : undefined,
+      filesCount: includeFiles ? files.length : Number(row.ItemCount || row.itemCount || 0),
+      knownSizeBytes: files.reduce((sum, file) => sum + (file.sizeBytes || 0), 0)
+    };
+  }));
+
+  const filesCount = folders.reduce((sum, folder) => sum + folder.filesCount, 0);
+  const knownSizeBytes = folders.reduce((sum, folder) => sum + folder.knownSizeBytes, 0);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    siteId: site._id,
+    siteCode: site.siteCode,
+    includeFiles,
+    resolvedPaths: paths as unknown as Record<string, unknown>,
+    root: {
+      serverRelativePath: paths.backupsRoot,
+      url: absoluteSharePointFileUrl(targetSiteUrl, paths.backupsRoot),
+      apiUrl: rootUrl,
+      checkedAt: new Date().toISOString(),
+      exists: root.exists,
+      status: root.status,
+      statusText: root.statusText,
+      authBlocked: root.authBlocked,
+      error: root.error
+    },
+    folders,
+    summary: {
+      rootExists: root.exists,
+      foldersCount: folders.length,
+      filesCount,
+      knownSizeBytes,
+      authBlocked: Boolean(root.authBlocked || folders.some((folder) => folder.filesStatus?.authBlocked)),
+      readOk: root.exists && (!includeFiles || folders.every((folder) => folder.filesStatus?.exists))
+    },
+    notes: [
+      "Browser SharePoint Connector: Inventory נקרא מהדפדפן עם credentials include.",
+      root.authBlocked ? "SharePoint החזיר 401/403 לדפדפן עבור תיקיית הגיבויים." : ""
+    ].filter(Boolean)
+  };
+}
 
 const failedBrowserEvidence = (
   options: Pick<BrowserSharePointUploadOptions, "relativePath" | "targetPath" | "expectedSizeBytes" | "expectedSha256" | "contentType">,
@@ -578,6 +1304,45 @@ export async function readBackSharePointFileBrowser(options: BrowserSharePointUp
   };
 }
 
+export async function verifyFinalAppUrlBrowser(finalAppUrl?: string): Promise<DeploymentFinalAppUrlVerification | undefined> {
+  const url = String(finalAppUrl || "").trim();
+  if (!url) return undefined;
+  const checkedAt = new Date().toISOString();
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store"
+    });
+    return {
+      key: "finalAppUrl",
+      label: "Final app URL",
+      url,
+      finalAppUrl: url,
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      httpStatus: response.status,
+      httpStatusText: response.statusText,
+      checkedAt,
+      authBlocked: response.status === 401 || response.status === 403,
+      error: response.ok ? "" : `final-app-url-failed:${response.status}`
+    };
+  } catch (error) {
+    return {
+      key: "finalAppUrl",
+      label: "Final app URL",
+      url,
+      finalAppUrl: url,
+      ok: false,
+      checkedAt,
+      authBlocked: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 export async function deployArtifactToSharePointBrowser(options: BrowserSharePointDeployOptions): Promise<BrowserSharePointDeployResult> {
   const startedAt = new Date().toISOString();
   const uploadedFilesEvidence: DeploymentVerificationEvidence[] = [];
@@ -646,6 +1411,7 @@ export async function deployArtifactToSharePointBrowser(options: BrowserSharePoi
     }
   }
 
+  const finalAppUrlVerification = await verifyFinalAppUrlBrowser(options.finalAppUrl);
   const completedAt = new Date().toISOString();
   const finalStatus = readBackEvidence.length === options.files.filter((file) => file.deployable).length &&
     readBackEvidence.every((item) => item.status === "verified" && item.sizeMatches && item.sha256Matches)
@@ -664,6 +1430,7 @@ export async function deployArtifactToSharePointBrowser(options: BrowserSharePoi
     finalStatus,
     uploadedFilesEvidence,
     readBackEvidence,
+    finalAppUrlVerification,
     errors
   };
 }

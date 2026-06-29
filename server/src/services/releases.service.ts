@@ -15,6 +15,7 @@ import {
   DeployPolicySnapshot,
   DeploySafetySnapshot
 } from "./deployPolicy.service";
+import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
 
 export type BatchDeployTargetMode = "single" | "selected" | "all";
 export type BatchDeployTargetStatus = "ready" | "warning" | "blocked" | "up_to_date";
@@ -44,6 +45,7 @@ export type BatchDeployPlan = {
   targetSiteIds: string[];
   deployMode: DeployMode;
   connectorMode: SharePointConnectorMode;
+  allowDeployWithoutBackup: boolean;
   summary: {
     totalSelectedSites: number;
     readySites: number;
@@ -204,10 +206,29 @@ const resolveBatchTargetSites = async (params: {
 };
 
 const dedupeMessages = (messages: string[]) => Array.from(new Set(messages.filter(Boolean)));
+const BROWSER_DEPLOY_EXECUTION_NOTICE = "Browser deploy requires browser Digest and per-file upload verification at execution time.";
+const actionableDeployMissingRequirements = (requirements: string[] = []) =>
+  requirements.filter((message) => String(message || "").trim() !== BROWSER_DEPLOY_EXECUTION_NOTICE);
+
+const buildBackupOverrideSafety = (operation: "deploy" | "rollback", reason?: string): DeploySafetySnapshot => ({
+  ...buildLocalDevDeploySafetySnapshot(operation),
+  reason: reason || `Dangerous backup override accepted for ${operation}.`
+});
 
 const assertRollbackTargetOlder = (site: any, release: any) => {
   const currentVersion = getSiteCurrentVersion(site);
   if (release.version === currentVersion) {
+    const bypassEnvVar = getDangerousValidationBypassEnvVar("deploy-plan-blockers");
+    if (bypassEnvVar) {
+      logger.warn("releases", "Rollback same-version guard bypassed by dangerous env", {
+        siteId: site._id.toString(),
+        siteCode: site.siteCode,
+        currentVersion,
+        targetVersion: release.version,
+        envVar: bypassEnvVar
+      });
+      return currentVersion;
+    }
     logger.warn("releases", "Rollback rejected because target version equals current version", {
       siteId: site._id.toString(),
       siteCode: site.siteCode,
@@ -217,6 +238,17 @@ const assertRollbackTargetOlder = (site: any, release: any) => {
     throw new Error("rollback-target-version-same-as-current");
   }
   if (compareSemver(release.version, currentVersion) >= 0) {
+    const bypassEnvVar = getDangerousValidationBypassEnvVar("deploy-plan-blockers");
+    if (bypassEnvVar) {
+      logger.warn("releases", "Rollback target ordering guard bypassed by dangerous env", {
+        siteId: site._id.toString(),
+        siteCode: site.siteCode,
+        currentVersion,
+        targetVersion: release.version,
+        envVar: bypassEnvVar
+      });
+      return currentVersion;
+    }
     logger.warn("releases", "Rollback rejected because target release is not older than current version", {
       siteId: site._id.toString(),
       siteCode: site.siteCode,
@@ -330,13 +362,15 @@ export async function buildBatchDeployPlan(params: {
   targetSiteIds?: string[];
   deployMode?: DeployMode | string;
   connectorMode?: SharePointConnectorMode | string;
+  allowDeployWithoutBackup?: boolean;
 }) {
   logger.info("releases", "Building batch deploy plan", {
     releaseId: params.releaseId,
     targetMode: params.targetMode,
     targetSiteIds: normalizeTargetSiteIds(params.targetSiteIds),
     deployMode: params.deployMode,
-    connectorMode: params.connectorMode
+    connectorMode: params.connectorMode,
+    allowDeployWithoutBackup: Boolean(params.allowDeployWithoutBackup)
   });
 
   const release = await Release.findById(params.releaseId);
@@ -344,6 +378,9 @@ export async function buildBatchDeployPlan(params: {
 
   const deployPolicy = buildDeployPolicy(params.deployMode || "local-dev-owner");
   const connectorMode: SharePointConnectorMode = params.connectorMode === "browser-sharepoint" ? "browser-sharepoint" : "backend-sharepoint";
+  const backupOverrideAllowed = Boolean(params.allowDeployWithoutBackup && deployPolicy.localDevOwnerMode && connectorMode === "browser-sharepoint");
+  const deployPlanBypassEnvVar = getDangerousValidationBypassEnvVar("deploy-plan-blockers");
+  const deployPlanBlockersBypassed = Boolean(deployPlanBypassEnvVar);
   const sites = await resolveBatchTargetSites({
     targetMode: params.targetMode,
     targetSiteIds: params.targetSiteIds
@@ -381,10 +418,12 @@ export async function buildBatchDeployPlan(params: {
       results.push({
         ...baseRow,
         alreadyUpToDate: false,
-        included: false,
-        status: "blocked",
-        blockers: ["האתר נמצא בגרסה חדשה יותר מהגרסה שנבחרה. השתמשו ב-Rollback מתוכנן במקום Deploy רגיל."],
-        warnings: []
+        included: deployPlanBlockersBypassed,
+        status: deployPlanBlockersBypassed ? "warning" : "blocked",
+        blockers: deployPlanBlockersBypassed ? [] : ["האתר נמצא בגרסה חדשה יותר מהגרסה שנבחרה. השתמשו ב-Rollback מתוכנן במקום Deploy רגיל."],
+        warnings: deployPlanBlockersBypassed
+          ? [`${deployPlanBypassEnvVar}=true: newer-version deploy blocker bypassed.`]
+          : []
       });
       continue;
     }
@@ -393,10 +432,12 @@ export async function buildBatchDeployPlan(params: {
       results.push({
         ...baseRow,
         alreadyUpToDate: false,
-        included: false,
-        status: "blocked",
-        blockers: ["Deploy cannot run because the release artifact is missing."],
-        warnings: []
+        included: deployPlanBlockersBypassed,
+        status: deployPlanBlockersBypassed ? "warning" : "blocked",
+        blockers: deployPlanBlockersBypassed ? [] : ["Deploy cannot run because the release artifact is missing."],
+        warnings: deployPlanBlockersBypassed
+          ? [`${deployPlanBypassEnvVar}=true: missing artifact blocker bypassed for queueing; execution still needs real files.`]
+          : []
       });
       continue;
     }
@@ -409,8 +450,13 @@ export async function buildBatchDeployPlan(params: {
       const blockers = dedupeMessages([
         ...deployPolicy.blockers,
         ...plan.blockers,
-        ...plan.missingRequirements,
+        ...actionableDeployMissingRequirements(plan.missingRequirements),
         !plan.summary.readyForDeployExecution ? "Dry-run did not pass all execution gates." : ""
+      ]);
+      const warnings = dedupeMessages([
+        plan.targetInventory?.readOk === false ? "קריאת inventory ב-SharePoint חלקית; יש לבדוק stale files לפני ביצוע." : "",
+        plan.summary.staleTargetFilesCount ? `${plan.summary.staleTargetFilesCount} קבצי יעד ישנים יישארו כברירת מחדל.` : "",
+        plan.deployPolicy?.warning || ""
       ]);
       if (deployPolicy.requiresRecentVerifiedBackup) {
         try {
@@ -419,32 +465,40 @@ export async function buildBatchDeployPlan(params: {
             operation: "deploy"
           });
         } catch (error) {
-          blockers.push(error instanceof Error ? error.message : "recent-verified-backup-required");
+          const message = error instanceof Error ? error.message : "recent-verified-backup-required";
+          if (backupOverrideAllowed) {
+            warnings.push("backup-override-accepted:deploy");
+          } else {
+            blockers.push(message);
+          }
         }
       }
-      const warnings = dedupeMessages([
-        plan.targetInventory?.readOk === false ? "קריאת inventory ב-SharePoint חלקית; יש לבדוק stale files לפני ביצוע." : "",
-        plan.summary.staleTargetFilesCount ? `${plan.summary.staleTargetFilesCount} קבצי יעד ישנים יישארו כברירת מחדל.` : "",
-        plan.deployPolicy?.warning || ""
-      ]);
-      const ready = blockers.length === 0;
+      const effectiveBlockers = deployPlanBlockersBypassed ? [] : blockers;
+      const bypassWarnings = deployPlanBlockersBypassed && blockers.length
+        ? [`${deployPlanBypassEnvVar}=true: ${blockers.length} dry-run blocker(s) bypassed.`, ...blockers]
+        : [];
+      const ready = effectiveBlockers.length === 0;
+      const effectiveWarnings = [...warnings, ...bypassWarnings];
       results.push({
         ...baseRow,
         alreadyUpToDate: false,
         included: ready,
-        status: ready ? (warnings.length ? "warning" : "ready") : "blocked",
-        blockers,
-        warnings,
+        status: ready ? (effectiveWarnings.length ? "warning" : "ready") : "blocked",
+        blockers: effectiveBlockers,
+        warnings: effectiveWarnings,
         plan
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : "deploy-plan-failed";
       results.push({
         ...baseRow,
         alreadyUpToDate: false,
-        included: false,
-        status: "blocked",
-        blockers: [error instanceof Error ? error.message : "deploy-plan-failed"],
-        warnings: []
+        included: deployPlanBlockersBypassed,
+        status: deployPlanBlockersBypassed ? "warning" : "blocked",
+        blockers: deployPlanBlockersBypassed ? [] : [message],
+        warnings: deployPlanBlockersBypassed
+          ? [`${deployPlanBypassEnvVar}=true: deploy plan error bypassed for queueing.`, message]
+          : []
       });
     }
   }
@@ -462,6 +516,7 @@ export async function buildBatchDeployPlan(params: {
     targetSiteIds,
     deployMode: deployPolicy.mode,
     connectorMode,
+    allowDeployWithoutBackup: backupOverrideAllowed,
     summary: {
       totalSelectedSites: results.length,
       readySites,
@@ -562,6 +617,8 @@ export async function enqueueBatchDeploy(params: {
   targetMode: BatchDeployTargetMode;
   targetSiteIds?: string[];
   deployMode?: DeployMode | string;
+  connectorMode?: SharePointConnectorMode | string;
+  allowDeployWithoutBackup?: boolean;
   confirmNoPartial?: boolean;
   createdBy: string;
 }) {
@@ -570,11 +627,13 @@ export async function enqueueBatchDeploy(params: {
     targetMode: params.targetMode,
     targetSiteIds: normalizeTargetSiteIds(params.targetSiteIds),
     deployMode: params.deployMode,
+    connectorMode: params.connectorMode,
+    allowDeployWithoutBackup: Boolean(params.allowDeployWithoutBackup),
     confirmNoPartial: params.confirmNoPartial
   });
   const plan = await buildBatchDeployPlan(params);
   const executableRows = plan.results.filter((row) => row.status === "ready" || row.status === "warning");
-  if ((params.confirmNoPartial ?? true) && plan.summary.blockedSites > 0) {
+  if ((params.confirmNoPartial ?? true) && plan.summary.blockedSites > 0 && !isDangerousValidationBypassEnabled("deploy-plan-blockers")) {
     throw new Error("batch-deploy-plan-has-blockers");
   }
   if (executableRows.length === 0) {
@@ -591,18 +650,21 @@ export async function enqueueBatchDeploy(params: {
   assertDeployPolicyUsable(deployPolicy);
   assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
+  const backupOverrideForExecution = Boolean(plan.allowDeployWithoutBackup && deployPolicy.localDevOwnerMode && plan.connectorMode === "browser-sharepoint");
 
   const sitesById = new Map((sites as any[]).map((site) => [site._id.toString(), site]));
   const backupSafetyBySiteId = new Map<string, BackupSafetySnapshot | DeploySafetySnapshot>();
   for (const row of executableRows) {
     const site = sitesById.get(row.siteId);
     if (!site) throw new Error("batch-deploy-target-sites-not-found");
-    const backupSafety = deployPolicy.requiresRecentVerifiedBackup
+    const backupSafety = deployPolicy.requiresRecentVerifiedBackup && !backupOverrideForExecution
       ? await assertRecentVerifiedBackupForDangerousWrite({
           siteId: site._id,
           operation: "deploy"
         })
-      : buildLocalDevDeploySafetySnapshot("deploy");
+      : backupOverrideForExecution
+        ? buildBackupOverrideSafety("deploy", "Dangerous no-backup deploy override accepted from browser-sharepoint dry-run.")
+        : buildLocalDevDeploySafetySnapshot("deploy");
     backupSafetyBySiteId.set(row.siteId, backupSafety);
   }
 
@@ -768,6 +830,8 @@ export async function enqueueDeploySite(params: {
   siteId: string;
   releaseId: string;
   deployMode?: DeployMode | string;
+  connectorMode?: SharePointConnectorMode | string;
+  allowDeployWithoutBackup?: boolean;
   createdBy: string;
 }) {
   logger.info("releases", "Queueing deploy site", {
@@ -781,18 +845,23 @@ export async function enqueueDeploySite(params: {
   const release = await Release.findById(params.releaseId);
   if (!release) throw new Error("release-not-found");
   const deployPolicy = buildDeployPolicy(params.deployMode);
+  const connectorMode: SharePointConnectorMode = params.connectorMode === "browser-sharepoint" ? "browser-sharepoint" : "backend-sharepoint";
+  const backupOverrideAllowed = Boolean(params.allowDeployWithoutBackup && deployPolicy.localDevOwnerMode && connectorMode === "browser-sharepoint");
   assertDeployPolicyUsable(deployPolicy);
   assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
-  const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString(), {
-    deployMode: deployPolicy.mode
-  });
-  const backupSafety = deployPolicy.requiresRecentVerifiedBackup
+  const deployPlanOptions = params.connectorMode
+    ? { deployMode: deployPolicy.mode, connectorMode }
+    : { deployMode: deployPolicy.mode };
+  const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString(), deployPlanOptions);
+  const backupSafety = deployPolicy.requiresRecentVerifiedBackup && !backupOverrideAllowed
     ? await assertRecentVerifiedBackupForDangerousWrite({
         siteId: site._id,
         operation: "deploy"
       })
-    : buildLocalDevDeploySafetySnapshot("deploy");
+    : backupOverrideAllowed
+      ? buildBackupOverrideSafety("deploy", "Dangerous no-backup deploy override accepted for browser-sharepoint site deploy.")
+      : buildLocalDevDeploySafetySnapshot("deploy");
 
   const deployment = await SiteVersionDeployment.create({
     siteId: site._id,
@@ -896,7 +965,7 @@ export async function enqueueRollbackSite(params: {
   assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
   const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString());
-  const deployPolicy = buildDeployPolicy();
+  const deployPolicy = buildDeployPolicy(undefined, "rollback");
   const backupSafety = deployPolicy.requiresRecentVerifiedBackup
     ? await assertRecentVerifiedBackupForDangerousWrite({
         siteId: site._id,

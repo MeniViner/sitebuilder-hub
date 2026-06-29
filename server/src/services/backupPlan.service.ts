@@ -28,11 +28,14 @@ export type SiteBackupPlan = {
   generatedAt: string;
   siteId: string;
   siteCode: string;
+  storageBackend: string;
   backupIdPreview: string;
   resolvedPaths: SiteBuilderResolvedPaths;
   target: {
     backupsRoot: string;
     backupFolder: string;
+    backendApiUrl?: string;
+    builderSiteId?: string;
   };
   capabilities: ReturnType<typeof getSharePointOperationCapabilities>;
   sources: BackupPlanEvidence[];
@@ -184,6 +187,51 @@ export async function buildReadOnlyBackupPlan(siteId: string): Promise<SiteBacku
   const resolvedPaths = getPathsForSite(site);
   const generatedAt = new Date();
   const backupIdPreview = `backup-${generatedAt.toISOString().replace(/[:.]/g, "-")}`;
+  const storageBackend = String(site.storageBackend || "unknown");
+
+  if (storageBackend === "mongo") {
+    const backendApiUrl = String(site.backendApiUrl || site.mongoBackendStatus?.backendApiUrl || "");
+    const builderSiteId = String(site.mongoSiteId || site.builderSiteId || site.mongoBackendStatus?.siteId || site.siteCode || "");
+    const backupCapabilityOk = site.mongoBackendStatus?.backupsStatus === "ok" || site.health?.mongoBackupsOk === true;
+    return {
+      generatedAt: generatedAt.toISOString(),
+      siteId: site._id.toString(),
+      siteCode: site.siteCode,
+      storageBackend,
+      backupIdPreview,
+      resolvedPaths,
+      target: {
+        backupsRoot: `mongo-backend:/api/sites/${builderSiteId}/backups`,
+        backupFolder: `mongo-backend:/api/sites/${builderSiteId}/backups/${backupIdPreview}`,
+        backendApiUrl,
+        builderSiteId
+      },
+      capabilities: getSharePointOperationCapabilities(),
+      sources: [],
+      summary: {
+        totalSources: 0,
+        existingSources: 0,
+        missingSources: backupCapabilityOk ? 0 : 1,
+        authBlockedSources: 0,
+        knownSizeBytes: 0,
+        readyForBackup: backupCapabilityOk,
+        readyForBackupExecution: backupCapabilityOk
+      },
+      blockers: [
+        !backendApiUrl ? "mongo-backend-api-url-missing" : "",
+        !builderSiteId ? "mongo-site-id-missing" : "",
+        !backupCapabilityOk ? "mongo-backup-capability-not-verified" : ""
+      ].filter(Boolean),
+      notes: [
+        "אתר Mongo מגובה דרך Builder backend ולא דרך העתקת קבצי TXT ב־SharePoint.",
+        backupCapabilityOk
+          ? "יכולת backup ב־Mongo אומתה בבדיקת backend האחרונה."
+          : "יש להריץ בדיקת Mongo backend לפני שמסמנים backup כזמין.",
+        "ניתן עדיין לגבות metadata של אירוח SharePoint בנפרד, אך זה אינו גיבוי הנתונים החיים."
+      ]
+    };
+  }
+
   const sourceEntries = Object.entries(resolvedPaths.txtFiles);
 
   const sources = await Promise.all(
@@ -230,6 +278,7 @@ export async function buildReadOnlyBackupPlan(siteId: string): Promise<SiteBacku
     generatedAt: generatedAt.toISOString(),
     siteId: site._id.toString(),
     siteCode: site.siteCode,
+    storageBackend,
     backupIdPreview,
     resolvedPaths,
     target: {

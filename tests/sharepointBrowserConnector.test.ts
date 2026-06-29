@@ -3,10 +3,13 @@ import type { Site } from "../client/src/types/site";
 import {
   buildContextInfoUrl,
   buildSharePointFilesAddUrl,
+  backupSiteToSharePointBrowser,
+  buildBrowserSharePointBackupPlan,
   clearBrowserDigestCache,
   combineSharePointConnectorDiagnostics,
   deployArtifactToSharePointBrowser,
   extractFormDigestValue,
+  listBrowserSharePointBackupInventory,
   requestBrowserDigest,
   runBrowserSharePointHealthCheck,
   uploadFileToSharePointBrowser
@@ -328,5 +331,110 @@ describe("Browser SharePoint connector", () => {
         operations: {}
       }
     })).not.toContain("Deploy cannot run because SharePoint write is not configured.");
+  });
+
+  it("builds backup plans from the browser connector and never calls backend SharePoint", async () => {
+    const fetchSpy = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/_api/contextinfo")) {
+        return Promise.resolve(new Response(JSON.stringify(digestPayload("digest-schedule", "https://portal.army.idf/sites/schedule")), { status: 200 }));
+      }
+      return Promise.resolve(new Response("source", { status: 200, statusText: "OK", headers: { "Content-Type": "text/plain" } }));
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const plan = await buildBrowserSharePointBackupPlan(makeSite("schedule", "https://portal.army.idf/sites/schedule"));
+
+    expect(plan.summary).toMatchObject({
+      totalSources: 9,
+      existingSources: 9,
+      authBlockedSources: 0,
+      readyForBackup: true,
+      readyForBackupExecution: true
+    });
+    expect(fetchSpy.mock.calls[0][0]).toBe("https://portal.army.idf/sites/schedule/_api/contextinfo");
+    for (const [, init] of fetchSpy.mock.calls) {
+      expect(init).toEqual(expect.objectContaining({ credentials: "include" }));
+    }
+    expect(plan.notes.join(" ")).toContain("Browser SharePoint Connector");
+  });
+
+  it("backs up source files through the browser using target-site digest, folder creation, upload, and read-back", async () => {
+    const fetchSpy = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/_api/contextinfo")) {
+        return Promise.resolve(new Response(JSON.stringify(digestPayload("digest-schedule", "https://portal.army.idf/sites/schedule")), { status: 200 }));
+      }
+      if (url.endsWith("/_api/web/folders")) {
+        return Promise.resolve(new Response("{}", { status: 201, statusText: "Created" }));
+      }
+      if (url.includes("/Files/add(")) {
+        return Promise.resolve(new Response("{}", { status: 200, statusText: "OK" }));
+      }
+      const fileName = String(url).split("/").pop() || "file.txt";
+      return Promise.resolve(new Response(fileName, { status: 200, statusText: "OK", headers: { "Content-Type": "text/plain" } }));
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await backupSiteToSharePointBrowser(makeSite("schedule", "https://portal.army.idf/sites/schedule"));
+
+    expect(result.finalStatus).toBe("success");
+    expect(result.connectorMode).toBe("browser-sharepoint");
+    expect(result.verificationEvidence).toHaveLength(9);
+    expect(result.verificationEvidence.every((item) => item.status === "verified" && item.sizeMatches && item.sha256Matches)).toBe(true);
+    expect(fetchSpy.mock.calls[0][0]).toBe("https://portal.army.idf/sites/schedule/_api/contextinfo");
+    expect(fetchSpy.mock.calls.some((call) => String(call[0]).endsWith("/_api/web/folders"))).toBe(true);
+    expect(fetchSpy.mock.calls.filter((call) => String(call[0]).includes("/Files/add("))).toHaveLength(9);
+    for (const [, init] of fetchSpy.mock.calls.filter((call) => String(call[0]).endsWith("/_api/web/folders") || String(call[0]).includes("/Files/add("))) {
+      expect(init).toEqual(expect.objectContaining({
+        credentials: "include",
+        headers: expect.objectContaining({ "X-RequestDigest": "digest-schedule" })
+      }));
+    }
+  });
+
+  it("lists backup inventory from the browser with credentials include", async () => {
+    const fetchSpy = vi.fn((url: string) => {
+      if (String(url).includes("/Folders?")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          d: {
+            results: [
+              {
+                Name: "backup-2026",
+                ServerRelativeUrl: "/sites/schedule/siteDB/siteAssets/Backups/backup-2026",
+                ItemCount: 1
+              }
+            ]
+          }
+        }), { status: 200 }));
+      }
+      if (String(url).includes("/Files?")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          d: {
+            results: [
+              {
+                Name: "users_data.txt",
+                ServerRelativeUrl: "/sites/schedule/siteDB/siteAssets/Backups/backup-2026/users_data.txt",
+                Length: "12"
+              }
+            ]
+          }
+        }), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ d: { Name: "Backups" } }), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const inventory = await listBrowserSharePointBackupInventory(makeSite("schedule", "https://portal.army.idf/sites/schedule"), true);
+
+    expect(inventory.summary).toMatchObject({
+      rootExists: true,
+      foldersCount: 1,
+      filesCount: 1,
+      knownSizeBytes: 12,
+      readOk: true
+    });
+    expect(inventory.notes.join(" ")).toContain("Browser SharePoint Connector");
+    for (const [, init] of fetchSpy.mock.calls) {
+      expect(init).toEqual(expect.objectContaining({ credentials: "include" }));
+    }
   });
 });

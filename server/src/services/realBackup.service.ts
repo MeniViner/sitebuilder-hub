@@ -12,6 +12,7 @@ import {
   readSharePointFileEvidence,
   uploadSharePointFile
 } from "./sharepointOperationClient";
+import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
 
 export type ExecuteSharePointBackupInput = {
   siteId: string;
@@ -468,7 +469,16 @@ export async function executeSharePointRestore(input: ExecuteSharePointRestoreIn
   const now = new Date();
   const jobObjectId = Types.ObjectId.isValid(input.jobId) ? new Types.ObjectId(input.jobId) : undefined;
 
-  if (!storedEvidence.length || validationFailures.length > 0) {
+  const hardValidationFailures = validationFailures.filter((item) =>
+    ["backup-stored-evidence-missing-source-path", "backup-stored-evidence-missing-backup-path"].includes(String(item.error))
+  );
+  const restoreEvidenceBypassEnvVar = getDangerousValidationBypassEnvVar("restore-evidence-gates");
+  const restoreEvidenceBypassed =
+    isDangerousValidationBypassEnabled("restore-evidence-gates") &&
+    storedEvidence.length > 0 &&
+    hardValidationFailures.length === 0;
+
+  if (!storedEvidence.length || (validationFailures.length > 0 && !restoreEvidenceBypassed)) {
     const message = !storedEvidence.length
       ? "backup-restore-evidence-missing"
       : "backup-restore-evidence-incomplete";
@@ -495,6 +505,19 @@ export async function executeSharePointRestore(input: ExecuteSharePointRestoreIn
     (error as Error & { restoreEvidence?: RestoreEvidence[] }).restoreEvidence = restoreEvidence;
     throw error;
   }
+  if (validationFailures.length > 0 && restoreEvidenceBypassed) {
+    logger.warn("backups", "SharePoint restore evidence validation bypassed by dangerous env", {
+      backupId: backup._id.toString(),
+      backupExternalId: backup.backupId,
+      siteId: site._id.toString(),
+      envVar: restoreEvidenceBypassEnvVar,
+      validationFailures: validationFailures.map((item) => ({
+        sourcePath: item.row.sourcePath,
+        backupPath: item.row.backupPath,
+        error: item.error
+      }))
+    });
+  }
 
   backup.restoreStatus = "running";
   backup.lastRestoreJobId = jobObjectId as any;
@@ -512,8 +535,10 @@ export async function executeSharePointRestore(input: ExecuteSharePointRestoreIn
         const backupFile = await readSharePointFileBytes(resolvedPaths, row.backupPath);
         const expectedSha256 = row.expectedBackupSha256.toLowerCase();
         const backupFileMatches =
-          backupFile.sizeBytes === row.expectedBackupSizeBytes &&
-          backupFile.sha256.toLowerCase() === expectedSha256;
+          restoreEvidenceBypassed && (!row.expectedBackupSizeBytes || !expectedSha256)
+            ? true
+            : backupFile.sizeBytes === row.expectedBackupSizeBytes &&
+              backupFile.sha256.toLowerCase() === expectedSha256;
 
         if (!backupFileMatches) {
           throw new Error(`restore-backup-file-verification-failed:${row.backupPath}`);

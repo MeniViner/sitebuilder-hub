@@ -106,7 +106,8 @@ describe("maintenance scheduler", () => {
     });
     expect(mocks.enqueueSiteBackup).toHaveBeenCalledWith({
       siteId: "507f1f77bcf86cd799439011",
-      createdBy: "scheduler"
+      createdBy: "scheduler",
+      executionContext: "scheduled"
     });
     expect(mocks.createJob).toHaveBeenCalledWith(
       expect.objectContaining({

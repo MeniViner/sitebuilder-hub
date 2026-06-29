@@ -2,6 +2,10 @@ import crypto from "crypto";
 import { env } from "../config/env";
 import { SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
 import { logger } from "../utils/logger";
+import {
+  getDangerousValidationBypassEnvVar,
+  isDangerousValidationBypassEnabled
+} from "./dangerousBackupBypass.service";
 
 export type SharePointOperationCapabilities = {
   readAvailable: boolean;
@@ -11,6 +15,8 @@ export type SharePointOperationCapabilities = {
     authCookieConfigured: boolean;
     bearerTokenConfigured: boolean;
     unauthenticatedWriteBypassEnabled: boolean;
+    dangerousWriteGateBypassEnabled?: boolean;
+    dangerousWriteGateBypassEnvVar?: string;
   };
   writeEnabled: boolean;
   hasAuthMaterial: boolean;
@@ -361,7 +367,9 @@ const getSharePointCollectionPayload = async (
 export const getSharePointOperationCapabilities = (): SharePointOperationCapabilities => {
   const hasAuthMaterial = Boolean(env.SHAREPOINT_AUTH_COOKIE || env.SHAREPOINT_BEARER_TOKEN);
   const unauthenticatedWriteAllowed = env.SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE;
-  const writeAvailable = env.SHAREPOINT_WRITE_ENABLED && hasAuthMaterial;
+  const dangerousWriteGateBypassEnvVar = getDangerousValidationBypassEnvVar("sharepoint-write-gates");
+  const dangerousWriteGateBypass = Boolean(dangerousWriteGateBypassEnvVar);
+  const writeAvailable = dangerousWriteGateBypass || (env.SHAREPOINT_WRITE_ENABLED && hasAuthMaterial);
   const authModes = [
     env.SHAREPOINT_BEARER_TOKEN ? "bearer" as const : undefined,
     env.SHAREPOINT_AUTH_COOKIE ? "cookie" as const : undefined
@@ -371,7 +379,9 @@ export const getSharePointOperationCapabilities = (): SharePointOperationCapabil
     : env.SHAREPOINT_AUTH_COOKIE
       ? "cookie"
       : "none";
-  const reason = writeAvailable
+  const reason = dangerousWriteGateBypass
+    ? `${dangerousWriteGateBypassEnvVar}=true bypasses Hub SharePoint write/digest preflight gates. Real SharePoint REST requests can still fail.`
+    : writeAvailable
     ? undefined
     : env.SHAREPOINT_WRITE_ENABLED
       ? unauthenticatedWriteAllowed && !hasAuthMaterial
@@ -386,9 +396,11 @@ export const getSharePointOperationCapabilities = (): SharePointOperationCapabil
       writeEnabled: env.SHAREPOINT_WRITE_ENABLED,
       authCookieConfigured: Boolean(env.SHAREPOINT_AUTH_COOKIE),
       bearerTokenConfigured: Boolean(env.SHAREPOINT_BEARER_TOKEN),
-      unauthenticatedWriteBypassEnabled: unauthenticatedWriteAllowed
+      unauthenticatedWriteBypassEnabled: unauthenticatedWriteAllowed,
+      dangerousWriteGateBypassEnabled: dangerousWriteGateBypass,
+      dangerousWriteGateBypassEnvVar: dangerousWriteGateBypassEnvVar || undefined
     },
-    writeEnabled: env.SHAREPOINT_WRITE_ENABLED,
+    writeEnabled: dangerousWriteGateBypass || env.SHAREPOINT_WRITE_ENABLED,
     hasAuthMaterial,
     unauthenticatedWriteAllowed,
     writeAvailable,
@@ -400,7 +412,7 @@ export const getSharePointOperationCapabilities = (): SharePointOperationCapabil
       requiredForWrites: true,
       endpointSuffix: "/_api/contextinfo",
       canRequest: writeAvailable,
-      reason: writeAvailable ? undefined : reason
+      reason: dangerousWriteGateBypass ? reason : writeAvailable ? undefined : reason
     },
     siteCreation: {
       modernSiteCollectionEndpoint: "/_api/SPSiteManager/create",
@@ -421,6 +433,9 @@ export const assertSharePointWriteAvailable = () => {
   if (!capabilities.writeAvailable) {
     logger.warn("sharepoint", "SharePoint write capability blocked", capabilities);
     throw new SharePointWriteCapabilityError(capabilities.reason || "SharePoint write capability is not available.");
+  }
+  if (isDangerousValidationBypassEnabled("sharepoint-write-gates")) {
+    logger.warn("sharepoint", "SharePoint write preflight bypassed by dangerous env", capabilities);
   }
   logger.debug("sharepoint", "SharePoint write capability available", capabilities);
 };

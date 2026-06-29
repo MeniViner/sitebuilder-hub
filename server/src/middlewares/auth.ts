@@ -4,6 +4,7 @@ import { fail } from "../utils/http";
 import type { UserRole } from "../types/express";
 import { findAuthorizedPersonalNumber, normalizePersonalNumber } from "../services/personal-auth.service";
 import { logger } from "../utils/logger";
+import { withOwnerMode } from "../services/authOwnerMode.service";
 
 const rolePriority: Record<UserRole, number> = {
   viewer: 1,
@@ -65,7 +66,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
         hasLoginName: Boolean(sharePointIdentity.loginName),
         hasEmail: Boolean(sharePointIdentity.email)
       });
-      req.user = sharePointIdentity;
+      req.user = withOwnerMode(sharePointIdentity) || undefined;
       return next();
     }
 
@@ -73,13 +74,13 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
       requestId: req.requestId,
       path
     });
-    req.user = {
+    req.user = withOwnerMode({
       id: "dev-local",
       name: "Local Developer",
       role: "admin",
       source: "dev",
       identityMode: "local-fallback"
-    };
+    }) || undefined;
     return next();
   }
 
@@ -101,7 +102,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
       return fail(res, "UNAUTHORIZED", "personal number לא מורשה", undefined, 401);
     }
 
-    req.user = {
+    req.user = withOwnerMode({
       id: `pn:${match.personalNumber}`,
       name: match.isBootstrapAdmin ? `Bootstrap Admin ${match.personalNumber}` : `Admin ${match.personalNumber}`,
       role: match.role,
@@ -109,7 +110,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
       source: match.source,
       identityMode: match.source === "owner" ? "explicit-owner" : undefined,
       isBootstrapAdmin: match.isBootstrapAdmin
-    };
+    }) || undefined;
     logger.info("auth", "Personal number auth accepted", {
       requestId: req.requestId,
       path,
@@ -131,18 +132,19 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     return fail(res, "UNAUTHORIZED", "נדרש personal number מורשה או API key תקין", undefined, 401);
   }
 
-  req.user = {
+  const apiUser = withOwnerMode({
     id: req.header("x-user-id") || "api-user",
     name: req.header("x-user-name") || "API User",
     role: normalizeRole(req.header("x-user-role") || "operator"),
     source: "api-key",
     identityMode: "api-key"
-  };
+  });
+  req.user = apiUser || undefined;
   logger.info("auth", "API key auth accepted", {
     requestId: req.requestId,
     path,
-    userId: req.user.id,
-    role: req.user.role
+    userId: apiUser?.id,
+    role: apiUser?.role
   });
 
   return next();

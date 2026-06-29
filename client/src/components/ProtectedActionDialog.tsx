@@ -12,6 +12,7 @@ export function ProtectedActionDialog({
   initialNote = "",
   risks = [],
   confirmLabel = "אישור פעולה",
+  confirmDisabledReason = "",
   busy = false,
   onClose,
   onConfirm
@@ -26,6 +27,7 @@ export function ProtectedActionDialog({
   initialNote?: string;
   risks?: string[];
   confirmLabel?: string;
+  confirmDisabledReason?: string;
   busy?: boolean;
   onClose: () => void;
   onConfirm: (note: string) => void | Promise<void>;
@@ -41,7 +43,11 @@ export function ProtectedActionDialog({
 
   if (!open) return null;
 
-  const canConfirm = note.trim().length >= 3 && confirmation.trim().toLocaleLowerCase() === confirmWord.toLocaleLowerCase() && !busy;
+  const canConfirm =
+    !confirmDisabledReason &&
+    note.trim().length >= 3 &&
+    confirmation.trim().toLocaleLowerCase() === confirmWord.toLocaleLowerCase() &&
+    !busy;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
@@ -89,7 +95,12 @@ export function ProtectedActionDialog({
         </div>
 
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t divider px-5 py-4" style={{ background: "var(--surface)" }}>
-          <button className="btn btn-secondary" type="button" onClick={onClose} disabled={busy}>ביטול</button>
+          <div className="min-w-0">
+            <button className="btn btn-secondary" type="button" onClick={onClose} disabled={busy}>ביטול</button>
+            {confirmDisabledReason ? (
+              <p className="mt-2 max-w-md text-xs" style={{ color: "var(--danger)" }}>{confirmDisabledReason}</p>
+            ) : null}
+          </div>
           <button className="btn btn-danger" type="button" onClick={() => onConfirm(note.trim())} disabled={!canConfirm}>
             {busy ? "שולח..." : confirmLabel}
           </button>

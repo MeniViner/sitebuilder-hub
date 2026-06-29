@@ -21,7 +21,7 @@ type SchedulerTickResult = {
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 
-const ACTIVE_JOB_STATUSES = ["awaiting-approval", "queued", "preflight", "running", "verifying", "retrying"];
+const ACTIVE_JOB_STATUSES = ["awaiting-approval", "queued", "browser-required", "browser-in-progress", "preflight", "running", "verifying", "retrying"];
 const SCHEDULER_ACTOR = "scheduler";
 
 const clampIntervalMinutes = (value: unknown, fallback: number) => {
@@ -107,7 +107,8 @@ async function queueScheduledBackup(site: any, now: Date, result: SchedulerTickR
   try {
     const queued = await enqueueSiteBackup({
       siteId: siteId.toString(),
-      createdBy: SCHEDULER_ACTOR
+      createdBy: SCHEDULER_ACTOR,
+      executionContext: "scheduled"
     });
     result.queuedBackups += 1;
     await setScheduleState(siteId, "backup", {

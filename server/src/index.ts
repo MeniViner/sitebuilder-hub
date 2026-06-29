@@ -42,6 +42,16 @@ const bootstrap = async () => {
       hasBearerToken: Boolean(env.SHAREPOINT_BEARER_TOKEN),
       requestTimeoutMs: env.SHAREPOINT_REQUEST_TIMEOUT_MS
     },
+    dangerousOverrides: {
+      allValidationGates: env.HUB_DANGEROUS_BYPASS_ALL_VALIDATION_GATES,
+      approvalGates: env.HUB_DANGEROUS_BYPASS_APPROVAL_GATES,
+      sharePointWriteGates: env.HUB_DANGEROUS_BYPASS_SHAREPOINT_WRITE_GATES,
+      releaseArtifactValidation: env.HUB_DANGEROUS_BYPASS_RELEASE_ARTIFACT_VALIDATION,
+      deployPlanBlockers: env.HUB_DANGEROUS_BYPASS_DEPLOY_PLAN_BLOCKERS,
+      restoreEvidenceGates: env.HUB_DANGEROUS_BYPASS_RESTORE_EVIDENCE_GATES,
+      browserEvidenceGates: env.HUB_DANGEROUS_BYPASS_BROWSER_EVIDENCE_GATES,
+      adminRepairGates: env.HUB_DANGEROUS_BYPASS_ADMIN_REPAIR_GATES
+    },
     logging: {
       all: env.LOG_ALL,
       format: env.LOG_FORMAT,

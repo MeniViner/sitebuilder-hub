@@ -181,7 +181,8 @@ export const planBatchDeploy = async (req: Request, res: Response) => {
       targetMode: payload.targetMode,
       targetSiteIds: payload.targetSiteIds,
       deployMode: payload.deployMode,
-      connectorMode: payload.connectorMode
+      connectorMode: payload.connectorMode,
+      allowDeployWithoutBackup: payload.allowDeployWithoutBackup
     });
 
     await writeAuditLog({
@@ -197,7 +198,8 @@ export const planBatchDeploy = async (req: Request, res: Response) => {
         blockedSites: plan.summary.blockedSites,
         alreadyUpToDateSites: plan.summary.alreadyUpToDateSites,
         deployMode: plan.deployMode,
-        connectorMode: plan.connectorMode
+        connectorMode: plan.connectorMode,
+        allowDeployWithoutBackup: plan.allowDeployWithoutBackup
       }
     });
 
@@ -215,6 +217,8 @@ export const deployBatch = async (req: Request, res: Response) => {
       targetMode: payload.targetMode,
       targetSiteIds: payload.targetSiteIds,
       deployMode: payload.deployMode,
+      connectorMode: payload.connectorMode,
+      allowDeployWithoutBackup: payload.allowDeployWithoutBackup,
       confirmNoPartial: payload.confirmNoPartial,
       createdBy: req.user?.name || "system"
     });
@@ -230,6 +234,8 @@ export const deployBatch = async (req: Request, res: Response) => {
         targetSiteIds: result.plan.targetSiteIds,
         skippedUpToDate: result.skippedUpToDate,
         deployMode: result.plan.deployMode,
+        connectorMode: result.plan.connectorMode,
+        allowDeployWithoutBackup: result.plan.allowDeployWithoutBackup,
         requiresApproval: result.requiresApproval,
         approvalStatus: result.approvalStatus
       }
@@ -248,6 +254,8 @@ export const deploySiteVersion = async (req: Request, res: Response) => {
       siteId: req.params.id,
       releaseId: payload.releaseId,
       deployMode: payload.deployMode,
+      connectorMode: payload.connectorMode,
+      allowDeployWithoutBackup: payload.allowDeployWithoutBackup,
       createdBy: req.user?.name || "system"
     });
 

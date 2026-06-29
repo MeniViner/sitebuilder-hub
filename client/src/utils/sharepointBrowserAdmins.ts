@@ -20,6 +20,7 @@ const ODATA_ACCEPT = "application/json;odata=verbose";
 
 const trimSlash = (value: string) => value.replace(/\/+$/g, "");
 const encodeSpaces = (value: string) => value.replace(/ /g, "%20");
+const sourceStatusName = (ok: boolean): "success" | "failed" => ok ? "success" : "failed";
 
 const extractResults = (payload: any) => {
   if (Array.isArray(payload?.d?.results)) return payload.d.results;
@@ -104,10 +105,20 @@ const fetchJson = async (url: string) => {
   }
 
   if (!response.ok) {
-    throw new Error(`SharePoint request failed: ${response.status} ${response.statusText} (${encodedUrl})`);
+    throw Object.assign(new Error(`SharePoint request failed: ${response.status} ${response.statusText} (${encodedUrl})`), {
+      httpStatus: response.status,
+      httpStatusText: response.statusText,
+      sourceUrl: encodedUrl,
+      errorCode: `HTTP_${response.status}`
+    });
   }
 
-  return response.json();
+  return {
+    payload: await response.json(),
+    sourceUrl: encodedUrl,
+    httpStatus: response.status,
+    httpStatusText: response.statusText
+  };
 };
 
 const fetchText = async (url: string) => {
@@ -124,10 +135,20 @@ const fetchText = async (url: string) => {
   }
 
   if (!response.ok) {
-    throw new Error(`SharePoint text read failed: ${response.status} ${response.statusText} (${encodedUrl})`);
+    throw Object.assign(new Error(`SharePoint text read failed: ${response.status} ${response.statusText} (${encodedUrl})`), {
+      httpStatus: response.status,
+      httpStatusText: response.statusText,
+      sourceUrl: encodedUrl,
+      errorCode: `HTTP_${response.status}`
+    });
   }
 
-  return response.text();
+  return {
+    text: await response.text(),
+    sourceUrl: encodedUrl,
+    httpStatus: response.status,
+    httpStatusText: response.statusText
+  };
 };
 
 const resolvePathsForSite = (site: Site): ResolvedPaths => {
@@ -161,47 +182,118 @@ const resolvePathsForSite = (site: Site): ResolvedPaths => {
 const getWebUrl = (paths: ResolvedPaths) => trimSlash(paths.sharePointSiteUrl || `https://${paths.host}${paths.siteRoot}`);
 const absoluteFileUrl = (paths: ResolvedPaths, serverRelativePath: string) => `https://${paths.host}${serverRelativePath}`;
 
+export const buildBrowserTxtAdminsUrl = (site: Site) => {
+  const paths = resolvePathsForSite(site);
+  return absoluteFileUrl(paths, paths.txtFiles.users);
+};
+
+export const buildBrowserSiteCollectionAdminsUrl = (siteOrWebUrl: Site | string) => {
+  const webUrl = typeof siteOrWebUrl === "string" ? trimSlash(siteOrWebUrl) : getWebUrl(resolvePathsForSite(siteOrWebUrl));
+  return `${webUrl}/_api/web/siteusers?$select=Id,Title,Email,LoginName,IsSiteAdmin,PrincipalType&$filter=IsSiteAdmin eq true`;
+};
+
+export const buildBrowserAssociatedOwnerGroupUrl = (siteOrWebUrl: Site | string) => {
+  const webUrl = typeof siteOrWebUrl === "string" ? trimSlash(siteOrWebUrl) : getWebUrl(resolvePathsForSite(siteOrWebUrl));
+  return `${webUrl}/_api/web/associatedownergroup`;
+};
+
+export const buildBrowserOwnersGroupUsersUrl = (siteOrWebUrl: Site | string, groupId: number) => {
+  const webUrl = typeof siteOrWebUrl === "string" ? trimSlash(siteOrWebUrl) : getWebUrl(resolvePathsForSite(siteOrWebUrl));
+  return `${webUrl}/_api/web/sitegroups(${groupId})/users?$select=Id,Title,Email,LoginName,IsSiteAdmin,PrincipalType`;
+};
+
 const readTxtAdmins = async (paths: ResolvedPaths) => {
-  const text = await fetchText(absoluteFileUrl(paths, paths.txtFiles.users));
-  const parsed = JSON.parse(text || "[]");
+  const result = await fetchText(absoluteFileUrl(paths, paths.txtFiles.users));
+  const parsed = JSON.parse(result.text || "[]");
   const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.users) ? parsed.users : [];
-  return dedupeAdmins(rows);
+  return {
+    rows: dedupeAdmins(rows),
+    rawCount: rows.length,
+    sourceUrl: result.sourceUrl,
+    httpStatus: result.httpStatus,
+    httpStatusText: result.httpStatusText
+  };
 };
 
 const readSiteCollectionAdmins = async (webUrl: string) => {
-  const payload = await fetchJson(
-    `${webUrl}/_api/web/siteusers?$select=Id,Title,Email,LoginName,IsSiteAdmin,PrincipalType&$filter=IsSiteAdmin eq true`
-  );
-  return dedupeAdmins(extractResults(payload));
+  const result = await fetchJson(buildBrowserSiteCollectionAdminsUrl(webUrl));
+  const rows = extractResults(result.payload);
+  return {
+    rows: dedupeAdmins(rows),
+    rawCount: rows.length,
+    sourceUrl: result.sourceUrl,
+    httpStatus: result.httpStatus,
+    httpStatusText: result.httpStatusText
+  };
 };
 
 const readOwnersGroupAdmins = async (webUrl: string) => {
-  const groupPayload = await fetchJson(`${webUrl}/_api/web/associatedownergroup`);
-  const group = groupPayload?.d || groupPayload;
+  const groupResult = await fetchJson(buildBrowserAssociatedOwnerGroupUrl(webUrl));
+  const group = groupResult.payload?.d || groupResult.payload;
   const groupId = Number(group?.Id || group?.id);
   if (!groupId) throw new Error("owners-group-id-missing");
 
-  const usersPayload = await fetchJson(
-    `${webUrl}/_api/web/sitegroups(${groupId})/users?$select=Id,Title,Email,LoginName,IsSiteAdmin,PrincipalType`
-  );
-  return dedupeAdmins(extractResults(usersPayload));
+  const usersResult = await fetchJson(buildBrowserOwnersGroupUsersUrl(webUrl, groupId));
+  const rows = extractResults(usersResult.payload);
+  return {
+    rows: dedupeAdmins(rows),
+    rawCount: rows.length,
+    sourceUrl: usersResult.sourceUrl,
+    httpStatus: usersResult.httpStatus,
+    httpStatusText: usersResult.httpStatusText,
+    warnings: [`owners-group-url:${groupResult.sourceUrl}`]
+  };
 };
 
 const readSource = async (
   source: SourceName,
-  reader: () => Promise<AdminIdentity[]>
+  reader: () => Promise<{
+    rows: AdminIdentity[];
+    rawCount: number;
+    sourceUrl: string;
+    httpStatus: number;
+    httpStatusText: string;
+    warnings?: string[];
+  }>
 ): Promise<{ rows: AdminIdentity[]; status: SourceStatus }> => {
   try {
-    const rows = await reader();
-    return { rows, status: { source, ok: true, count: rows.length } };
+    const result = await reader();
+    return {
+      rows: result.rows,
+      status: {
+        source,
+        status: sourceStatusName(true),
+        ok: true,
+        count: result.rows.length,
+        rawCount: result.rawCount,
+        normalizedCount: result.rows.length,
+        httpStatus: result.httpStatus,
+        httpStatusText: result.httpStatusText,
+        sourceUrl: result.sourceUrl,
+        readAt: new Date().toISOString(),
+        warnings: result.warnings || []
+      }
+    };
   } catch (error) {
+    const details = error as Error & {
+      httpStatus?: number;
+      httpStatusText?: string;
+      sourceUrl?: string;
+      errorCode?: string;
+    };
     return {
       rows: [],
       status: {
         source,
+        status: sourceStatusName(false),
         ok: false,
-        count: 0,
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorCode: details.errorCode || "BROWSER_SHAREPOINT_READ_FAILED",
+        httpStatus: details.httpStatus,
+        httpStatusText: details.httpStatusText,
+        sourceUrl: details.sourceUrl,
+        readAt: new Date().toISOString()
       }
     };
   }
@@ -222,18 +314,43 @@ export async function readSharePointAdminsFromBrowser(site: Site): Promise<LiveA
   const siteCollectionAdmins = siteCollection.rows;
   const ownersGroupAdmins = ownersGroup.rows;
   const adminDifferences = buildAdminDiff(txtAdmins, siteCollectionAdmins, ownersGroupAdmins);
-  const adminsCount = new Set([...txtAdmins, ...siteCollectionAdmins, ...ownersGroupAdmins].map(normalizeAdminKey)).size;
+  const uniqueAdminKeys = new Set([...txtAdmins, ...siteCollectionAdmins, ...ownersGroupAdmins].map(normalizeAdminKey));
+  const uniqueAdmins = dedupeAdmins([...txtAdmins, ...siteCollectionAdmins, ...ownersGroupAdmins]);
+  const adminsCount = uniqueAdminKeys.size;
+  const rawCounts = {
+    txt: txt.status.rawCount ?? txtAdmins.length,
+    siteCollection: siteCollection.status.rawCount ?? siteCollectionAdmins.length,
+    ownersGroup: ownersGroup.status.rawCount ?? ownersGroupAdmins.length
+  };
+  const normalizedCounts = {
+    txt: txtAdmins.length,
+    siteCollection: siteCollectionAdmins.length,
+    ownersGroup: ownersGroupAdmins.length
+  };
 
   return {
     siteId: site._id,
     siteCode: site.siteCode,
     capturedAt,
+    readAt: capturedAt,
+    generatedAt: capturedAt,
+    connectorMode: "browser-sharepoint",
+    targetSiteUrl: webUrl,
     txtAdmins,
     siteCollectionAdmins,
     ownersGroupAdmins,
+    uniqueAdmins,
     adminDifferences,
     adminsCount,
-    sourceStatus: [txt.status, siteCollection.status, ownersGroup.status]
+    sourceStatus: [txt.status, siteCollection.status, ownersGroup.status],
+    rawCounts,
+    normalizedCounts,
+    warnings: [txt.status, siteCollection.status, ownersGroup.status].flatMap((source) => source.warnings || []),
+    evidence: {
+      connectorMode: "browser-sharepoint",
+      targetSiteUrl: webUrl,
+      sourceStatus: [txt.status, siteCollection.status, ownersGroup.status]
+    }
   };
 }
 

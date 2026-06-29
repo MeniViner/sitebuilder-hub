@@ -26,6 +26,13 @@ import { ProtectedActionDialog } from "../components/ProtectedActionDialog";
 import { SectionCard } from "../components/SectionCard";
 import { HelpLabel } from "../components/help/HelpLabel";
 import { formatBytes, formatDateTime, formatNumber } from "../utils/format";
+import {
+  buildBrowserSharePointBackupPlan,
+  listBrowserSharePointBackupInventory,
+  verifyBackupToSharePointBrowser,
+  type BrowserSharePointBackupProgressEvent
+} from "../utils/sharepointBrowserConnector";
+import { runBrowserSharePointBackupOperation } from "../utils/sharepointBrowserOperationRunner";
 
 const restoreStatusLabel = (status?: Backup["restoreStatus"]) => {
   const labels: Record<string, string> = {
@@ -84,6 +91,103 @@ const compactId = (value?: string) => {
   return value.length > 14 ? `${value.slice(0, 8)}...${value.slice(-6)}` : value;
 };
 
+const backupVerificationStatus = (backup: Backup) => backup.verification?.status || "unverified";
+
+const restoreFileCandidates = (backup: Backup) => {
+  const evidenceRows = backup.verification?.evidence || [];
+  if (evidenceRows.length) {
+    return evidenceRows
+      .map((row) => ({
+        backupPath: row.targetPath,
+        liveTargetPath: row.sourcePath,
+        status: row.status
+      }))
+      .filter((row) => row.backupPath || row.liveTargetPath);
+  }
+
+  return (backup.sourcePaths || [])
+    .map((row) => ({
+      backupPath: row.targetPath,
+      liveTargetPath: row.path,
+      status: row.status
+    }))
+    .filter((row) => row.backupPath || row.liveTargetPath);
+};
+
+const restoreReadinessTone = (backup: Backup, writeAvailable: boolean) => {
+  void backup;
+  void writeAvailable;
+  return "danger";
+};
+
+const legacyRestoreReadinessTone = (backup: Backup, writeAvailable: boolean) => {
+  if (!writeAvailable || restoreFileCandidates(backup).length === 0 || backup.status === "failed") return "danger";
+  if (backupVerificationStatus(backup) !== "verified" || backup.status !== "verified") return "warning";
+  return "success";
+};
+
+const restoreReadinessLabel = (backup: Backup, writeAvailable: boolean) => {
+  void backup;
+  void writeAvailable;
+  return "שחזור דורש הרשאת שרת ל־SharePoint או מימוש שחזור דרך הדפדפן.";
+};
+
+const legacyRestoreReadinessLabel = (backup: Backup, writeAvailable: boolean) => {
+  const files = restoreFileCandidates(backup);
+  if (!writeAvailable) return "חסום: אין כתיבה ל־SharePoint";
+  if (!files.length) return "חסום: חסר evidence לשחזור";
+  if (backup.status === "failed") return "חסום: backup נכשל";
+  if (backupVerificationStatus(backup) !== "verified") return "דורש זהירות: backup לא אומת";
+  return "מוכן ל־review מוגן";
+};
+
+const restoreReadinessBadgeClass = (backup: Backup, writeAvailable: boolean) => {
+  const tone = restoreReadinessTone(backup, writeAvailable);
+  if (tone === "success") return "badge-success";
+  if (tone === "warning") return "badge-warning";
+  return "badge-danger";
+};
+
+const buildRestoreReview = (backup: Backup, sites: Site[], writeAvailable: boolean) => {
+  const files = restoreFileCandidates(backup);
+  const site = sites.find((item) => item._id === backup.siteId);
+  const verificationStatus = backupVerificationStatus(backup);
+  const blockers = [
+    "שחזור דורש הרשאת שרת ל־SharePoint או מימוש שחזור דרך הדפדפן.",
+    !writeAvailable ? "SharePoint write capability is not configured, so restore execution cannot be queued." : "",
+    !files.length ? "Stored backup evidence/source paths are missing, so the system cannot derive restore source and target paths." : "",
+    backup.status === "failed" ? "The selected backup record is failed. Verify or choose a healthy backup before restoring." : ""
+  ].filter(Boolean);
+  const warnings = [
+    verificationStatus !== "verified" ? `Backup read-back verification is ${verificationStatus}. Run verification before restoring if possible.` : "",
+    backup.status !== "verified" && backup.status !== "succeeded" ? `Backup record status is ${backup.status || "unknown"}.` : "",
+    backup.restoreStatus === "failed" ? "A previous restore attempt failed. Review restore evidence before retrying." : "",
+    backup.restoreStatus === "running" ? "A restore for this backup is already marked as running." : ""
+  ].filter(Boolean);
+  const backupSamples = files.slice(0, 3).map((file) => file.backupPath).filter(Boolean);
+  const liveSamples = files.slice(0, 3).map((file) => file.liveTargetPath).filter(Boolean);
+
+  return {
+    files,
+    site,
+    blockers,
+    warnings,
+    disabledReason: blockers.join(" "),
+    risks: [
+      `Site: ${site?.displayName || site?.siteCode || backup.siteId}.`,
+      `Backup: ${backup.backupId}; status ${backup.status}; verification ${verificationStatus}.`,
+      `Blast radius: ${formatNumber(files.length || backup.filesCount)} live file paths may be overwritten.`,
+      backup.storagePath ? `Backup storage path: ${backup.storagePath}.` : "",
+      backupSamples.length ? `Backup source sample: ${backupSamples.join(" | ")}.` : "",
+      liveSamples.length ? `Live target sample: ${liveSamples.join(" | ")}.` : "",
+      "Restore overwrites live SharePoint files but does not delete live files absent from the backup.",
+      "A pre-restore verified backup is required by backend safety policy before the restore job is queued.",
+      ...warnings,
+      ...blockers
+    ].filter(Boolean)
+  };
+};
+
 const backupSizeMatches = (item: BackupRestoreEvidence) =>
   compareSize(item.expectedBackupSizeBytes, item.backupSizeBytes);
 
@@ -115,6 +219,7 @@ export function BackupsPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busyAction, setBusyAction] = useState("");
+  const [backupProgress, setBackupProgress] = useState<BrowserSharePointBackupProgressEvent | null>(null);
   const [restoreRequestBackup, setRestoreRequestBackup] = useState<Backup | null>(null);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleInterval, setScheduleInterval] = useState(24 * 60);
@@ -151,6 +256,7 @@ export function BackupsPage() {
 
   const writeAvailable = Boolean(capabilities?.sharePoint.writeAvailable);
   const selectedSite = useMemo(() => sites.find((site) => site._id === selectedSiteId), [selectedSiteId, sites]);
+  const browserSharePointAvailable = Boolean(selectedSite?.sharePointSiteUrl);
   const totalSize = useMemo(() => backups.reduce((sum, backup) => sum + (backup.sizeBytes || 0), 0), [backups]);
   const failedBackups = backups.filter((backup) => backup.status === "failed");
   const verifiedBackups = backups.filter((backup) => backup.verification?.status === "verified" || backup.status === "verified");
@@ -165,6 +271,11 @@ export function BackupsPage() {
   const selectedRestoreEvidence = selectedRestoreBackup?.restoreEvidence || [];
   const selectedRestoreFailedCount = selectedRestoreEvidence.filter((item) => item.status === "failed").length;
   const selectedRestoreVerifiedCount = selectedRestoreEvidence.filter((item) => item.status === "verified").length;
+  const backupsWithRestoreEvidence = useMemo(() => backups.filter((backup) => restoreFileCandidates(backup).length > 0), [backups]);
+  const restoreReviewReadyBackups = useMemo(
+    () => backups.filter((backup) => !buildRestoreReview(backup, sites, writeAvailable).disabledReason),
+    [backups, sites, writeAvailable]
+  );
 
   const runAction = async (key: string, action: () => Promise<void>) => {
     setBusyAction(key);
@@ -177,6 +288,70 @@ export function BackupsPage() {
     } finally {
       setBusyAction("");
     }
+  };
+
+  const buildBrowserBackupPlanForSite = async (site: Site) => {
+    const plan = site.storageBackend === "mongo"
+      ? (await sitesApi.siteBackupPlan(site._id)).data
+      : await buildBrowserSharePointBackupPlan(site);
+    setSitePlan(plan);
+    setMessage(site.storageBackend === "mongo"
+      ? plan.summary.readyForBackupExecution
+        ? "תוכנית גיבוי Mongo מוכנה דרך Builder backend"
+        : "תוכנית גיבוי Mongo נוצרה, אך צריך לאמת יכולת backup ב־Builder backend"
+      : plan.summary.readyForBackupExecution
+        ? "תוכנית גיבוי דרך הדפדפן מוכנה: Digest וקבצי מקור תקינים"
+        : "תוכנית גיבוי דרך הדפדפן נוצרה, אך יש חסימות שצריך לבדוק");
+  };
+
+  const runBrowserBackupForSite = async (site: Site) => {
+    if (site.storageBackend === "mongo") {
+      throw new Error("אתר Mongo מגובה דרך Builder backend. בשלב זה ה־HUB מציג ומתעדף את יכולת ה־backup, אך לא מריץ העתקת TXT מ־SharePoint.");
+    }
+    setBackupProgress(null);
+    const queued = await sitesApi.runSiteBackup(site._id);
+    if (!queued.data.browserOperationPlan) {
+      throw new Error(queued.data.message || "גיבוי דרך הדפדפן עדיין לא מוכן לפעולה הזאת.");
+    }
+    const result = await runBrowserSharePointBackupOperation(site, {
+      plan: queued.data.browserOperationPlan,
+      onFileProgress: setBackupProgress
+    });
+    const stored = await sitesApi.recordBrowserBackupEvidence(site._id, {
+      connectorMode: result.connectorMode,
+      jobId: queued.data.job._id,
+      targetSiteUrl: result.targetSiteUrl,
+      backupId: result.backupId,
+      target: result.target,
+      sourcePaths: result.sourcePaths,
+      verificationEvidence: result.verificationEvidence,
+      errors: result.errors,
+      startedAt: result.startedAt,
+      completedAt: result.completedAt,
+      finalStatus: result.finalStatus
+    });
+    setMessage(result.finalStatus === "success"
+      ? `גיבוי ${stored.data.backup.backupId} הועלה ואומת דרך הדפדפן`
+      : `גיבוי ${result.backupId} נכשל דרך הדפדפן; evidence נשמר`);
+    setBackupProgress(null);
+    await load();
+  };
+
+  const verifyBackupThroughBrowser = async (backup: Backup) => {
+    const site = sites.find((item) => item._id === backup.siteId);
+    if (!site) throw new Error("לא נמצא אתר עבור הגיבוי");
+    const result = await verifyBackupToSharePointBrowser(site, backup);
+    const stored = await sitesApi.recordBrowserBackupVerification(backup._id, {
+      connectorMode: "browser-sharepoint",
+      targetSiteUrl: result.targetSiteUrl,
+      verificationEvidence: result.verificationEvidence,
+      checkedAt: result.checkedAt,
+      finalStatus: result.finalStatus
+    });
+    setMessage(stored.data.backup.verification?.status === "verified"
+      ? `Backup ${backup.backupId} אומת מול SharePoint דרך הדפדפן`
+      : `Backup ${backup.backupId} נכשל באימות דרך הדפדפן; evidence נשמר`);
+    await load();
   };
 
   useEffect(() => {
@@ -230,6 +405,7 @@ export function BackupsPage() {
       render: (backup) => (
         <div className="space-y-1">
           <span className={`badge ${restoreStatusBadgeClass(backup.restoreStatus)}`}>{restoreStatusLabel(backup.restoreStatus)}</span>
+          <span className={`badge ${restoreReadinessBadgeClass(backup, writeAvailable)}`}>{restoreReadinessLabel(backup, writeAvailable)}</span>
           {backup.lastRestoreAt ? <div className="num text-xs muted">{formatDateTime(backup.lastRestoreAt)}</div> : null}
           {backup.lastRestoreJobId ? <code className="num block max-w-[150px] truncate text-xs muted" title={backup.lastRestoreJobId}>job {compactId(backup.lastRestoreJobId)}</code> : null}
           {backup.lastRestoreError ? <code className="num block max-w-[180px] truncate text-xs" style={{ color: "var(--danger)" }} title={backup.lastRestoreError}>{backup.lastRestoreError}</code> : null}
@@ -260,21 +436,26 @@ export function BackupsPage() {
       helpKey: "operations",
       render: (backup) => {
         const restoreAttempted = hasRestoreAttempt(backup);
+        const restoreReview = buildRestoreReview(backup, sites, writeAvailable);
         return (
           <div className="flex flex-wrap gap-2">
             <button className={`btn ${selectedRestoreBackup?._id === backup._id ? "btn-primary" : "btn-secondary"} min-h-0 px-2 py-1 text-xs`} disabled={!restoreAttempted} onClick={() => setSelectedRestoreBackupId(backup._id)} type="button"><Eye size={13} />Evidence שחזור</button>
             <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" onClick={() => runAction(`verify-${backup._id}`, async () => {
-              const result = await sitesApi.verifyBackup(backup._id, "Manual read-only SharePoint verification");
-              setMessage(result.data.verification?.status === "verified"
-                ? `Backup ${backup.backupId} אומת מול SharePoint`
-                : `Backup ${backup.backupId} נכשל באימות; evidence נשמר`);
-              await load();
-            })} type="button">אמת מול SharePoint</button>
+              await verifyBackupThroughBrowser(backup);
+            })} type="button">אמת דרך הדפדפן</button>
             <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `restore-plan-${backup._id}`} onClick={() => runAction(`restore-plan-${backup._id}`, async () => {
               await sitesApi.restorePlan(backup._id, "Auto-generated restore planning note");
               setMessage(`נוצר restore plan מטא־דאטה עבור ${backup.backupId}`);
             })} type="button">Restore plan בלבד</button>
-            <button className="btn btn-danger min-h-0 px-2 py-1 text-xs" disabled={!writeAvailable || busyAction === `restore-queue-${backup._id}`} onClick={() => setRestoreRequestBackup(backup)} type="button"><RotateCcw size={13} />Restore job לאישור</button>
+            <button
+              className={`btn ${restoreReview.disabledReason ? "btn-secondary" : "btn-danger"} min-h-0 px-2 py-1 text-xs`}
+              disabled={busyAction === `restore-queue-${backup._id}`}
+              onClick={() => setRestoreRequestBackup(backup)}
+              title={restoreReview.disabledReason || "פתח review מוגן לפני יצירת Restore job"}
+              type="button"
+            >
+              <RotateCcw size={13} />סקור Restore
+            </button>
           </div>
         );
       }
@@ -285,6 +466,7 @@ export function BackupsPage() {
     const evidenceCount = backup.verification?.evidence?.length || 0;
     const failedEvidenceCount = backup.verification?.evidence?.filter((item) => item.status === "failed").length || 0;
     const restoreAttempted = hasRestoreAttempt(backup);
+    const restoreReview = buildRestoreReview(backup, sites, writeAvailable);
     return (
       <div className="space-y-3">
         <div className="flex items-start justify-between gap-3">
@@ -301,16 +483,23 @@ export function BackupsPage() {
         <div className="flex flex-wrap gap-2">
           <span className={`badge ${backup.verification?.status === "failed" ? "badge-danger" : backup.verification?.status === "verified" ? "badge-success" : "badge-neutral"}`}>{backup.verification?.status || "unverified"}</span>
           <span className={`badge ${restoreStatusBadgeClass(backup.restoreStatus)}`}>{restoreStatusLabel(backup.restoreStatus)}</span>
+          <span className={`badge ${restoreReadinessBadgeClass(backup, writeAvailable)}`}>{restoreReadinessLabel(backup, writeAvailable)}</span>
           <span className={`badge ${failedEvidenceCount ? "badge-danger" : evidenceCount ? "badge-success" : "badge-neutral"}`}>{evidenceCount ? `${evidenceCount} evidence` : "no evidence"}</span>
         </div>
         <div className="flex flex-wrap gap-2">
           <button className={`btn ${selectedRestoreBackup?._id === backup._id ? "btn-primary" : "btn-secondary"} min-h-0 px-2 py-1 text-xs`} disabled={!restoreAttempted} onClick={() => setSelectedRestoreBackupId(backup._id)} type="button"><Eye size={13} />Evidence</button>
           <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" onClick={() => runAction(`verify-${backup._id}`, async () => {
-            const result = await sitesApi.verifyBackup(backup._id, "Manual read-only SharePoint verification");
-            setMessage(result.data.verification?.status === "verified" ? `Backup ${backup.backupId} אומת מול SharePoint` : `Backup ${backup.backupId} נכשל באימות; evidence נשמר`);
-            await load();
-          })} type="button">אמת</button>
-          <button className="btn btn-danger min-h-0 px-2 py-1 text-xs" disabled={!writeAvailable || busyAction === `restore-queue-${backup._id}`} onClick={() => setRestoreRequestBackup(backup)} type="button"><RotateCcw size={13} />Restore</button>
+            await verifyBackupThroughBrowser(backup);
+          })} type="button">אמת בדפדפן</button>
+          <button
+            className={`btn ${restoreReview.disabledReason ? "btn-secondary" : "btn-danger"} min-h-0 px-2 py-1 text-xs`}
+            disabled={busyAction === `restore-queue-${backup._id}`}
+            onClick={() => setRestoreRequestBackup(backup)}
+            title={restoreReview.disabledReason || "פתח review מוגן לפני יצירת Restore job"}
+            type="button"
+          >
+            <RotateCcw size={13} />סקור Restore
+          </button>
         </div>
       </div>
     );
@@ -415,13 +604,14 @@ export function BackupsPage() {
     },
     { key: "error", header: "שגיאה", helpKey: "job.failed", render: (item) => item.error ? <code className="num block max-w-[260px] truncate text-xs" style={{ color: "var(--danger)" }} title={item.error}>{item.error}</code> : <span className="muted">-</span> }
   ];
+  const pendingRestoreReview = restoreRequestBackup ? buildRestoreReview(restoreRequestBackup, sites, writeAvailable) : null;
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="גיבויים"
-        subtitle="מרכז גיבוי לאתרי Site Builder. תכנון גיבוי הוא read-only; ביצוע אמיתי דורש כתיבה ל־SharePoint."
-        actions={writeAvailable ? <span className="badge badge-success">SharePoint backup מחובר</span> : <MetadataOnlyBadge mode="notConnected" />}
+        title="גיבוי ושחזור"
+        subtitle="Recovery Center לאתרי Site Builder. גיבוי ואימות Backup רצים דרך הדפדפן עם Digest מאתר היעד; Restore עדיין לא הוסב לדפדפן ולכן חסום כברירת מחדל."
+        actions={<span className="badge badge-success">Browser SharePoint backup</span>}
         helpKey="backup"
       />
 
@@ -454,8 +644,8 @@ export function BackupsPage() {
                   <p className="font-bold" style={{ color: "var(--text-strong)" }}>{failedBackups.length ? "בדוק גיבויים שנכשלו" : backups.length ? "אמת גיבויים קיימים לפי צורך" : "צור תוכנית גיבוי ראשונה"}</p>
                 </div>
                 <div className="soft-panel p-4">
-                  <p className="field-label">כתיבה ל־SharePoint</p>
-                  <p className="font-bold" style={{ color: writeAvailable ? "var(--success)" : "var(--warning)" }}>{writeAvailable ? "זמינה" : "חסומה"}</p>
+                  <p className="field-label">חיבור גיבוי</p>
+              <p className="font-bold" style={{ color: selectedSite?.storageBackend === "mongo" ? "var(--info)" : "var(--success)" }}>{selectedSite?.storageBackend === "mongo" ? "Builder/Mongo backend" : "Browser SharePoint"}</p>
                 </div>
                 <div className="soft-panel p-4">
                   <p className="field-label">שחזור</p>
@@ -466,12 +656,23 @@ export function BackupsPage() {
           ) : null}
 
           {backupTab === "overview" || backupTab === "plan" ? (
-          <SectionCard title="תכנון והרצת גיבוי" subtitle="Backup plan בודק קבצי TXT/JSON בלי ליצור תיקיות או קבצים ב־SharePoint." helpKey="backup">
+          <SectionCard title="תכנון והרצת גיבוי" subtitle="TXT מגובה דרך Browser SharePoint. Mongo מגובה דרך Builder backend ולא דרך העתקת TXT." helpKey="backup">
             <div className="mb-4 flex flex-wrap gap-2">
-              <MetadataOnlyBadge mode="readonly" />
-              {!writeAvailable ? <MetadataOnlyBadge mode="notConnected" /> : null}
+              <span className={`badge ${selectedSite?.storageBackend === "mongo" ? "badge-info" : "badge-success"}`}>{selectedSite?.storageBackend === "mongo" ? "Mongo backend" : "Browser SharePoint"}</span>
+              {selectedSite?.storageBackend === "mongo" ? (
+                <>
+                  <span className="badge badge-neutral">API key status בלבד, ללא הצגת סוד</span>
+                  <span className="badge badge-warning">execution מלא עדיין לא ממומש ב־HUB</span>
+                </>
+              ) : (
+                <>
+                  <span className="badge badge-success">credentials include</span>
+                  <span className="badge badge-success">Digest per target site</span>
+                  {!writeAvailable ? <span className="badge badge-warning">Backend SharePoint 401 לא חוסם גיבוי דפדפן</span> : null}
+                </>
+              )}
             </div>
-            <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
+            <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto_auto] md:items-end">
               <label className="block">
                 <span className="field-label"><HelpLabel helpKey="sites.registry">אתר</HelpLabel></span>
                 <select className="control" value={selectedSiteId} onChange={(e) => { setSelectedSiteId(e.target.value); setSitePlan(null); setBackupInventory(null); }}>
@@ -479,32 +680,73 @@ export function BackupsPage() {
                 </select>
               </label>
               <button className="btn btn-primary" disabled={!selectedSiteId || busyAction === "site-plan"} onClick={() => runAction("site-plan", async () => {
-                const result = await sitesApi.siteBackupPlan(selectedSiteId);
-                setSitePlan(result.data);
-                setMessage("תוכנית גיבוי לאתר נוצרה");
+                if (!selectedSite) throw new Error("בחר אתר לגיבוי");
+                await buildBrowserBackupPlanForSite(selectedSite);
               })} type="button"><ClipboardCheck size={15} />תוכנית לאתר</button>
               <button className="btn btn-secondary" disabled={busyAction === "all-plan"} onClick={() => runAction("all-plan", async () => {
-                const result = await sitesApi.allBackupPlans();
-                setAllPlans(result.data);
-                setMessage("תוכנית גיבוי לכל האתרים נוצרה");
+                const results = await Promise.all(sites.map(async (site) => {
+                  try {
+                    const plan = site.storageBackend === "mongo"
+                      ? (await sitesApi.siteBackupPlan(site._id)).data
+                      : await buildBrowserSharePointBackupPlan(site);
+                    return { ok: true as const, siteId: site._id, siteCode: site.siteCode, plan };
+                  } catch (err) {
+                    return { ok: false as const, siteId: site._id, siteCode: site.siteCode, error: err instanceof Error ? err.message : String(err) };
+                  }
+                }));
+                setAllPlans({
+                  generatedAt: new Date().toISOString(),
+                  count: results.length,
+                  readyCount: results.filter((item) => item.ok && item.plan.summary.readyForBackupExecution).length,
+                  failedCount: results.filter((item) => !item.ok).length,
+                  results
+                });
+                setMessage("תוכנית גיבוי דרך הדפדפן לכל האתרים נוצרה");
               })} type="button">תוכנית לכל האתרים</button>
-              <button className="btn btn-secondary" disabled={!writeAvailable || busyAction === "run-all"} onClick={() => runAction("run-all", async () => {
-                const result = await sitesApi.runAllBackups();
-                setMessage(`נוצרו ${result.data.queued} jobs לגיבוי`);
+              <button className="btn btn-primary" disabled={!browserSharePointAvailable || selectedSite?.storageBackend === "mongo" || busyAction === "run-site"} onClick={() => runAction("run-site", async () => {
+                if (!selectedSite) throw new Error("בחר אתר לגיבוי");
+                await runBrowserBackupForSite(selectedSite);
+              })} type="button"><Play size={15} />הרץ גיבוי לאתר</button>
+              <button className="btn btn-secondary" disabled={!sites.length || busyAction === "run-all"} onClick={() => runAction("run-all", async () => {
+                let succeeded = 0;
+                let failed = 0;
+                for (const site of sites) {
+                  try {
+                    await runBrowserBackupForSite(site);
+                    succeeded += 1;
+                  } catch {
+                    failed += 1;
+                  }
+                }
+                setMessage(`גיבוי דרך הדפדפן הסתיים: ${succeeded} הצליחו, ${failed} נכשלו`);
                 await load();
               })} type="button"><Play size={15} />הרץ גיבוי לכל האתרים</button>
             </div>
+
+            {backupProgress ? (
+              <div className="mt-4 rounded-lg border p-3 text-sm" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
+                <span className="font-bold">מתקדם עכשיו: </span>
+                <span>{backupProgress.status}</span>
+                {backupProgress.sourcePath ? <code className="num ms-2">{backupProgress.sourcePath}</code> : null}
+                {backupProgress.error ? <code className="num ms-2" style={{ color: "var(--danger)" }}>{backupProgress.error}</code> : null}
+              </div>
+            ) : null}
 
             {sitePlan ? (
               <div className="mt-5 space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <KpiCard title="מקורות קיימים" value={`${sitePlan.summary.existingSources}/${sitePlan.summary.totalSources}`} icon={<ClipboardCheck size={18} />} tone={sitePlan.summary.readyForBackup ? "success" : "warning"} helpKey="backup" />
                   <KpiCard title="חסרים" value={sitePlan.summary.missingSources} icon={<ShieldAlert size={18} />} tone={sitePlan.summary.missingSources ? "warning" : "success"} helpKey="deploy.blocker" />
-                  <KpiCard title="Auth blocked" value={sitePlan.summary.authBlockedSources} icon={<ShieldAlert size={18} />} tone={sitePlan.summary.authBlockedSources ? "warning" : "success"} helpKey="health.401" />
+                  <KpiCard title="חסימת דפדפן" value={sitePlan.summary.authBlockedSources} icon={<ShieldAlert size={18} />} tone={sitePlan.summary.authBlockedSources ? "warning" : "success"} helpKey="health.401" />
                   <KpiCard title="גודל ידוע" value={formatBytes(sitePlan.summary.knownSizeBytes)} icon={<DatabaseBackup size={18} />} tone="neutral" helpKey="storage" />
                 </div>
                 <LinkRow label="Backups root" value={sitePlan.target.backupsRoot} />
                 <LinkRow label="Backup folder preview" value={sitePlan.target.backupFolder} />
+                {sitePlan.notes.length ? (
+                  <div className="rounded-lg border p-3 text-sm muted" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
+                    {sitePlan.notes.join(" ")}
+                  </div>
+                ) : null}
                 <DataTable
                   columns={backupPlanSourceColumns}
                   rows={sitePlan.sources}
@@ -537,9 +779,10 @@ export function BackupsPage() {
           ) : null}
 
           {backupTab === "schedule" ? (
-          <SectionCard title="תזמון גיבוי חוזר" subtitle="השרת ייצור backup jobs לפי המרווח שנשמר. במצב בעלים jobs נשלחים לתור ללא אישור נוסף." helpKey="backup.schedule">
+          <SectionCard title="תזמון גיבוי חוזר" subtitle="תזמון רץ ברקע ולכן דורש הרשאת שרת ל־SharePoint; גיבוי ידני רץ דרך הדפדפן." helpKey="backup.schedule">
             <div className="mb-4 flex flex-wrap gap-2">
-              <span className="badge badge-success">Owner direct</span>
+              <span className="badge badge-warning">דורש הרשאת שרת</span>
+              <span className="badge badge-neutral">לא יכול לרוץ ברקע בלי חיבור שרת ל־SharePoint</span>
               {!writeAvailable ? <MetadataOnlyBadge mode="notConnected" /> : null}
             </div>
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
@@ -570,12 +813,13 @@ export function BackupsPage() {
           {backupTab === "inventory" ? (
           <SectionCard
             title="Inventory SharePoint קיים"
-            subtitle="קריאת תיקיות וקבצי backup קיימים ישירות מ־SharePoint, בנפרד מרשומות Mongo וללא כתיבה."
+            subtitle="קריאת תיקיות וקבצי backup קיימים מהדפדפן המחובר ל־SharePoint, בנפרד מרשומות Mongo וללא כתיבה."
             helpKey="backup.inventory"
           >
             <div className="mb-4 flex flex-wrap gap-2">
-              <MetadataOnlyBadge mode="readonly" />
+              <span className="badge badge-success">Browser SharePoint</span>
               <span className="badge badge-neutral">REST GET only</span>
+              {!writeAvailable ? <span className="badge badge-warning">Backend 401 לא רלוונטי לקריאה בדפדפן</span> : null}
             </div>
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
               <label className="block">
@@ -585,14 +829,16 @@ export function BackupsPage() {
                 </select>
               </label>
               <button className="btn btn-secondary" disabled={!selectedSiteId || busyAction === "inventory-folders"} onClick={() => runAction("inventory-folders", async () => {
-                const result = await sitesApi.siteBackupInventory(selectedSiteId, false);
-                setBackupInventory(result.data);
-                setMessage(`נקראו ${result.data.summary.foldersCount} תיקיות גיבוי מ־SharePoint`);
+                if (!selectedSite) throw new Error("בחר אתר לגיבוי");
+                const inventory = await listBrowserSharePointBackupInventory(selectedSite, false);
+                setBackupInventory(inventory);
+                setMessage(`נקראו ${inventory.summary.foldersCount} תיקיות גיבוי מ־SharePoint דרך הדפדפן`);
               })} type="button"><FolderSearch size={15} />תיקיות בלבד</button>
               <button className="btn btn-primary" disabled={!selectedSiteId || busyAction === "inventory-files"} onClick={() => runAction("inventory-files", async () => {
-                const result = await sitesApi.siteBackupInventory(selectedSiteId, true);
-                setBackupInventory(result.data);
-                setMessage(`נקראו ${result.data.summary.foldersCount} תיקיות ו־${result.data.summary.filesCount} קבצים מ־SharePoint`);
+                if (!selectedSite) throw new Error("בחר אתר לגיבוי");
+                const inventory = await listBrowserSharePointBackupInventory(selectedSite, true);
+                setBackupInventory(inventory);
+                setMessage(`נקראו ${inventory.summary.foldersCount} תיקיות ו־${inventory.summary.filesCount} קבצים מ־SharePoint דרך הדפדפן`);
               })} type="button"><FolderSearch size={15} />תיקיות וקבצים</button>
             </div>
 
@@ -667,15 +913,60 @@ export function BackupsPage() {
           {backupTab === "history" || backupTab === "restore" ? (
           <SectionCard
             title="היסטוריית גיבויים"
-            subtitle="Verify קורא את קבצי הגיבוי מ־SharePoint ומשווה sha256/size מול evidence שמור; Restore plan הוא תכנון בלבד, ו־Restore job נשלח לתור במצב בעלים."
+            subtitle="Verify קורא את קבצי הגיבוי מ־SharePoint דרך הדפדפן ומשווה sha256/size מול evidence שמור; Restore plan הוא תכנון בלבד."
             helpKey="history"
             actions={<button className="btn btn-secondary" onClick={load} type="button"><RefreshCcw size={15} />רענן</button>}
           >
             <div className="mb-4 flex flex-wrap gap-2">
-              <MetadataOnlyBadge mode="readonly" />
+              <span className="badge badge-success">Browser Verify</span>
               <MetadataOnlyBadge mode="metadata" />
               {writeAvailable ? <span className="badge badge-success">Restore במצב בעלים</span> : null}
             </div>
+            {backupTab === "restore" ? (
+              <div className="mb-5 space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <KpiCard
+                    title="מוכנים ל־Restore review"
+                    value={formatNumber(restoreReviewReadyBackups.length)}
+                    icon={<RotateCcw size={18} />}
+                    description="ללא חסימת write/evidence בסיסית"
+                    tone={restoreReviewReadyBackups.length ? "success" : "warning"}
+                    helpKey="backup.restore"
+                  />
+                  <KpiCard
+                    title="עם evidence לשחזור"
+                    value={formatNumber(backupsWithRestoreEvidence.length)}
+                    icon={<ClipboardCheck size={18} />}
+                    description="ניתן לגזור source/target paths"
+                    tone={backupsWithRestoreEvidence.length ? "success" : "warning"}
+                    helpKey="deploy.evidence"
+                  />
+                  <KpiCard
+                    title="Verified backups"
+                    value={formatNumber(verifiedBackups.length)}
+                    icon={<ShieldAlert size={18} />}
+                    description="אומת read-back מול SharePoint"
+                    tone={verifiedBackups.length ? "success" : "warning"}
+                    helpKey="backup.verified"
+                  />
+                  <KpiCard
+                    title="יכולת כתיבה"
+                    value={writeAvailable ? "זמינה" : "חסומה"}
+                    icon={<DatabaseBackup size={18} />}
+                    description={writeAvailable ? "ניתן לשלוח Restore job לאישור" : "אפשר לתכנן ולאמת בלבד"}
+                    tone={writeAvailable ? "success" : "danger"}
+                    helpKey="sharepoint.write"
+                  />
+                </div>
+                <div className="rounded-lg border p-4 text-sm" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
+                  <p className="font-bold" style={{ color: "var(--text-strong)" }}>Restore flow</p>
+                  <p className="mt-1 muted">
+                    בחר backup, בדוק verification/evidence, פתח "סקור Restore", ודא blast radius ונתיבי source/target, ואז הקלד את מילת האישור עם נימוק.
+                    השרת עדיין אוכף backup בטיחותי עדכני לפני queue של restore job.
+                  </p>
+                </div>
+              </div>
+            ) : null}
             {backups.length === 0 ? (
               <EmptyState title="אין גיבויים" description="היסטוריית גיבויים תופיע לאחר הרצת backup job." />
             ) : (
@@ -765,18 +1056,17 @@ export function BackupsPage() {
       <ProtectedActionDialog
         open={Boolean(restoreRequestBackup)}
         title="הרצת Restore"
-        description={`יצירת Restore job עבור ${restoreRequestBackup?.backupId || "backup"}. במצב בעלים הפעולה נשלחת לתור ללא אישור נוסף.`}
+        description={restoreRequestBackup
+          ? `Review מוגן לפני יצירת Restore job עבור ${restoreRequestBackup.backupId}. בדקו את ה־blast radius, ה־evidence והחסימות לפני אישור.`
+          : ""}
         confirmWord="שחזר"
         noteLabel="סיבת Restore"
         notePlaceholder="לדוגמה: שחזור לאחר תקלה, אושר מול בעל האתר ונבדק backup עדכני"
         initialNote={restoreRequestBackup ? `Restore backup ${restoreRequestBackup.backupId}` : ""}
         confirmLabel="צור Restore job"
+        confirmDisabledReason={pendingRestoreReview?.disabledReason || ""}
         busy={Boolean(restoreRequestBackup && busyAction === `restore-queue-${restoreRequestBackup._id}`)}
-        risks={[
-          "Restore מחליף קבצים ביעד SharePoint מתוך backup שנבחר.",
-          "מומלץ לוודא evidence/backup עדכני לפני ההרצה.",
-          "אם backup אינו תואם לגרסה הרצויה, האתר עלול לחזור למצב לא צפוי."
-        ]}
+        risks={pendingRestoreReview?.risks || []}
         onClose={() => setRestoreRequestBackup(null)}
         onConfirm={(notes) => {
           const backup = restoreRequestBackup;

@@ -1,19 +1,25 @@
 import { Types } from "mongoose";
 import { SiteBackup } from "../models/SiteBackup";
 import { logger } from "../utils/logger";
+import {
+  DangerousWriteOperation,
+  getDangerousBackupBypassEnvVar
+} from "./dangerousBackupBypass.service";
+
+export type { DangerousWriteOperation } from "./dangerousBackupBypass.service";
+export { getDangerousBackupBypassEnvVar, isDangerousBackupBypassEnabled } from "./dangerousBackupBypass.service";
 
 const RECENT_VERIFIED_BACKUP_MAX_AGE_HOURS = 24;
 const RECENT_VERIFIED_BACKUP_MAX_AGE_MS = RECENT_VERIFIED_BACKUP_MAX_AGE_HOURS * 60 * 60 * 1000;
 
-export type DangerousWriteOperation = "deploy" | "rollback" | "restore";
-
 export type BackupSafetySnapshot = {
-  policy: "recent-verified-backup" | "pre-restore-current-state-backup";
+  policy: "recent-verified-backup" | "pre-restore-current-state-backup" | "dangerous-env-backup-bypass";
   operation: DangerousWriteOperation;
-  required: true;
+  required: boolean;
   satisfied: boolean;
   maxAgeHours: number;
   checkedAt: string;
+  bypassEnvVar?: string;
   backup?: {
     id: string;
     backupId: string;
@@ -32,6 +38,23 @@ export type BackupSafetySnapshot = {
   };
   reason?: string;
 };
+
+export const buildDangerousBackupBypassSnapshot = (
+  operation: DangerousWriteOperation,
+  envVar = getDangerousBackupBypassEnvVar(operation),
+  now = new Date()
+): BackupSafetySnapshot => ({
+  policy: "dangerous-env-backup-bypass",
+  operation,
+  required: false,
+  satisfied: true,
+  maxAgeHours: RECENT_VERIFIED_BACKUP_MAX_AGE_HOURS,
+  checkedAt: now.toISOString(),
+  bypassEnvVar: envVar,
+  reason: envVar
+    ? `Dangerous env override active: ${envVar}`
+    : "Dangerous backup bypass active"
+});
 
 const backupTimestamp = (backup: any) => {
   const checkedAt = backup?.verification?.checkedAt ? new Date(backup.verification.checkedAt) : null;
@@ -103,6 +126,16 @@ export async function assertRecentVerifiedBackupForDangerousWrite(params: {
   now?: Date;
 }) {
   const now = params.now || new Date();
+  const bypassEnvVar = getDangerousBackupBypassEnvVar(params.operation);
+  if (bypassEnvVar) {
+    logger.warn("backups", "Dangerous write backup safety bypassed by env", {
+      siteId: String(params.siteId || ""),
+      operation: params.operation,
+      envVar: bypassEnvVar
+    });
+    return buildDangerousBackupBypassSnapshot(params.operation, bypassEnvVar, now);
+  }
+
   const siteObjectId = params.siteId instanceof Types.ObjectId ? params.siteId : new Types.ObjectId(params.siteId);
 
   logger.info("backups", "Checking recent verified backup safety policy", {
@@ -156,6 +189,17 @@ export async function assertDistinctRecentVerifiedBackupForRestore(params: {
   now?: Date;
 }) {
   const now = params.now || new Date();
+  const bypassEnvVar = getDangerousBackupBypassEnvVar("restore");
+  if (bypassEnvVar) {
+    logger.warn("backups", "Pre-restore backup safety bypassed by env", {
+      siteId: String(params.siteId || ""),
+      restoreBackupObjectId: String(params.restoreBackupObjectId || ""),
+      restoreBackupExternalId: params.restoreBackupExternalId,
+      envVar: bypassEnvVar
+    });
+    return buildDangerousBackupBypassSnapshot("restore", bypassEnvVar, now);
+  }
+
   const siteObjectId = params.siteId instanceof Types.ObjectId ? params.siteId : new Types.ObjectId(params.siteId);
   const excludedBackupObjectId = toObjectIdQueryValue(params.restoreBackupObjectId);
   const restoreBackupExternalId = String(params.restoreBackupExternalId || "").trim();

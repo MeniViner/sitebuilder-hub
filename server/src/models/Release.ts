@@ -10,6 +10,18 @@ const releaseArtifactValidationSchema = new Schema(
     hasManifest: { type: Boolean, default: false },
     manifestSha256: { type: String, default: "" },
     inventorySha256: { type: String, default: "" },
+    storageCompatibility: { type: [String], default: [] },
+    artifactKind: {
+      type: String,
+      enum: ["site-builder-frontend", "legacy-txt-frontend", "mongo-frontend", "unknown"],
+      default: "unknown"
+    },
+    requiresRuntimeConfig: { type: Boolean, default: false },
+    preservesRuntimeConfig: { type: Boolean, default: true },
+    requiredFolders: { type: [String], default: [] },
+    runtimeConfigFiles: { type: [String], default: [] },
+    compatibilitySource: { type: String, enum: ["manifest", "inferred", "unknown"], default: "unknown" },
+    compatibilityWarnings: { type: [String], default: [] },
     readyForDeploy: { type: Boolean, default: false },
     validatedAt: { type: Date },
     validationError: { type: String, default: "" }

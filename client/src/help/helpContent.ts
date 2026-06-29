@@ -108,6 +108,198 @@ export const helpContent = {
     fix: "אם ההקמה נחסמת, בדקו חיבור Backend ל־SharePoint, הרשאות בעלים ונתיבי יעד.",
     anchor: "create-new"
   },
+  "create.displayName": {
+    key: "create.displayName",
+    title: "שם האתר",
+    description: "השם העסקי שמופיע ב־HUB, בדוחות וב־Audit. הבעלים ממלא אותו ידנית כדי שאנשים יזהו את האתר.",
+    fix: "אם השם חסר, אי אפשר ליצור רשומה ברורה. הזינו שם כמו: פורטל משאבי אנוש.",
+    anchor: "create-mongo-site"
+  },
+  "create.siteCode": {
+    key: "create.siteCode",
+    title: "קוד אתר / נתיב SharePoint",
+    description: "שם לוגי קצר שעוזר לבנות נתיבי SharePoint. הוא לא מזהה אתר באופן יחיד; יכולים להיות כמה אתרים עם אותו קוד אם היעדים הפיזיים שונים.",
+    fix: "אם הנתיבים המחושבים שגויים, בדקו את הקוד ואת כתובת SharePoint. דוגמה: alphateam.",
+    anchor: "create-mongo-site"
+  },
+  "create.builderSiteId": {
+    key: "create.builderSiteId",
+    title: "מזהה אתר במערכת Site Builder",
+    description: "המזהה שה־Frontend וה־Backend משתמשים בו מול ה־API, למשל בקריאות /api/sites/:siteId. באתר Mongo הוא חייב להתאים ל־runtime config ולרשומת האתר ב־Mongo.",
+    fix: "אם המזהה שגוי, האתר יעלה אבל יטען נתונים של אתר אחר או לא יטען נתונים בכלל.",
+    anchor: "create-mongo-site"
+  },
+  "create.description": {
+    key: "create.description",
+    title: "תיאור",
+    description: "טקסט קצר שעוזר להבין למה האתר קיים. הוא לא משפיע על פריסה, Mongo או SharePoint.",
+    anchor: "create-mongo-site"
+  },
+  "create.environment": {
+    key: "create.environment",
+    title: "סביבת יעד",
+    description: "הסביבה התפעולית של האתר: dev, test, staging או production. היא עוזרת להבין רמת זהירות, גיבויים ואישורים.",
+    fix: "אם לא בטוחים, השאירו unknown ועדכנו לפני עבודה בסביבת production.",
+    anchor: "create-mongo-site"
+  },
+  "create.unitName": {
+    key: "create.unitName",
+    title: "יחידה",
+    description: "שם היחידה או הצוות שמחזיקים באתר. זה שדה ניהולי לחיפוש ודוחות, לא נתיב טכני.",
+    anchor: "create-mongo-site"
+  },
+  "create.storageBackend": {
+    key: "create.storageBackend",
+    title: "סוג אחסון נתונים",
+    description: "קובע איפה נשמרים נתוני האתר. באתר Mongo, SharePoint מארח את הקבצים אבל הנתונים החיים נשמרים דרך Builder backend.",
+    fix: "אם בוחרים TXT legacy בטעות, האתר לא יקבל runtime config של Mongo ולא יעבוד מול Builder backend.",
+    anchor: "create-mongo-site"
+  },
+  "create.status": {
+    key: "create.status",
+    title: "סטטוס",
+    description: "מצב ניהול הרשומה ב־HUB. ביצירת אתר חדש המערכת מתחילה מטיוטה כדי לא לסמן אתר לא מוכן כפעיל.",
+    anchor: "create-mongo-site"
+  },
+  "create.version": {
+    key: "create.version",
+    title: "גרסה נוכחית",
+    description: "הגרסה שה־HUB יודע שהאתר נמצא עליה. ביצירת אתר חדש זה בדרך כלל ערך התחלתי ולא הוכחה ש־dist נפרס.",
+    anchor: "create-mongo-site"
+  },
+  "create.notes": {
+    key: "create.notes",
+    title: "הערות",
+    description: "הערות ניהוליות פנימיות. הן לא נשלחות ל־SharePoint, Mongo או runtime config.",
+    anchor: "create-mongo-site"
+  },
+  "create.ownerName": {
+    key: "create.ownerName",
+    title: "שם בעל האתר",
+    description: "האדם האחראי עסקית ותפעולית על האתר. השם משמש לתצוגה ולמעקב.",
+    anchor: "create-mongo-site"
+  },
+  "create.ownerPersonalNumber": {
+    key: "create.ownerPersonalNumber",
+    title: "מספר אישי של בעל האתר",
+    description: "מזהה פנימי שמאפשר לאתחל בעלים ומנהלים בצורה עקבית. באתר Mongo הוא נכנס גם ל־seed docs של המשתמשים.",
+    fix: "אם חסר מספר אישי, האתר עלול להיווצר בלי בעלים מזוהה לניהול ראשוני.",
+    anchor: "create-mongo-site"
+  },
+  "create.ownerEmail": {
+    key: "create.ownerEmail",
+    title: "מייל בעל האתר",
+    description: "משמש לבעלות, הרשאות ראשוניות ויצירת אתר SharePoint כאשר הפעולה זמינה. זה אינו API key.",
+    fix: "אם המייל שגוי, בעל האתר לא יקבל הרשאות או לא יזוהה נכון.",
+    anchor: "create-mongo-site"
+  },
+  "create.ownerPhone": {
+    key: "create.ownerPhone",
+    title: "טלפון",
+    description: "פרט קשר ניהולי לבעל האתר. לא משפיע על יצירה, פריסה או runtime config.",
+    anchor: "create-mongo-site"
+  },
+  "create.initialAdmins": {
+    key: "create.initialAdmins",
+    title: "מנהלים ראשוניים",
+    description: "רשימת האנשים שיקבלו ניהול התחלתי. באתר Mongo הרשימה נזרעת ל־users_data.txt בתוך seed docs.",
+    fix: "אם הרשימה ריקה וגם אין בעל אתר תקין, האתר ייווצר בלי מנהל ברור.",
+    anchor: "create-mongo-site"
+  },
+  "create.sharePointSiteUrl": {
+    key: "create.sharePointSiteUrl",
+    title: "כתובת אתר SharePoint",
+    description: "המיקום שבו קבצי האתר יתארחו. זו שכבת האירוח, לא המקום שבו נתוני Mongo נשמרים.",
+    fix: "אם הכתובת שגויה, runtime config, dist והקישור הסופי יחושבו למקום הלא נכון.",
+    anchor: "create-mongo-site"
+  },
+  "create.finalAppUrl": {
+    key: "create.finalAppUrl",
+    title: "קישור סופי לאתר",
+    description: "הכתובת שממנה המשתמשים יפתחו את האתר אחרי הפריסה. בדרך כלל זו כתובת index.html בתוך dist.",
+    fix: "אם הקישור שגוי, המשתמשים יגיעו לדף לא קיים או לגרסה לא נכונה. המערכת צריכה לאמת שהקישור נטען לפני ready.",
+    anchor: "create-mongo-site"
+  },
+  "create.siteDbLibrary": {
+    key: "create.siteDbLibrary",
+    title: "ספריית siteDB",
+    description: "ספריית SharePoint שבה יושבים קבצי האירוח של האתר, למשל dist, assets וקבצי תאימות. באתר Mongo הנתונים החיים לא נשמרים כאן.",
+    fix: "אם הספרייה שגויה, פריסה ובדיקות Health יחפשו קבצים במקום הלא נכון.",
+    anchor: "create-mongo-site"
+  },
+  "create.usersDbLibrary": {
+    key: "create.usersDbLibrary",
+    title: "ספריית siteUsersDb",
+    description: "ספריית SharePoint היסטורית למידע משתמשים/מנהלים. באתר Mongo מקור האמת עשוי להיות Mongo, אבל הספרייה עדיין חשובה לתאימות והרשאות.",
+    fix: "אם הספרייה שגויה, תאימות users_data והרשאות עלולות להיבדק ביעד לא נכון.",
+    anchor: "create-mongo-site"
+  },
+  "create.bootstrapLibrary": {
+    key: "create.bootstrapLibrary",
+    title: "ספריית Bootstrap",
+    description: "ספריית SharePoint שבה אפשר להניח קבצי הקמה או דף עזר לפני שהאתר הסופי מוכן. זה לא האתר הסופי.",
+    anchor: "create-mongo-site"
+  },
+  "create.bootstrapFolder": {
+    key: "create.bootstrapFolder",
+    title: "תיקיית Bootstrap",
+    description: "תיקייה זמנית/ראשונית לקבצי עזר של ההקמה. ברירת המחדל נוצרת אוטומטית ולא דורשת החלטת בעלים.",
+    anchor: "create-mongo-site"
+  },
+  "create.runtimeConfigPath": {
+    key: "create.runtimeConfigPath",
+    title: "נתיב runtime config",
+    description: "קובץ ההגדרות שהאתר קורא בזמן טעינה. באתר Mongo הוא אומר ל־Frontend לעבוד מול Mongo backend ומכיל siteId, backendApiUrl והפניה להרשאה.",
+    fix: "בלי הקובץ הזה האתר לא יודע מאיפה לטעון נתונים. השאירו ריק לברירת מחדל בתוך dist או הזינו נתיב SharePoint תקין.",
+    anchor: "create-mongo-site"
+  },
+  "create.backendApiUrl": {
+    key: "create.backendApiUrl",
+    title: "כתובת Backend של Site Builder",
+    description: "השרת שמולו האתר עובד כדי לקרוא ולשמור נתונים ב־Mongo. זו לא כתובת SharePoint.",
+    fix: "אם הכתובת לא זמינה או לא מורשית, האתר יעלה אבל לא יוכל לטעון נתונים.",
+    anchor: "create-mongo-site"
+  },
+  "create.credentialRef": {
+    key: "create.credentialRef",
+    title: "הפניה להרשאת API",
+    description: "שם של הגדרה שמחזיקה את מפתח ה־API ל־Builder backend. לא מזינים כאן את המפתח עצמו כדי לא לחשוף סודות במסך, בלוגים או ב־Audit.",
+    fix: "אם ההפניה חסרה או מצביעה למשתנה לא קיים, ה־HUB לא יוכל ליצור registry או seed docs.",
+    anchor: "create-mongo-site"
+  },
+  "create.safeCollectionName": {
+    key: "create.safeCollectionName",
+    title: "שם Collection במונגו",
+    description: "שם ה־collection הפיזי שבו יישמרו נתוני האתר במונגו. בדרך כלל המערכת יכולה ליצור אותו לבד.",
+    fix: "שינוי ידני מיועד למצבים מתקדמים בלבד. אם הערך שגוי, האתר עלול להצביע ל־collection לא נכון או להיחסם בבדיקת התאמה.",
+    anchor: "create-mongo-site"
+  },
+  "create.mongoEnvironment": {
+    key: "create.mongoEnvironment",
+    title: "סביבת Mongo",
+    description: "מידע תיעודי על סביבת Mongo שמאחורי Builder backend. לרוב נקבע בצד השרת ולא על ידי בעל האתר.",
+    anchor: "create-mongo-site"
+  },
+  "create.mongoDatabase": {
+    key: "create.mongoDatabase",
+    title: "מסד נתונים Mongo",
+    description: "שם מסד הנתונים בצד Builder backend. בדרך כלל לא צריך למלא ידנית באשף.",
+    anchor: "create-mongo-site"
+  },
+  "create.widgetsMapping": {
+    key: "create.widgetsMapping",
+    title: "מיקום widgets_data.txt",
+    description: "מיפוי תאימות לקובץ legacy. באתר Mongo הנתונים נשמרים כ־seed docs, אבל עדיין צריך לדעת מאיזה שם קובץ הם הגיעו.",
+    fix: "בחירה לא נכונה עלולה לגרום למיפוי widgets להיקרא מהספרייה הלא נכונה.",
+    anchor: "create-mongo-site"
+  },
+  "create.sharePointConnector": {
+    key: "create.sharePointConnector",
+    title: "מחבר SharePoint",
+    description: "מציג האם פעולה מול SharePoint תרוץ כקריאה בלבד, דרך Backend SharePoint job או דרך דפדפן מחובר.",
+    fix: "אם פעולה חסומה, בדקו האם היא דורשת SSO בדפדפן או הרשאת שרת ל־SharePoint.",
+    anchor: "create-mongo-site"
+  },
   "site.bootstrap": {
     key: "site.bootstrap",
     title: "Bootstrap / Provision",
@@ -653,10 +845,33 @@ export const helpPageSections: readonly HelpPageSection[] = [
     title: "יצירת אתר חדש",
     paragraphs: [
       "מסלול יצירת אתר חדש מתחיל בתכנון: פרטי אתר, בעלים, מנהלים, כתובת SharePoint, ספריות ונתיבי dist.",
-      "לאחר מכן ה־Hub יכול ליצור Job הקמה: SharePoint structure, Bootstrap/Provision, Owners/Admins, הרשאות, פריסה ראשונית אופציונלית ואימות.",
-      "פריסה ראשונית עדיין צריכה Release ו־Artifact אמיתיים ולכן נשארת תחת מרכז גרסאות ופריסות."
+      "לאחר מכן ה־Hub יוצר/מאמת את תשתית SharePoint, נתוני TXT או Mongo, runtime config לפי הצורך, ובוחר Release תואם לפריסה ראשונית מתוך אותו מאגר Artifacts.",
+      "Releases נשארים מקור ה־Artifact, אבל Create New Site מתזמן את הפריסה הראשונית כחלק מההקמה ולא כצעד שהמשתמש צריך לנחש ידנית."
     ],
     terms: ["site.createNew", "site.bootstrap", "site.owner", "site.admins", "deploy.perSite"]
+  },
+  {
+    id: "create-mongo-site",
+    title: "יצירת אתר Mongo חדש",
+    paragraphs: [
+      "באתר Mongo חדש יש הפרדה חשובה: SharePoint מארח את קבצי האתר, אבל Mongo שומר את הנתונים החיים דרך Builder backend.",
+      "siteCode הוא קוד נוח לבניית נתיבים; siteId הוא המזהה שה־Frontend וה־Backend משתמשים בו מול API; safeCollectionName הוא שם ה־collection הפיזי במונגו ובדרך כלל נוצר אוטומטית.",
+      "runtime config הוא הקובץ שהאתר קורא בזמן טעינה כדי לדעת שהוא עובד מול Mongo, לא מול TXT, ולאיזה Backend לפנות.",
+      "לא מכניסים API key גלוי באשף. מזינים רק credential reference, כדי שסודות לא יופיעו במסך, בלוגים או Audit.",
+      "Seed docs הם מסמכי התחלה שמחליפים את קבצי ה־TXT legacy, למשל users_data.txt ו־widgets_data.txt, בתוך Builder backend.",
+      "אתר יכול להיות partially-created כאשר חלק מהתשתית קיימת אבל עדיין חסרים runtime config, seed docs, backup capability או dist/index.html מאומת. ready מתקבל רק אחרי שכל החלקים האלה תקינים."
+    ],
+    terms: [
+      "create.siteCode",
+      "create.builderSiteId",
+      "create.safeCollectionName",
+      "create.runtimeConfigPath",
+      "create.backendApiUrl",
+      "create.credentialRef",
+      "create.siteDbLibrary",
+      "create.usersDbLibrary",
+      "create.initialAdmins"
+    ]
   },
   {
     id: "deploy",

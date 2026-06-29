@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, Clock3 } from "lucide-react";
-import { SiteHealth } from "../types/site";
+import { SiteHealth, StorageBackend } from "../types/site";
 
 const checks: Array<{ key: keyof SiteHealth; label: string; help?: string }> = [
   { key: "siteDbExists", label: "siteDB קיים", help: "ספריית הנתונים הראשית קיימת" },
@@ -12,18 +12,36 @@ const checks: Array<{ key: keyof SiteHealth; label: string; help?: string }> = [
   { key: "permissionsOk", label: "הרשאות תקינות" }
 ];
 
+const mongoChecks: Array<{ key: keyof SiteHealth; label: string; help?: string }> = [
+  { key: "siteDbExists", label: "אירוח SharePoint קיים", help: "ספריית/שורש אירוח האפליקציה קיימים" },
+  { key: "distExists", label: "dist קיים", help: "תיקיית build סופית קיימת" },
+  { key: "indexExists", label: "index.html קיים", help: "קובץ הכניסה לאתר קיים" },
+  { key: "assetsExists", label: "assets קיימים", help: "קבצי JS/CSS קיימים" },
+  { key: "runtimeConfigExists", label: "runtime config קיים", help: "sitebuilder-runtime-config.json או runtime-config.json נמצא בנתיב המדויק" },
+  { key: "runtimeConfigValid", label: "runtime config תקין", help: "מצביע על Mongo, backendApiUrl ו־siteId נכונים" },
+  { key: "dataBackendReachable", label: "Builder backend זמין", help: "ה־API של Site Builder מגיב" },
+  { key: "mongoRegistryOk", label: "רשומת sites קיימת", help: "Mongo registry מכיר את siteId" },
+  { key: "mongoCollectionOk", label: "safeCollectionName תקין", help: "שם האוסף נפתר מהרשומה ולא מניחים אותו לפי siteCode" },
+  { key: "mongoSeedOk", label: "Seed docs קיימים", help: "config/admins/events/navigation/content/design/widgets/externalLinks/gantt" },
+  { key: "mongoBackupsOk", label: "Mongo backups זמינים", help: "יכולת backup דרך Builder backend אומתה" },
+  { key: "permissionsOk", label: "הרשאות אירוח תקינות" }
+];
+
 export function HealthChecklist({
   health,
+  storageBackend = "unknown",
   editable = false,
   onChange
 }: {
   health?: SiteHealth;
+  storageBackend?: StorageBackend;
   editable?: boolean;
   onChange?: (next: SiteHealth) => void;
 }) {
+  const activeChecks = storageBackend === "mongo" ? mongoChecks : checks;
   return (
     <div className="grid gap-2 md:grid-cols-2">
-      {checks.map((item) => {
+      {activeChecks.map((item) => {
         const value = health?.[item.key];
         const tone = value === true ? "var(--success)" : value === false ? "var(--danger)" : "var(--text-subtle)";
         const icon = value === true ? <CheckCircle2 size={15} /> : value === false ? <AlertTriangle size={15} /> : <Clock3 size={15} />;

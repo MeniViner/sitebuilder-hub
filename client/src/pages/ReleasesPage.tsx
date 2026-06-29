@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   Archive,
@@ -214,13 +214,15 @@ const isPlanForCurrentSelection = ({
   releaseId,
   deployMode,
   targetMode,
-  targetSiteIds
+  targetSiteIds,
+  allowDeployWithoutBackup
 }: {
   plan: BatchDeployPlan | null;
   releaseId: string;
   deployMode: DeployMode;
   targetMode: BatchDeployTargetMode;
   targetSiteIds: string[];
+  allowDeployWithoutBackup: boolean;
 }) => {
   if (!plan || !releaseId) return false;
   const normalizedTargetIds = targetMode === "all" ? [] : targetSiteIds;
@@ -228,6 +230,7 @@ const isPlanForCurrentSelection = ({
     plan.releaseId === releaseId &&
     plan.deployMode === deployMode &&
     plan.targetMode === targetMode &&
+    Boolean(plan.allowDeployWithoutBackup) === Boolean(allowDeployWithoutBackup) &&
     sameStringSet(plan.targetSiteIds || [], normalizedTargetIds)
   );
 };
@@ -240,8 +243,12 @@ const groupPlanRows = (rows: BatchDeployPlanRow[]) => ({
 });
 
 const remediationForDeployMessage = (message: string) => {
-  const normalized = String(message || "").toLowerCase();
+  const raw = String(message || "");
+  const normalized = raw.toLowerCase();
   if (!normalized) return "";
+  if (isBackupRequiredMessage(raw)) return "פתח גיבוי ושחזור, הרץ Backup לאתר החסום, ודא שהגיבוי במצב Verified, ואז חזור לכאן והריץ Run Dry-run מחדש.";
+  if (isBackupStaleMessage(raw)) return "פתח גיבוי ושחזור והריץ Backup חדש, כי הגיבוי הקיים ישן מדי למדיניות Deploy.";
+  if (isBackupOverrideMessage(raw)) return "Override פעיל: אין צורך לתקן גיבוי עבור ה-Dry-run הזה, אבל האחריות היא על מי שמאשר Execute.";
   if (normalized.includes("artifact") || normalized.includes("release-artifact")) return "חברו Artifact תקין לגרסה והריצו Validate לפני Dry-run נוסף.";
   if (normalized.includes("newer") || normalized.includes("rollback") || normalized.includes("גרסה חדשה")) return "האתר נמצא קדימה מגרסת היעד. עברו ל-Rollback מתוכנן או בחרו גרסה חדשה יותר.";
   if (normalized.includes("write") || normalized.includes("sharepoint")) return "בדקו Settings/Diagnostics כדי לוודא שיכולת כתיבה או Browser Digest זמינים לפני Execute.";
@@ -307,9 +314,25 @@ const planRowLabel = (row?: BatchDeployPlanRow) => {
   return "חסום";
 };
 
+const isBackupRequiredMessage = (message: string) => String(message || "").includes("dangerous-write-backup-required:");
+const isBackupStaleMessage = (message: string) => String(message || "").includes("dangerous-write-backup-stale:");
+const isBackupOverrideMessage = (message: string) => String(message || "").includes("backup-override-accepted:");
+
 const humanizeDeployMessage = (message: string) => {
   const normalized = String(message || "").trim();
   if (!normalized) return "";
+  if (isBackupRequiredMessage(normalized)) {
+    return "חסר גיבוי מאומת: לפני Deploy צריך להריץ Backup לאתר היעד ולוודא שהוא Verified. אחרי הגיבוי הרץ Dry-run מחדש.";
+  }
+  if (isBackupStaleMessage(normalized)) {
+    return "הגיבוי המאומת ישן מדי: צריך להריץ Backup חדש או לאמת גיבוי עדכני, ואז להריץ Dry-run מחדש.";
+  }
+  if (isBackupOverrideMessage(normalized)) {
+    return "נבחר Override מסוכן: הפריסה תמשיך בלי גיבוי מאומת.";
+  }
+  if (normalized === "Browser deploy requires browser Digest and per-file upload verification at execution time.") {
+    return "מידע: בזמן Execute הדפדפן יבקש Digest, יעלה קבצים, ויאמת read-back לכל קובץ.";
+  }
   const blockedMatch = normalized.match(/^(\d+) target site\(s\) are blocked\.$/);
   if (blockedMatch) return `${blockedMatch[1]} אתרים חסומים בתוכנית.`;
   const warningMatch = normalized.match(/^(\d+) target site\(s\) have warnings\.$/);
@@ -535,7 +558,8 @@ function ReleaseDetailsPanel({
   validation,
   validating,
   onValidate,
-  onDeploy
+  onDeploy,
+  shell = true
 }: {
   release: Release | null;
   latestVersion: string;
@@ -544,13 +568,17 @@ function ReleaseDetailsPanel({
   validating: boolean;
   onValidate: () => void;
   onDeploy: () => void;
+  shell?: boolean;
 }) {
   if (!release) {
-    return (
-      <SectionCard title="פרטי Release" subtitle="בחר Release מהרשימה" helpKey="release">
-        <EmptyState title="אין Release נבחר" description="בחר גרסה כדי לראות Artifact, תאימות ואתרים מושפעים." />
-      </SectionCard>
+    const emptyState = (
+      <EmptyState title="אין Release נבחר" description="בחר גרסה כדי לראות Artifact, תאימות ואתרים מושפעים." />
     );
+    return shell ? (
+      <SectionCard title="פרטי Release" subtitle="בחר Release מהרשימה" helpKey="release">
+        {emptyState}
+      </SectionCard>
+    ) : emptyState;
   }
 
   const status = releaseStatus(release, latestVersion);
@@ -560,52 +588,56 @@ function ReleaseDetailsPanel({
   const artifactReady = validation?.summary.readyForDeploy ?? release.artifactValidation?.readyForDeploy ?? false;
   const readiness = releaseReadiness(release, latestVersion);
 
-  return (
+  const content = (
+    <div className="space-y-4">
+      <div>
+        <p className="num text-2xl font-bold" style={{ color: "var(--text-strong)" }}>{release.version}</p>
+        <p className="mt-1 text-sm muted">{releaseTypeLabel(release.releaseType)} · נוצר {formatDateTime(release.createdAt)}</p>
+      </div>
+      <div className="grid gap-2">
+        <LinkRow label="Artifact reference" value={release.artifactRef || "חסר Artifact"} />
+        <LinkRow label="Validation" value={artifactReady ? "Artifact מוכן לפריסה" : "Artifact לא מאומת או חסר"} />
+        <LinkRow label="Created by" value={release.createdBy || "system"} />
+      </div>
+      {release.notes ? (
+        <div className="rounded-md border p-3" style={{ borderColor: "var(--border)", background: "var(--surface-muted)" }}>
+          <p className="field-label">Changelog / Notes</p>
+          <p className="text-sm leading-6">{release.notes}</p>
+        </div>
+      ) : null}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <KpiCard title="בגרסה הזו" value={formatNumber(sitesOnRelease.length)} icon={<CheckCircle2 size={16} />} tone="success" variant="inline" />
+        <KpiCard title="מאחור" value={formatNumber(behind.length)} icon={<GitBranch size={16} />} tone={behind.length ? "warning" : "success"} variant="inline" />
+        <KpiCard title="קדימה" value={formatNumber(ahead.length)} icon={<AlertTriangle size={16} />} tone={ahead.length ? "warning" : "neutral"} variant="inline" />
+      </div>
+      <div className="grid gap-2">
+        <SafetyGate ok={Boolean(release.artifactRef)} label="Artifact מחובר" detail={release.artifactRef ? "יש Reference ל-dist/manifest של הגרסה." : "הפריסה חסומה כי חסר Artifact לגרסה הזו."} helpKey="artifact" />
+        <SafetyGate ok={artifactReady} label="Validation" detail={artifactReady ? "Artifact עבר בדיקת קבצים ו-index.html." : "הרץ Validate לפני תכנון פריסה."} helpKey="artifact.validation" />
+        {readiness.olderThanLatest ? (
+          <SafetyGate ok={false} label="גרסה ישנה מה-Latest" detail="בחירה בגרסה הזו עשויה להיות Rollback ולא Deploy רגיל. אם זו הכוונה, השתמשו בלשונית Rollback." helpKey="rollback" />
+        ) : null}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button className="btn btn-secondary" type="button" onClick={onValidate} disabled={validating}>
+          <RefreshCw size={15} />{validating ? "בודק..." : "Validate"}
+        </button>
+        <button className="btn btn-primary" type="button" onClick={onDeploy} disabled={!readiness.canPlan} title={readiness.canPlan ? "פתח Deploy Center" : readiness.label}><Rocket size={15} />Create Deploy Plan</button>
+        <button className="btn btn-secondary" type="button" disabled title="עריכת metadata תתווסף כאשר יהיה endpoint מתאים">Edit metadata</button>
+        <button className="btn btn-danger" type="button" disabled title="מחיקה זמינה רק אחרי בדיקת שימוש בטוחה">Delete safe only</button>
+      </div>
+    </div>
+  );
+
+  return shell ? (
     <SectionCard
       title="פרטי Release"
       subtitle="הקשר, Artifact ותאימות לפני שימוש ב-Deploy Center"
       helpKey="release"
       actions={<StatusChip tone={releaseStatusTone(status)} helpKey="release">{releaseStatusLabel(status)}</StatusChip>}
     >
-      <div className="space-y-4">
-        <div>
-          <p className="num text-2xl font-bold" style={{ color: "var(--text-strong)" }}>{release.version}</p>
-          <p className="mt-1 text-sm muted">{releaseTypeLabel(release.releaseType)} · נוצר {formatDateTime(release.createdAt)}</p>
-        </div>
-        <div className="grid gap-2">
-          <LinkRow label="Artifact reference" value={release.artifactRef || "חסר Artifact"} />
-          <LinkRow label="Validation" value={artifactReady ? "Artifact מוכן לפריסה" : "Artifact לא מאומת או חסר"} />
-          <LinkRow label="Created by" value={release.createdBy || "system"} />
-        </div>
-        {release.notes ? (
-          <div className="rounded-md border p-3" style={{ borderColor: "var(--border)", background: "var(--surface-muted)" }}>
-            <p className="field-label">Changelog / Notes</p>
-            <p className="text-sm leading-6">{release.notes}</p>
-          </div>
-        ) : null}
-        <div className="grid gap-3 sm:grid-cols-3">
-          <KpiCard title="בגרסה הזו" value={formatNumber(sitesOnRelease.length)} icon={<CheckCircle2 size={16} />} tone="success" variant="inline" />
-          <KpiCard title="מאחור" value={formatNumber(behind.length)} icon={<GitBranch size={16} />} tone={behind.length ? "warning" : "success"} variant="inline" />
-          <KpiCard title="קדימה" value={formatNumber(ahead.length)} icon={<AlertTriangle size={16} />} tone={ahead.length ? "warning" : "neutral"} variant="inline" />
-        </div>
-        <div className="grid gap-2">
-          <SafetyGate ok={Boolean(release.artifactRef)} label="Artifact מחובר" detail={release.artifactRef ? "יש Reference ל-dist/manifest של הגרסה." : "הפריסה חסומה כי חסר Artifact לגרסה הזו."} helpKey="artifact" />
-          <SafetyGate ok={artifactReady} label="Validation" detail={artifactReady ? "Artifact עבר בדיקת קבצים ו-index.html." : "הרץ Validate לפני תכנון פריסה."} helpKey="artifact.validation" />
-          {readiness.olderThanLatest ? (
-            <SafetyGate ok={false} label="גרסה ישנה מה-Latest" detail="בחירה בגרסה הזו עשויה להיות Rollback ולא Deploy רגיל. אם זו הכוונה, השתמשו בלשונית Rollback." helpKey="rollback" />
-          ) : null}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button className="btn btn-secondary" type="button" onClick={onValidate} disabled={validating}>
-            <RefreshCw size={15} />{validating ? "בודק..." : "Validate"}
-          </button>
-          <button className="btn btn-primary" type="button" onClick={onDeploy} disabled={!readiness.canPlan} title={readiness.canPlan ? "פתח Deploy Center" : readiness.label}><Rocket size={15} />Create Deploy Plan</button>
-          <button className="btn btn-secondary" type="button" disabled title="עריכת metadata תתווסף כאשר יהיה endpoint מתאים">Edit metadata</button>
-          <button className="btn btn-danger" type="button" disabled title="מחיקה זמינה רק אחרי בדיקת שימוש בטוחה">Delete safe only</button>
-        </div>
-      </div>
+      {content}
     </SectionCard>
-  );
+  ) : content;
 }
 
 function TargetSiteSelector({
@@ -833,6 +865,19 @@ function DeploymentPlanResults({ plan }: { plan: BatchDeployPlan }) {
   const groups = groupPlanRows(plan.results);
   const remediations = buildBlockerRemediations(plan);
   const changingSites = groups.ready.length + groups.warning.length;
+  const allMessages = [
+    ...plan.blockers,
+    ...plan.warnings,
+    ...plan.results.flatMap((row) => [...row.blockers, ...row.warnings])
+  ];
+  const hasBackupBlocker = allMessages.some((message) => isBackupRequiredMessage(message) || isBackupStaleMessage(message));
+  const backupBlockedRows = groups.blocked.filter((row) => row.blockers.some((message) => isBackupRequiredMessage(message) || isBackupStaleMessage(message)));
+  const backupActionLink = backupBlockedRows.length === 1 ? `/sites/${backupBlockedRows[0].siteId}?tab=backups` : "/backups";
+  const uniquePlanBlockers = Array.from(new Set(plan.blockers.map(humanizeDeployMessage).filter(Boolean)));
+  const blockedRowsWithReasons = groups.blocked.map((row) => ({
+    row,
+    reasons: [...row.blockers, ...row.warnings].map(humanizeDeployMessage).filter(Boolean)
+  }));
   const columns: DataTableColumn<BatchDeployPlanRow>[] = [
     {
       key: "site",
@@ -877,6 +922,7 @@ function DeploymentPlanResults({ plan }: { plan: BatchDeployPlan }) {
           <>
             <StatusChip tone="success">Browser Upload: מוכן</StatusChip>
             <StatusChip tone="info">Backend SharePoint: לא נדרש במצב דפדפן</StatusChip>
+            {plan.allowDeployWithoutBackup ? <StatusChip tone="warning">גיבוי: Override מסוכן פעיל</StatusChip> : null}
           </>
         ) : null}
       </div>
@@ -902,6 +948,18 @@ function DeploymentPlanResults({ plan }: { plan: BatchDeployPlan }) {
           <p className="text-xs muted">דורשים remediation</p>
         </div>
       </div>
+      {hasBackupBlocker ? (
+        <div className="panel panel-warning p-4 text-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="max-w-3xl">
+              <p className="flex items-center gap-2 text-base font-bold" style={{ color: "var(--warning)" }}><AlertTriangle size={17} />חסר גיבוי מאומת לפני Deploy</p>
+              <p className="mt-1 muted">המערכת עומדת לדרוס קבצים חיים ב־SharePoint. לכן היא דורשת Backup תקין ומאומת לאתר היעד לפני Execute.</p>
+              <p className="mt-2 font-bold" style={{ color: "var(--text-strong)" }}>מה לעשות: או להריץ Backup ולאמת אותו, או לסמן את אפשרות ה־Override המסוכנת בשלב Target Sites ואז להריץ Dry-run מחדש.</p>
+            </div>
+            <Link className="btn btn-primary" to={backupActionLink}>פתח גיבוי ושחזור</Link>
+          </div>
+        </div>
+      ) : null}
       {!changingSites ? (
         <div className="panel panel-warning p-3 text-sm">
           <p className="flex items-center gap-2 font-bold" style={{ color: "var(--warning)" }}><AlertTriangle size={16} />Dry-run לא ישנה אף אתר כרגע.</p>
@@ -912,7 +970,7 @@ function DeploymentPlanResults({ plan }: { plan: BatchDeployPlan }) {
         <div className="panel panel-warning p-3 text-sm">
           <p className="mb-2 flex items-center gap-2 font-bold" style={{ color: "var(--warning)" }}><AlertTriangle size={16} />הפריסה חסומה</p>
           <ul className="list-inside list-disc space-y-1">
-            {plan.blockers.map((blocker) => <li key={blocker}>{humanizeDeployMessage(blocker)}</li>)}
+            {uniquePlanBlockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
           </ul>
         </div>
       ) : (
@@ -920,12 +978,34 @@ function DeploymentPlanResults({ plan }: { plan: BatchDeployPlan }) {
           <p className="flex items-center gap-2 font-bold" style={{ color: "var(--success)" }}><CheckCircle2 size={16} />Dry-run עבר. כל היעדים הנדרשים מוכנים להרצה.</p>
         </div>
       )}
-      {remediations.length ? (
+      {!hasBackupBlocker && remediations.length ? (
         <div className="panel p-3 text-sm">
-          <p className="mb-2 font-bold" style={{ color: "var(--text-strong)" }}>פעולות מומלצות לתיקון blockers</p>
+          <p className="mb-2 font-bold" style={{ color: "var(--text-strong)" }}>מה צריך לעשות עכשיו</p>
           <ul className="list-inside list-disc space-y-1">
             {remediations.map((remediation) => <li key={remediation}>{remediation}</li>)}
           </ul>
+        </div>
+      ) : null}
+      {blockedRowsWithReasons.length ? (
+        <div className="panel p-3 text-sm">
+          <p className="mb-2 font-bold" style={{ color: "var(--text-strong)" }}>למה כל אתר חסום</p>
+          <div className="space-y-3">
+            {blockedRowsWithReasons.map(({ row, reasons }) => (
+              <div key={row.siteId} className="rounded-md border p-3" style={{ borderColor: "var(--border)", background: "var(--surface-muted)" }}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-bold" style={{ color: "var(--text-strong)" }}>{row.displayName} <span className="num text-xs muted">({row.siteCode})</span></p>
+                  <StatusChip tone="danger">חסום</StatusChip>
+                </div>
+                {reasons.length ? (
+                  <ul className="mt-2 list-inside list-disc space-y-1">
+                    {reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                  </ul>
+                ) : (
+                  <p className="mt-2 muted">אין סיבה מפורטת מהשרת. הרץ Dry-run מחדש ובדוק Diagnostics.</p>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
       <DataTable
@@ -960,6 +1040,7 @@ function DeployWizard({
   latestVersion,
   capabilities,
   deployMode,
+  allowDeployWithoutBackup,
   targetMode,
   targetSiteIds,
   search,
@@ -971,6 +1052,7 @@ function DeployWizard({
   browserDeployResults,
   onSelectRelease,
   onDeployModeChange,
+  onAllowDeployWithoutBackupChange,
   onTargetModeChange,
   onTargetSiteIdsChange,
   onSearchChange,
@@ -986,6 +1068,7 @@ function DeployWizard({
   latestVersion: string;
   capabilities: OperationCapabilities | null;
   deployMode: DeployMode;
+  allowDeployWithoutBackup: boolean;
   targetMode: BatchDeployTargetMode;
   targetSiteIds: string[];
   search: string;
@@ -997,6 +1080,7 @@ function DeployWizard({
   browserDeployResults: BrowserDeploySiteResult[];
   onSelectRelease: (releaseId: string) => void;
   onDeployModeChange: (mode: DeployMode) => void;
+  onAllowDeployWithoutBackupChange: (value: boolean) => void;
   onTargetModeChange: (mode: BatchDeployTargetMode) => void;
   onTargetSiteIdsChange: (siteIds: string[]) => void;
   onSearchChange: (value: string) => void;
@@ -1007,10 +1091,15 @@ function DeployWizard({
 }) {
   const writeAvailable = Boolean(capabilities?.sharePoint.writeAvailable);
   const readiness = releaseReadiness(selectedRelease, latestVersion);
-  const planFresh = isPlanForCurrentSelection({ plan, releaseId: selectedReleaseId, deployMode, targetMode, targetSiteIds });
+  const planFresh = isPlanForCurrentSelection({ plan, releaseId: selectedReleaseId, deployMode, targetMode, targetSiteIds, allowDeployWithoutBackup });
   const readyRows = planFresh ? plan?.results.filter((row) => row.status === "ready" || row.status === "warning") || [] : [];
   const browserDeployMode = planFresh && plan?.connectorMode === "browser-sharepoint";
   const browserUploadReady = browserDeployMode && readyRows.length > 0;
+  const planHasBackupBlocker = Boolean(plan && [
+    ...plan.blockers,
+    ...plan.warnings,
+    ...plan.results.flatMap((row) => [...row.blockers, ...row.warnings])
+  ].some((message) => isBackupRequiredMessage(message) || isBackupStaleMessage(message)));
   const deployRequestReady =
     Boolean(selectedReleaseId) &&
     readiness.canPlan &&
@@ -1107,6 +1196,25 @@ function DeployWizard({
               <p className="mt-1 muted">אתרים שכבר נמצאים בגרסה הזו לא ייפרסו מחדש. אתרים חסומים יוצגו לפני Execute.</p>
             </div>
           </div>
+          <label className={`panel p-3 text-sm ${allowDeployWithoutBackup ? "panel-warning" : ""}`}>
+            <span className="flex items-start gap-3">
+              <input
+                className="mt-1"
+                type="checkbox"
+                checked={allowDeployWithoutBackup}
+                disabled={deployMode !== "local-dev-owner"}
+                onChange={(event) => onAllowDeployWithoutBackupChange(event.target.checked)}
+              />
+              <span>
+                <span className="block font-bold" style={{ color: allowDeployWithoutBackup ? "var(--warning)" : "var(--text-strong)" }}>
+                  כן, זה מסוכן, אני רוצה לאפשר Deploy בלי גיבוי מאומת
+                </span>
+                <span className="mt-1 block muted">
+                  אם זה מסומן, Dry-run במצב Browser + Local/dev owner לא יחסום אתר רק בגלל שחסר Backup. Production-safe עדיין דורש גיבוי.
+                </span>
+              </span>
+            </span>
+          </label>
           <TargetSiteSelector
             sites={sites}
             selectedRelease={selectedRelease}
@@ -1141,7 +1249,22 @@ function DeployWizard({
             </button>
           </div>
           {plan ? (
-            planFresh ? <DeploymentPlanResults plan={plan} /> : (
+            planFresh ? (
+              <>
+                <DeploymentPlanResults plan={plan} />
+                {planHasBackupBlocker && deployMode === "local-dev-owner" && plan.connectorMode === "browser-sharepoint" && !allowDeployWithoutBackup ? (
+                  <label className="panel panel-warning block p-3 text-sm">
+                    <span className="flex items-start gap-3">
+                      <input className="mt-1" type="checkbox" checked={false} onChange={(event) => onAllowDeployWithoutBackupChange(event.target.checked)} />
+                      <span>
+                        <span className="block font-bold" style={{ color: "var(--warning)" }}>כן, זה מסוכן, אני רוצה לאפשר Deploy בלי גיבוי מאומת</span>
+                        <span className="mt-1 block muted">סימון האפשרות יאפס את ה־Dry-run. אחר כך לחץ Run Dry-run שוב, והחסימה של גיבוי תהפוך לאזהרה במקום blocker.</span>
+                      </span>
+                    </span>
+                  </label>
+                ) : null}
+              </>
+            ) : (
               <div className="panel panel-warning p-3 text-sm">
                 <p className="font-bold" style={{ color: "var(--warning)" }}>ה-Dry-run כבר לא תואם לבחירה הנוכחית.</p>
                 <p className="mt-1 muted">שיניתם Release, mode או scope אחרי התוכנית. הריצו Dry-run מחדש כדי למנוע Execute על תוכנית לא עדכנית.</p>
@@ -1445,10 +1568,12 @@ export function ReleasesPage() {
 
   const [activeTab, setActiveTab] = useState<ReleaseTab>("releases");
   const [selectedReleaseId, setSelectedReleaseId] = useState("");
+  const [releaseDetailsOpen, setReleaseDetailsOpen] = useState(false);
   const [validationByReleaseId, setValidationByReleaseId] = useState<Record<string, ReleaseArtifactValidation>>({});
 
   const [deployStep, setDeployStep] = useState<DeployStep>(1);
   const [deployMode, setDeployMode] = useState<DeployMode>("local-dev-owner");
+  const [allowDeployWithoutBackup, setAllowDeployWithoutBackup] = useState(false);
   const [targetMode, setTargetMode] = useState<BatchDeployTargetMode>("all");
   const [targetSiteIds, setTargetSiteIds] = useState<string[]>([]);
   const [targetSearch, setTargetSearch] = useState("");
@@ -1480,7 +1605,7 @@ export function ReleasesPage() {
   const suggestedVersion = useMemo(() => suggestVersion(latestVersionForSuggestion, releaseType), [latestVersionForSuggestion, releaseType]);
   const writeAvailable = Boolean(capabilities?.sharePoint.writeAvailable);
   const selectedValidation = selectedReleaseId ? validationByReleaseId[selectedReleaseId] || null : null;
-  const currentPlanFresh = isPlanForCurrentSelection({ plan: batchPlan, releaseId: selectedReleaseId, deployMode, targetMode, targetSiteIds });
+  const currentPlanFresh = isPlanForCurrentSelection({ plan: batchPlan, releaseId: selectedReleaseId, deployMode, targetMode, targetSiteIds, allowDeployWithoutBackup });
   const executablePlanRows = currentPlanFresh ? batchPlan?.results.filter((row) => row.status === "ready" || row.status === "warning") || [] : [];
 
   const siteUsage = useMemo(() => {
@@ -1601,6 +1726,7 @@ export function ReleasesPage() {
     const release = releases.find((item) => item._id === releaseId) || null;
     const readiness = releaseReadiness(release, latestVersion);
     setSelectedReleaseId(releaseId);
+    setReleaseDetailsOpen(false);
     if (!readiness.canPlan) {
       setActiveTab("releases");
       setDeployStep(1);
@@ -1621,7 +1747,8 @@ export function ReleasesPage() {
     targetMode,
     targetSiteIds: targetMode === "all" ? [] : targetSiteIds,
     deployMode,
-    connectorMode: "browser-sharepoint"
+    connectorMode: "browser-sharepoint",
+    allowDeployWithoutBackup
   });
 
   const buildBatchPlan = async () => {
@@ -1669,7 +1796,7 @@ export function ReleasesPage() {
   const executeBatchDeploy = async () => {
     await runAction("batch-run", async () => {
       if (!selectedReleaseId || !batchPlan) throw new Error("יש להריץ Dry-run לפני Execute");
-      if (!isPlanForCurrentSelection({ plan: batchPlan, releaseId: selectedReleaseId, deployMode, targetMode, targetSiteIds })) {
+      if (!isPlanForCurrentSelection({ plan: batchPlan, releaseId: selectedReleaseId, deployMode, targetMode, targetSiteIds, allowDeployWithoutBackup })) {
         throw new Error("Dry-run לא תואם לבחירה הנוכחית. הריצו Dry-run מחדש לפני Execute.");
       }
       const executableRows = batchPlan.results.filter((row) => row.status === "ready" || row.status === "warning");
@@ -1748,6 +1875,7 @@ export function ReleasesPage() {
             },
             uploadedFilesEvidence: browserDeploy.uploadedFilesEvidence,
             readBackEvidence: browserDeploy.readBackEvidence,
+            finalAppUrlVerification: browserDeploy.finalAppUrlVerification,
             errors: browserDeploy.errors,
             startedAt: browserDeploy.startedAt,
             completedAt: browserDeploy.completedAt,
@@ -1940,32 +2068,49 @@ export function ReleasesPage() {
           </div>
 
           {activeTab === "releases" ? (
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(22rem,0.75fr)]">
-              <SectionCard title="Release Registry" subtitle="רשימת גרסאות עם Artifact, סטטוס ושימוש באתרים" helpKey="release">
-                <ReleaseRegistry
-                  releases={releases}
-                  selectedReleaseId={selectedReleaseId}
-                  latestVersion={latestVersion}
-                  siteUsage={siteUsage}
-                  onSelect={(releaseId) => {
-                    setSelectedReleaseId(releaseId);
-                    setBatchPlan(null);
-                    setDeployResult(null);
-                    setBrowserDeployResults([]);
-                  }}
-                  onValidate={validateRelease}
-                  onDeploy={startDeployPlan}
-                />
-              </SectionCard>
-              <ReleaseDetailsPanel
-                release={selectedRelease}
+            <SectionCard title="Release Registry" subtitle="רשימת גרסאות עם Artifact, סטטוס ושימוש באתרים. פרטים נפתחים במגירה ימנית ולא תופסים שטח מהעמוד." helpKey="release">
+              <ReleaseRegistry
+                releases={releases}
+                selectedReleaseId={selectedReleaseId}
                 latestVersion={latestVersion}
-                sites={sites}
-                validation={selectedValidation}
-                validating={busyAction === `validate-${selectedReleaseId}`}
-                onValidate={() => selectedReleaseId && validateRelease(selectedReleaseId)}
-                onDeploy={() => selectedReleaseId && startDeployPlan(selectedReleaseId)}
+                siteUsage={siteUsage}
+                onSelect={(releaseId) => {
+                  setSelectedReleaseId(releaseId);
+                  setReleaseDetailsOpen(true);
+                  setBatchPlan(null);
+                  setDeployResult(null);
+                  setBrowserDeployResults([]);
+                }}
+                onValidate={validateRelease}
+                onDeploy={startDeployPlan}
               />
+            </SectionCard>
+          ) : null}
+
+          {releaseDetailsOpen && activeTab === "releases" ? (
+            <div className="drawer-layer release-details-layer">
+              <button className="release-details-backdrop" type="button" aria-label="סגור פרטי Release" onClick={() => setReleaseDetailsOpen(false)} />
+              <aside className="drawer-panel drawer-panel-right release-details-drawer" role="dialog" aria-modal="true" aria-labelledby="release-details-title">
+                <div className="drawer-header">
+                  <div className="min-w-0">
+                    <h2 id="release-details-title" className="panel-title panel-title-with-help">פרטי Release<HelpIcon helpKey="release" /></h2>
+                    <p className="panel-subtitle">Artifact, תאימות ופעולות לגרסה שנבחרה</p>
+                  </div>
+                  <button className="icon-btn" type="button" onClick={() => setReleaseDetailsOpen(false)} aria-label="סגור פרטי Release"><X size={16} /></button>
+                </div>
+                <div className="drawer-body">
+                  <ReleaseDetailsPanel
+                    release={selectedRelease}
+                    latestVersion={latestVersion}
+                    sites={sites}
+                    validation={selectedValidation}
+                    validating={busyAction === `validate-${selectedReleaseId}`}
+                    onValidate={() => selectedReleaseId && validateRelease(selectedReleaseId)}
+                    onDeploy={() => selectedReleaseId && startDeployPlan(selectedReleaseId)}
+                    shell={false}
+                  />
+                </div>
+              </aside>
             </div>
           ) : null}
 
@@ -1978,6 +2123,7 @@ export function ReleasesPage() {
               latestVersion={latestVersion}
               capabilities={capabilities}
               deployMode={deployMode}
+              allowDeployWithoutBackup={allowDeployWithoutBackup}
               targetMode={targetMode}
               targetSiteIds={targetSiteIds}
               search={targetSearch}
@@ -1995,6 +2141,13 @@ export function ReleasesPage() {
               }}
               onDeployModeChange={(mode) => {
                 setDeployMode(mode);
+                if (mode !== "local-dev-owner") setAllowDeployWithoutBackup(false);
+                setBatchPlan(null);
+                setDeployResult(null);
+                setBrowserDeployResults([]);
+              }}
+              onAllowDeployWithoutBackupChange={(value) => {
+                setAllowDeployWithoutBackup(value);
                 setBatchPlan(null);
                 setDeployResult(null);
                 setBrowserDeployResults([]);
@@ -2135,10 +2288,11 @@ export function ReleasesPage() {
         busy={busyAction === "batch-run"}
         risks={[
           `${formatNumber(executablePlanRows.length)} אתרים יקבלו את קבצי ה-Artifact של ${selectedRelease?.version || "הגרסה הנבחרת"}.`,
+          allowDeployWithoutBackup ? "נבחר Override: הפריסה תרוץ גם אם אין גיבוי מאומת לפני דריסת הקבצים." : "",
           batchPlan ? `${formatNumber(batchPlan.summary.alreadyUpToDateSites)} אתרים כבר עדכניים וידולגו.` : "חסר Dry-run.",
           batchPlan ? `${formatNumber(batchPlan.summary.blockedSites)} אתרים חסומים לא ייפרסו.` : "חסר Dry-run.",
           currentPlanFresh ? "ה-Dry-run תואם לבחירה הנוכחית." : "ה-Dry-run לא תואם לבחירה הנוכחית, ולכן Execute ייחסם."
-        ]}
+        ].filter(Boolean)}
         onClose={() => setDeployConfirmOpen(false)}
         onConfirm={() => {
           setDeployConfirmOpen(false);

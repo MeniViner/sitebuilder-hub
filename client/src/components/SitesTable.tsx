@@ -6,6 +6,14 @@ import { HealthBadge } from "./HealthBadge";
 import { StatusBadge } from "./StatusBadge";
 import { VersionBadge } from "./VersionBadge";
 
+const storageLabel = (backend?: Site["storageBackend"]) =>
+  backend === "mongo" ? "Mongo" : backend === "txt" ? "TXT" : "Unknown";
+
+const storageBadgeClass = (backend?: Site["storageBackend"]) =>
+  backend === "mongo" ? "badge-info" : backend === "txt" ? "badge-success" : "badge-neutral";
+
+const compactStatus = (value?: string) => value || "unknown";
+
 interface SitesTableProps {
   sites: Site[];
   onEdit: (site: Site) => void;
@@ -33,6 +41,7 @@ export function SitesTable({ sites, onEdit, onArchive, onRestore, onPermanentDel
               </button>
               <div className="mt-1 flex flex-wrap items-center gap-2">
                 <span className="num text-xs muted">{site.siteCode}</span>
+                <span className={`badge ${storageBadgeClass(site.storageBackend)}`}>{storageLabel(site.storageBackend)}</span>
                 <span className="text-xs subtle">{site.unitName || "ללא יחידה"}</span>
               </div>
             </div>
@@ -40,6 +49,18 @@ export function SitesTable({ sites, onEdit, onArchive, onRestore, onPermanentDel
         },
         { key: "status", header: "סטטוס", helpKey: "job.status", render: (site: Site) => <StatusBadge status={site.status} /> },
         { key: "health", header: "תקינות", helpKey: "health", render: (site: Site) => <HealthBadge status={site.derivedHealthStatus || "unknown"} /> },
+        {
+          key: "backend",
+          header: "אחסון",
+          render: (site: Site) => (
+            <div className="min-w-[160px] space-y-1 text-xs">
+              <span className={`badge ${storageBadgeClass(site.storageBackend)}`}>{storageLabel(site.storageBackend)}</span>
+              <p className="muted">Runtime: <span className="num">{compactStatus(site.runtimeConfigStatus?.readStatus)}</span></p>
+              <p className="muted">Data: <span className="num">{compactStatus(site.dataBackendStatus)}</span></p>
+              {site.storageBackend === "mongo" ? <p className="muted">Seed: <span className="num">{compactStatus(site.mongoBackendStatus?.seedStatus)}</span></p> : null}
+            </div>
+          )
+        },
         {
           key: "version",
           header: "גרסה",
@@ -104,6 +125,7 @@ export function SitesTable({ sites, onEdit, onArchive, onRestore, onPermanentDel
           <div className="flex flex-wrap gap-2">
             <HealthBadge status={site.derivedHealthStatus || "unknown"} />
             <VersionBadge status={site.versionStatus || "unknown"} />
+            <span className={`badge ${storageBadgeClass(site.storageBackend)}`}>{storageLabel(site.storageBackend)}</span>
             <span className="badge badge-neutral num">{site.currentVersion || site.version || "-"}</span>
           </div>
           <div className="grid grid-cols-2 gap-2 text-xs">

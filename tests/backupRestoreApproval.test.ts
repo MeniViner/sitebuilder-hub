@@ -252,7 +252,9 @@ describe("backup restore approval gating", () => {
     const result = await enqueueBackupRestore({
       backupId: backup._id,
       createdBy: "operator",
-      notes: "restore after deploy"
+      notes: "restore after deploy",
+      connectorMode: "backend-sharepoint",
+      confirmBackendSharePoint: true
     });
 
     expect(mocks.assertSharePointWriteAvailable).toHaveBeenCalledTimes(1);
@@ -391,7 +393,9 @@ describe("backup restore approval gating", () => {
       enqueueBackupRestore({
         backupId: backup._id,
         createdBy: "operator",
-        notes: "restore after deploy"
+        notes: "restore after deploy",
+        connectorMode: "backend-sharepoint",
+        confirmBackendSharePoint: true
       })
     ).rejects.toThrow("dangerous-write-backup-required:restore");
 
@@ -439,7 +443,9 @@ describe("backup restore approval gating", () => {
       enqueueBackupRestore({
         backupId: backup._id,
         createdBy: "operator",
-        notes: "restore after deploy"
+        notes: "restore after deploy",
+        connectorMode: "backend-sharepoint",
+        confirmBackendSharePoint: true
       })
     ).rejects.toThrow("dangerous-write-backup-required:restore");
 

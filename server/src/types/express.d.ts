@@ -10,6 +10,8 @@ export type AuthUser = {
   email?: string;
   identityMode?: "sharepoint-user" | "explicit-owner" | "local-fallback" | "api-key";
   isBootstrapAdmin?: boolean;
+  ownerMode?: boolean;
+  ownerModeReason?: string;
 };
 
 declare global {

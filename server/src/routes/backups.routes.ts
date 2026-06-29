@@ -3,6 +3,7 @@ import {
   getBackups,
   getBackup,
   planAllBackups,
+  postBrowserVerifyBackup,
   postRestoreBackup,
   postRestorePlan,
   postVerifyBackup,
@@ -16,6 +17,7 @@ router.get("/", getBackups);
 router.post("/plan-all", requireRole("operator"), planAllBackups);
 router.post("/run-all", requireRole("admin"), runAllBackups);
 router.get("/:id", getBackup);
+router.post("/:id/browser-verify", requireRole("operator"), postBrowserVerifyBackup);
 router.post("/:id/verify", requireRole("operator"), postVerifyBackup);
 router.post("/:id/restore-plan", requireRole("operator"), postRestorePlan);
 router.post("/:id/restore", requireRole("admin"), postRestoreBackup);

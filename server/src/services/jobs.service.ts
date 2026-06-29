@@ -2,9 +2,24 @@ import { Types } from "mongoose";
 import { env, ownerDirectModeEnabled } from "../config/env";
 import { Job } from "../models/Job";
 import { logger } from "../utils/logger";
+import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
 
-export type JobType = "health-check" | "deploy" | "backup" | "restore" | "admin-sync" | "repair" | "version-upgrade" | "version-rollback" | "site-provision" | "permissions-setup" | "site-bootstrap";
-export type JobStatus = "awaiting-approval" | "queued" | "preflight" | "running" | "verifying" | "succeeded" | "failed" | "cancelled" | "retrying";
+export type JobType = "health-check" | "deploy" | "backup" | "restore" | "admin-sync" | "repair" | "version-upgrade" | "version-rollback" | "site-provision" | "permissions-setup" | "site-bootstrap" | "runtime-config-check" | "mongo-health-check" | "mongo-seed";
+export type JobStatus =
+  | "awaiting-approval"
+  | "queued"
+  | "browser-required"
+  | "browser-in-progress"
+  | "blocked-service-auth-required"
+  | "preflight"
+  | "running"
+  | "verifying"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "retrying";
+export type JobExecutionMode = "backend" | "browser-required" | "browser-in-progress" | "completed" | "failed" | "blocked-service-auth-required";
+export type JobConnectorMode = "backend-sharepoint" | "browser-sharepoint" | "mongo-backend" | "server-local" | "backend-service-auth-required" | "manual" | "none";
 type JobLogLevel = "info" | "warn" | "error";
 
 const clampProgress = (progressPercent: number) => Math.max(0, Math.min(100, progressPercent));
@@ -39,7 +54,7 @@ const approvalTtlMs = () => {
   return normalizedHours * 60 * 60 * 1000;
 };
 
-export const approvalsEnabled = () => !ownerDirectModeEnabled();
+export const approvalsEnabled = () => !ownerDirectModeEnabled() && !isDangerousValidationBypassEnabled("approval-gates");
 
 const formatApprovalSummary = (summary?: string | Record<string, unknown>) => {
   if (!summary) return "";
@@ -97,13 +112,26 @@ export async function createJob(input: {
   approvalSummary?: string | Record<string, unknown>;
   approvalSnapshot?: unknown;
   approvalExpiresAt?: Date;
+  executionMode?: JobExecutionMode;
+  connectorMode?: JobConnectorMode;
+  operationPolicy?: string;
+  connectorStatusLabel?: string;
+  connectorBlocker?: string;
 }) {
   const requestedApproval = Boolean(input.requiresApproval);
   const requiresApproval = approvalsEnabled() ? requestedApproval : false;
   const createdBy = normalizeActorName(input.createdBy);
   const createdById = normalizeActorId(input.createdById);
   const now = new Date();
-  const initialStatus: JobStatus = requiresApproval ? "awaiting-approval" : "queued";
+  const executionMode: JobExecutionMode = input.executionMode || "backend";
+  const connectorMode: JobConnectorMode = input.connectorMode || (executionMode === "browser-required" ? "browser-sharepoint" : "backend-sharepoint");
+  const initialStatus: JobStatus = requiresApproval
+    ? "awaiting-approval"
+    : executionMode === "browser-required"
+      ? "browser-required"
+      : executionMode === "blocked-service-auth-required"
+        ? "blocked-service-auth-required"
+        : "queued";
   const approvalSummary = formatApprovalSummary(input.approvalSummary);
   const approvalExpiresAt = input.approvalExpiresAt || (requiresApproval ? new Date(now.getTime() + approvalTtlMs()) : undefined);
 
@@ -115,7 +143,11 @@ export async function createJob(input: {
     maxAttempts: input.maxAttempts ?? 3,
     requiresApproval,
     requestedApproval,
+    executionMode,
+    connectorMode,
+    operationPolicy: input.operationPolicy,
     ownerDirectMode: ownerDirectModeEnabled(),
+    dangerousApprovalBypassEnvVar: getDangerousValidationBypassEnvVar("approval-gates") || undefined,
     approvalSummary,
     approvalExpiresAt,
     payload: logger.isPayloadLoggingEnabled() ? input.payload : undefined,
@@ -130,6 +162,11 @@ export async function createJob(input: {
     createdById,
     maxAttempts: input.maxAttempts ?? 3,
     status: initialStatus,
+    executionMode,
+    connectorMode,
+    operationPolicy: input.operationPolicy || "",
+    connectorStatusLabel: input.connectorStatusLabel || "",
+    connectorBlocker: input.connectorBlocker || "",
     progressPercent: 0,
     attempt: 0,
     requiresApproval,
@@ -138,20 +175,32 @@ export async function createJob(input: {
       ? {
           ...(typeof input.approvalSnapshot === "object" && input.approvalSnapshot !== null ? input.approvalSnapshot as Record<string, unknown> : {}),
           approvalSkipped: true,
-          approvalSkippedReason: "owner-direct-mode"
+          approvalSkippedReason: getDangerousValidationBypassEnvVar("approval-gates") || "owner-direct-mode"
         }
       : input.approvalSnapshot,
     approvalExpiresAt,
     approvalRequestedAt: requiresApproval ? now : undefined,
     approvalRequestedBy: requiresApproval ? createdBy : "",
     approvalRequestedById: requiresApproval ? createdById : "",
-    logs: [{ level: "info", message: requiresApproval ? "Job awaiting approval" : "Job queued", at: now }]
+    logs: [{
+      level: executionMode === "blocked-service-auth-required" ? "warn" : "info",
+      message: requiresApproval
+        ? "Job awaiting approval"
+        : executionMode === "browser-required"
+          ? "Job waiting for browser SharePoint execution"
+          : executionMode === "blocked-service-auth-required"
+            ? input.connectorBlocker || "Job blocked because backend SharePoint service auth is required"
+            : "Job queued",
+      at: now
+    }]
   });
-  logger.info("jobs", requiresApproval ? "Job awaiting approval" : "Job queued", {
+  logger.info("jobs", requiresApproval ? "Job awaiting approval" : initialStatus === "browser-required" ? "Job waiting for browser execution" : initialStatus === "blocked-service-auth-required" ? "Job blocked for service auth" : "Job queued", {
     jobId: job._id.toString(),
     type: job.type,
     siteId: job.siteId?.toString(),
     status: job.status,
+    executionMode,
+    connectorMode,
     requiresApproval
   });
   return job;
@@ -175,11 +224,20 @@ export async function approveJobWithActor(jobId: string, approvedBy: { name: str
     throw new Error("job-approval-expired");
   }
   logSelfApprovalIfSameActor(job, actor, actorId);
+  const executionMode = String((job as any).executionMode || "backend");
+  const browserConnector = (job as any).connectorMode === "browser-sharepoint" || (job.payload as any)?.connectorMode === "browser-sharepoint";
+  const approvedStatus: JobStatus = browserConnector
+    ? "browser-required"
+    : executionMode === "blocked-service-auth-required"
+      ? "blocked-service-auth-required"
+      : "queued";
 
   logger.info("jobs", "Approving job", {
     jobId,
     type: job.type,
     siteId: job.siteId?.toString(),
+    executionMode,
+    approvedStatus,
     approvedBy: actor,
     reason: decisionReason
   });
@@ -188,7 +246,8 @@ export async function approveJobWithActor(jobId: string, approvedBy: { name: str
     jobId,
     {
       $set: {
-        status: "queued",
+        status: approvedStatus,
+        executionMode: approvedStatus === "browser-required" ? "browser-required" : approvedStatus === "blocked-service-auth-required" ? "blocked-service-auth-required" : "backend",
         progressPercent: 0,
         approvedAt: now,
         approvedBy: actor,
@@ -214,7 +273,13 @@ export async function approveJobWithActor(jobId: string, approvedBy: { name: str
       $push: {
         logs: {
           level: "info",
-          message: decisionReason ? `Job approved: ${decisionReason}` : "Job approved",
+          message: decisionReason
+            ? approvedStatus === "browser-required"
+              ? `Job approved and waiting for browser SharePoint execution: ${decisionReason}`
+              : `Job approved: ${decisionReason}`
+            : approvedStatus === "browser-required"
+              ? "Job approved and waiting for browser SharePoint execution"
+              : "Job approved",
           at: now
         }
       }
@@ -326,6 +391,11 @@ export async function setJobStatus(jobId: string, status: JobStatus, options: {
   if (options.progressPercent !== undefined) {
     $set.progressPercent = clampProgress(options.progressPercent);
   }
+  if (status === "browser-in-progress") {
+    $set.executionMode = "browser-in-progress";
+  } else if (status === "blocked-service-auth-required") {
+    $set.executionMode = "blocked-service-auth-required";
+  }
   if (options.startedAt) {
     $set.startedAt = options.startedAt;
   }
@@ -427,11 +497,16 @@ export async function setJobProgress(jobId: string, progressPercent: number, mes
 }
 
 export async function setJobSucceeded(jobId: string, message = "Job completed") {
-  return setJobStatus(jobId, "succeeded", {
+  const updated = await setJobStatus(jobId, "succeeded", {
     progressPercent: 100,
     finishedAt: new Date(),
     message
   });
+  if (updated) {
+    updated.executionMode = "completed" as any;
+    await updated.save();
+  }
+  return updated;
 }
 
 export async function setJobFailed(jobId: string, errorMessage: string) {
@@ -441,6 +516,7 @@ export async function setJobFailed(jobId: string, errorMessage: string) {
     {
       $set: {
         status: "failed",
+        executionMode: "failed",
         finishedAt: new Date(),
         errorMessage,
         errorCode: "JOB_FAILED"
@@ -457,6 +533,9 @@ export async function claimNextJob() {
   const job = await Job.findOneAndUpdate(
     {
       status: "queued",
+      executionMode: { $nin: ["browser-required", "browser-in-progress", "blocked-service-auth-required"] },
+      "payload.connectorMode": { $ne: "browser-sharepoint" },
+      "payload.executionMode": { $ne: "browser-required" },
       $or: [{ nextRetryAt: { $exists: false } }, { nextRetryAt: null }, { nextRetryAt: { $lte: now } }]
     },
     {

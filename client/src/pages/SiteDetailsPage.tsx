@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Archive, ClipboardList, DatabaseBackup, Edit3, ExternalLink, Eye, FileClock, FolderInput, GitBranch, ListChecks, MessageSquareText, MoreHorizontal, RefreshCcw, Rocket, ShieldCheck, Users, Workflow } from "lucide-react";
-import { Backup, BackupPlan, DeploymentVerificationEvidence, Job, PermissionsSetupPlan, SharePointHealthEvidence, SharePointHealthResult, SiteBootstrapPlan, SiteDeployment, SiteOperationsSummary, SiteProvisionPlan, sitesApi } from "../api/sitesApi";
+import { Backup, BackupPlan, BuilderMongoHealthResult, DeploymentVerificationEvidence, Job, PermissionsSetupPlan, RuntimeConfigValidationResult, SharePointHealthEvidence, SharePointHealthResult, SiteBootstrapPlan, SiteDeployment, SiteOperationsSummary, SiteProvisionPlan, sitesApi } from "../api/sitesApi";
 import { Site, SiteHealth } from "../types/site";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { AdminLiveReadMeta, AdminSourceLists, AdminSourceStatusTable, AdminSourceSummaryCards } from "../components/AdminSourceSummaryCards";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { DetailsDrawer } from "../components/DetailsDrawer";
 import { EmptyState } from "../components/EmptyState";
@@ -22,6 +23,9 @@ import { StatusBadge } from "../components/StatusBadge";
 import { VersionBadge } from "../components/VersionBadge";
 import type { HelpContentKey } from "../help/helpContent";
 import { formatBytes, formatDateTime, formatMb, formatNumber, jobStatusLabel, jobTypeLabel } from "../utils/format";
+import { runBrowserSharePointBackupOperation } from "../utils/sharepointBrowserOperationRunner";
+import { buildBrowserSharePointBackupPlan } from "../utils/sharepointBrowserConnector";
+import { useBrowserAdminsLiveRead } from "../hooks/useBrowserAdminsLiveRead";
 
 type TabKey = "overview" | "paths" | "health" | "versions" | "backups" | "admins" | "jobs" | "audit" | "notes";
 
@@ -343,6 +347,8 @@ export function SiteDetailsPage() {
   const [message, setMessage] = useState("");
   const [healthDraft, setHealthDraft] = useState<SiteHealth>({});
   const [sharePointHealth, setSharePointHealth] = useState<SharePointHealthResult | null>(null);
+  const [runtimeConfigResult, setRuntimeConfigResult] = useState<RuntimeConfigValidationResult | null>(null);
+  const [mongoHealthResult, setMongoHealthResult] = useState<BuilderMongoHealthResult | null>(null);
   const [backupPlan, setBackupPlan] = useState<BackupPlan | null>(null);
   const [bootstrapPlan, setBootstrapPlan] = useState<SiteBootstrapPlan | null>(null);
   const [provisionPlan, setProvisionPlan] = useState<SiteProvisionPlan | null>(null);
@@ -387,6 +393,35 @@ export function SiteDetailsPage() {
     else next.set("tab", tab);
     setSearchParams(next, { replace: true });
   };
+  const {
+    liveData: adminLiveData,
+    busy: adminsLiveReadBusy,
+    runLiveRead: runAdminsLiveRead
+  } = useBrowserAdminsLiveRead({
+    site,
+    adminData,
+    auto: activeTab === "admins",
+    onPersisted: (adminSummary) => {
+      setAdminData(adminSummary);
+      setSite((current) => current
+        ? {
+            ...current,
+            adminsCount: adminSummary.adminsCount,
+            lastAdminSyncAt: adminSummary.lastAdminSyncAt,
+            lastAdminLiveReadAt: adminSummary.lastAdminLiveReadAt,
+            lastAdminLiveReadSource: adminSummary.lastAdminLiveReadSource,
+            adminSyncStatus: adminSummary.adminSyncStatus as Site["adminSyncStatus"],
+            txtAdmins: adminSummary.txtAdmins,
+            siteCollectionAdmins: adminSummary.siteCollectionAdmins,
+            ownersGroupAdmins: adminSummary.ownersGroupAdmins,
+            adminSourceStatus: adminSummary.sourceStatus,
+            adminSourceCounts: adminSummary.sourceCounts
+          }
+        : current);
+    },
+    onMessage: setMessage,
+    onError: setError
+  });
   const paths = site?.resolvedPaths;
   const jobs = (summary?.recent.jobs || []) as Job[];
   const backups = summary?.recent.backups || [];
@@ -396,25 +431,8 @@ export function SiteDetailsPage() {
   const bootstrapBlockersCount = bootstrapBlockers.length;
   const bootstrapTargetUrl = bootstrapPlan?.targetWeb?.sharePointSiteUrl || site?.sharePointSiteUrl || "";
   const bootstrapReady = bootstrapPlan?.summary?.readyForBootstrapExecution ?? (bootstrapBlockersCount === 0);
-  const adminSources = useMemo(() => [
-    { label: "TXT admins", rows: adminData?.txtAdmins || [] },
-    { label: "Site Collection Admins", rows: adminData?.siteCollectionAdmins || [] },
-    { label: "Owners Group", rows: adminData?.ownersGroupAdmins || [] }
-  ], [adminData]);
-  const calculatedAdminsCount = useMemo(() => {
-    const keys = new Set<string>();
-    adminSources.forEach((source) => {
-      source.rows.forEach((admin: any) => {
-        const key = String(admin.personalNumber || admin.email || admin.loginName || admin.displayName || "").trim().toLowerCase();
-        if (key) keys.add(key);
-      });
-    });
-    return keys.size;
-  }, [adminSources]);
-  const adminsDisplayCount = adminData
-    ? Math.max(Number(adminData.adminsCount || 0), calculatedAdminsCount)
-    : Number(site?.adminsCount || 0);
-  const adminsSourceLabel = adminData ? "Snapshot מנהלים" : "רשומת אתר";
+  const adminsDisplayCount = adminLiveData?.adminsCount ?? adminData?.adminsCount ?? Number(site?.adminsCount || 0);
+  const adminsSourceLabel = adminLiveData ? "נמשך מ־SharePoint דרך הדפדפן" : adminData ? "Snapshot" : "רשומת אתר";
 
   const pathRows = useMemo(() => {
     if (!site) return [];
@@ -426,6 +444,8 @@ export function SiteDetailsPage() {
       { label: "siteUsersDb root", value: paths?.usersDbRoot || site.usersDbLibrary, description: "Document Library לנתוני משתמשים/widgets" },
       { label: "siteAssets root", value: paths?.siteAssetsRoot },
       { label: "dist root", value: paths?.finalDistRoot },
+      { label: "runtime config path", value: site.runtimeConfigPath || paths?.runtimeConfigPath },
+      { label: "runtime config URL", value: site.runtimeConfigUrl || paths?.runtimeConfigUrl, isUrl: true },
       { label: "master config path", value: paths?.txtFiles?.masterConfig },
       { label: "users_data path", value: paths?.txtFiles?.users },
       { label: "widgets_data path", value: paths?.txtFiles?.widgets },
@@ -757,14 +777,14 @@ export function SiteDetailsPage() {
       {activeTab === "health" ? (
         <div className="grid gap-5 xl:grid-cols-2">
           <SectionCard title="תקינות נוכחית" subtitle="מצב אחרון שנשמר ב־Hub" helpKey="health">
-            <HealthChecklist health={site.health} />
+            <HealthChecklist health={site.health} storageBackend={site.storageBackend || "unknown"} />
           </SectionCard>
           <SectionCard title="בדיקות" subtitle="בדיקה ידנית או קריאה בלבד מול SharePoint" helpKey="health.readOnly">
             <div className="mb-4 flex flex-wrap gap-2">
               <MetadataOnlyBadge mode="metadata" />
               <MetadataOnlyBadge mode="readonly" />
             </div>
-            <HealthChecklist health={healthDraft} editable onChange={setHealthDraft} />
+            <HealthChecklist health={healthDraft} storageBackend={site.storageBackend || "unknown"} editable onChange={setHealthDraft} />
             <div className="mt-4 flex flex-wrap gap-2">
               <button className="btn btn-secondary" disabled={busyAction === "manual-health"} onClick={() => runAction("manual-health", async () => {
                 await sitesApi.updateManualHealth(site._id, healthDraft);
@@ -777,6 +797,58 @@ export function SiteDetailsPage() {
                 setMessage("בדיקת SharePoint read-only הסתיימה");
                 await load();
               })} type="button">הרץ SharePoint read-only</button>
+              <button className="btn btn-secondary" disabled={busyAction === "runtime-config"} onClick={() => runAction("runtime-config", async () => {
+                const result = await sitesApi.validateRuntimeConfig(site._id);
+                setRuntimeConfigResult(result.data);
+                setMessage("בדיקת runtime config הסתיימה");
+                await load();
+              })} type="button">בדוק runtime config</button>
+              <button className="btn btn-secondary" disabled={busyAction === "mongo-health" || site.storageBackend !== "mongo"} onClick={() => runAction("mongo-health", async () => {
+                const result = await sitesApi.runMongoBackendHealth(site._id);
+                setMongoHealthResult(result.data);
+                setMessage("בדיקת Mongo backend הסתיימה");
+                await load();
+              })} type="button">בדוק Mongo backend</button>
+            </div>
+            <div className="mt-5 grid gap-3">
+              <div className="soft-panel p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-bold">Runtime config</p>
+                  <span className={`badge ${site.runtimeConfigStatus?.readStatus === "configured" || runtimeConfigResult?.readStatus === "configured" ? "badge-success" : "badge-neutral"}`}>
+                    {runtimeConfigResult?.readStatus || site.runtimeConfigStatus?.readStatus || "unknown"}
+                  </span>
+                </div>
+                <LinkRow label="Path" value={runtimeConfigResult?.runtimeConfigPath || site.runtimeConfigStatus?.path || site.runtimeConfigPath || paths?.runtimeConfigPath} />
+                <LinkRow label="Backend URL" value={runtimeConfigResult?.backendApiUrlHost || site.runtimeConfigStatus?.backendApiUrlHost || ""} />
+                <LinkRow label="Builder siteId" value={runtimeConfigResult?.builderSiteId || site.runtimeConfigStatus?.builderSiteId || site.builderSiteId || site.mongoSiteId || ""} />
+                <LinkRow label="API key" value={runtimeConfigResult?.apiKeyStatus || site.runtimeConfigStatus?.apiKeyStatus || "unknown"} />
+                {(runtimeConfigResult?.warnings || site.runtimeConfigStatus?.warnings || []).length ? (
+                  <div className="mt-2 rounded-md border p-2 text-sm" style={{ borderColor: "var(--border)", background: "var(--warning-soft)", color: "var(--warning)" }}>
+                    {(runtimeConfigResult?.warnings || site.runtimeConfigStatus?.warnings || []).join(" · ")}
+                  </div>
+                ) : null}
+              </div>
+              {site.storageBackend === "mongo" ? (
+                <div className="soft-panel p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-bold">Mongo / Builder backend</p>
+                    <span className={`badge ${mongoHealthResult?.seedStatus === "ok" || site.mongoBackendStatus?.seedStatus === "ok" ? "badge-success" : "badge-warning"}`}>
+                      Seed: {mongoHealthResult?.seedStatus || site.mongoBackendStatus?.seedStatus || "unknown"}
+                    </span>
+                  </div>
+                  <LinkRow label="Backend URL" value={mongoHealthResult?.backendApiUrlHost || site.mongoBackendStatus?.backendApiUrlHost || site.backendApiUrl || ""} />
+                  <LinkRow label="Mongo siteId" value={mongoHealthResult?.builderSiteId || site.mongoBackendStatus?.siteId || site.mongoSiteId || site.builderSiteId || ""} />
+                  <LinkRow label="safeCollectionName" value={mongoHealthResult?.safeCollectionName || site.mongoBackendStatus?.safeCollectionName || site.safeCollectionName || ""} />
+                  <LinkRow label="Registry" value={mongoHealthResult?.registryStatus || site.mongoBackendStatus?.registryStatus || "unknown"} />
+                  <LinkRow label="Collection" value={mongoHealthResult?.collectionStatus || site.mongoBackendStatus?.collectionStatus || "unknown"} />
+                  <LinkRow label="Backups" value={mongoHealthResult?.backupsStatus || site.mongoBackendStatus?.backupsStatus || "unknown"} />
+                  {(mongoHealthResult?.missingDocs || site.mongoBackendStatus?.missingDocs || []).length ? (
+                    <div className="mt-2 rounded-md border p-2 text-sm" style={{ borderColor: "var(--border)", background: "var(--warning-soft)", color: "var(--warning)" }}>
+                      חסרים seed docs: {(mongoHealthResult?.missingDocs || site.mongoBackendStatus?.missingDocs || []).join(", ")}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
             {sharePointHealth ? (
               <div className="mt-5">
@@ -843,19 +915,38 @@ export function SiteDetailsPage() {
       ) : null}
 
       {activeTab === "backups" ? (
-        <SectionCard title="גיבויים" subtitle="תכנון גיבוי הוא read-only; ביצוע גיבוי דורש כתיבה מוגדרת" helpKey="backup">
+        <SectionCard title="גיבויים" subtitle="גיבוי משתמש רץ דרך הדפדפן המחובר ל־SharePoint; השרת שומר תוכנית ו־evidence בלבד." helpKey="backup">
           <div className="mb-4 flex flex-wrap gap-2">
             <button className="btn btn-primary" disabled={busyAction === "backup-plan"} onClick={() => runAction("backup-plan", async () => {
-              const result = await sitesApi.siteBackupPlan(site._id);
-              setBackupPlan(result.data);
-              setMessage("תוכנית גיבוי read-only נוצרה");
+              const plan = await buildBrowserSharePointBackupPlan(site);
+              setBackupPlan(plan);
+              setMessage("תוכנית גיבוי דרך הדפדפן נוצרה");
             })} type="button">צור תוכנית גיבוי</button>
-            <button className="btn btn-secondary" disabled={!writeAvailable || busyAction === "run-backup"} onClick={() => runAction("run-backup", async () => {
-              const result = await sitesApi.runSiteBackup(site._id);
-              setMessage(`נוצר Job לגיבוי: ${result.data.job._id}`);
+            <button className="btn btn-secondary" disabled={busyAction === "run-backup"} onClick={() => runAction("run-backup", async () => {
+              const queued = await sitesApi.runSiteBackup(site._id);
+              if (!queued.data.browserOperationPlan) {
+                throw new Error(queued.data.message || "גיבוי דרך הדפדפן עדיין לא מוכן לפעולה הזאת.");
+              }
+              const result = await runBrowserSharePointBackupOperation(site, { plan: queued.data.browserOperationPlan });
+              const stored = await sitesApi.recordBrowserBackupEvidence(site._id, {
+                connectorMode: "browser-sharepoint",
+                jobId: queued.data.job._id,
+                targetSiteUrl: result.targetSiteUrl,
+                backupId: result.backupId,
+                target: result.target,
+                sourcePaths: result.sourcePaths,
+                verificationEvidence: result.verificationEvidence,
+                errors: result.errors,
+                startedAt: result.startedAt,
+                completedAt: result.completedAt,
+                finalStatus: result.finalStatus
+              });
+              setMessage(result.finalStatus === "success"
+                ? `גיבוי ${stored.data.backup.backupId} הושלם דרך הדפדפן`
+                : `גיבוי ${result.backupId} נכשל דרך הדפדפן; evidence נשמר`);
               await load();
-            })} type="button">הרץ גיבוי אמיתי</button>
-            {!writeAvailable ? <MetadataOnlyBadge mode="notConnected" /> : null}
+            })} type="button">הרץ גיבוי בדפדפן</button>
+            {!writeAvailable ? <span className="badge badge-warning">השרת המקומי לא מחובר ל־SharePoint, אבל הגיבוי משתמש בחיבור הדפדפן ולכן ניתן להמשיך.</span> : null}
           </div>
           {backupPlan ? (
             <div className="mb-5 space-y-3">
@@ -898,36 +989,26 @@ export function SiteDetailsPage() {
       ) : null}
 
       {activeTab === "admins" ? (
-        <SectionCard title="מנהלים" subtitle="מקורות: TXT, Site Collection Admins ו־Owners Group" helpKey="site.admins">
+        <SectionCard title="מנהלים" subtitle="מקורות: TXT, Site Collection Admins ו־Owners Group דרך חיבור הדפדפן" helpKey="site.admins">
           <div className="mb-4 flex flex-wrap gap-2">
             <MetadataOnlyBadge mode="metadata" />
             <MetadataOnlyBadge mode="readonly" />
+            <span className="badge badge-success">מופעל דרך הדפדפן</span>
+            <button className="btn btn-primary" disabled={adminsLiveReadBusy || busyAction === "admins-live-read"} onClick={() => runAction("admins-live-read", async () => {
+              await runAdminsLiveRead();
+            })} type="button"><RefreshCcw size={14} />רענן מנהלים עכשיו</button>
             <Link className="btn btn-secondary" to="/admins">פתח את מסך המנהלים</Link>
           </div>
-          <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard title="מנהלים ייחודיים" value={formatNumber(adminsDisplayCount)} icon={<Users size={18} />} description={adminsSourceLabel} tone="info" variant="inline" helpKey="site.admins" />
-            <KpiCard title="TXT admins" value={formatNumber(adminSources[0].rows.length)} icon={<Users size={18} />} description="users_data.txt / Snapshot" tone="neutral" variant="inline" helpKey="site.txtAdmins" />
-            <KpiCard title="Site Collection" value={formatNumber(adminSources[1].rows.length)} icon={<Users size={18} />} description="SharePoint siteusers" tone="neutral" variant="inline" helpKey="site.siteCollectionAdmins" />
-            <KpiCard title="Owners Group" value={formatNumber(adminSources[2].rows.length)} icon={<Users size={18} />} description="Associated owners group" tone="neutral" variant="inline" helpKey="site.ownersGroup" />
+          <div className="mb-4">
+            <AdminSourceSummaryCards adminData={adminData} liveData={adminLiveData} siteLabel={adminsSourceLabel} variant="inline" />
           </div>
-          <div className="grid gap-4 md:grid-cols-3">
-            {adminSources.map(({ label, rows }) => (
-              <div key={label} className="soft-panel p-4">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <h3 className="font-bold" style={{ color: "var(--text-strong)" }}>{label}</h3>
-                  <span className="num badge badge-neutral">{rows.length}</span>
-                </div>
-                <div className="space-y-2">
-                  {rows.length === 0 ? <p className="text-sm muted">אין רשומות</p> : rows.slice(0, 8).map((admin: any, index: number) => (
-                    <div key={`${label}-${index}`} className="border-b divider pb-2 last:border-b-0">
-                      <p className="text-sm font-bold">{admin.displayName || "-"}</p>
-                      <p className="num text-xs muted">{admin.personalNumber || admin.email || admin.loginName || "-"}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
+          <div className="mb-4">
+            <AdminLiveReadMeta liveData={adminLiveData} adminData={adminData} />
           </div>
+          <div className="mb-4">
+            <AdminSourceStatusTable data={adminLiveData || adminData} />
+          </div>
+          <AdminSourceLists adminData={adminData} liveData={adminLiveData} limit={8} />
         </SectionCard>
       ) : null}
 

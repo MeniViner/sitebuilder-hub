@@ -19,6 +19,26 @@ const adminDiffSchema = new Schema(
   { _id: false }
 );
 
+const adminSourceStatusSchema = new Schema(
+  {
+    source: { type: String, enum: ["txt", "siteCollection", "ownersGroup"], required: true },
+    status: { type: String, enum: ["success", "failed", "skipped"], default: "skipped" },
+    ok: { type: Boolean, default: false },
+    count: { type: Number },
+    rawCount: { type: Number },
+    normalizedCount: { type: Number },
+    httpStatus: { type: Number },
+    httpStatusText: { type: String, default: "" },
+    sourceUrl: { type: String, default: "" },
+    readAt: { type: Date },
+    errorCode: { type: String, default: "" },
+    errorMessage: { type: String, default: "" },
+    error: { type: String, default: "" },
+    warnings: { type: [String], default: [] }
+  },
+  { _id: false }
+);
+
 const siteAdminSnapshotSchema = new Schema(
   {
     siteId: { type: Schema.Types.ObjectId, ref: "Site", required: true, index: true },
@@ -26,10 +46,13 @@ const siteAdminSnapshotSchema = new Schema(
 
     capturedBy: { type: String, default: "system" },
     capturedAt: { type: Date, default: Date.now },
+    connectorMode: { type: String, enum: ["browser-sharepoint", "backend-sharepoint", "mongo-backend"], default: "backend-sharepoint" },
+    targetSiteUrl: { type: String, default: "" },
 
     txtAdmins: { type: [adminIdentitySchema], default: [] },
     siteCollectionAdmins: { type: [adminIdentitySchema], default: [] },
     ownersGroupAdmins: { type: [adminIdentitySchema], default: [] },
+    uniqueAdmins: { type: [adminIdentitySchema], default: [] },
 
     syncStatus: {
       type: String,
@@ -37,7 +60,12 @@ const siteAdminSnapshotSchema = new Schema(
       default: "running"
     },
     syncError: { type: String, default: "" },
-    adminDifferences: { type: adminDiffSchema, default: () => ({}) }
+    adminDifferences: { type: adminDiffSchema, default: () => ({}) },
+    sourceStatus: { type: [adminSourceStatusSchema], default: [] },
+    rawCounts: { type: Schema.Types.Mixed, default: () => ({}) },
+    normalizedCounts: { type: Schema.Types.Mixed, default: () => ({}) },
+    warnings: { type: [String], default: [] },
+    evidence: { type: Schema.Types.Mixed, default: () => ({}) }
   },
   { timestamps: true }
 );

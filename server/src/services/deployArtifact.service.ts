@@ -23,8 +23,11 @@ import {
   SharePointReadOnlyHealthResult
 } from "./sharepointHealth.service";
 import { buildDeployPolicy, DeployMode, DeployPolicySnapshot } from "./deployPolicy.service";
+import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
 
 type DeployConnectorMode = "backend-sharepoint" | "browser-sharepoint";
+export type ArtifactStorageCompatibility = "txt" | "mongo";
+export type ReleaseArtifactKind = "site-builder-frontend" | "legacy-txt-frontend" | "mongo-frontend" | "unknown";
 
 type DeployPlanFile = {
   relativePath: string;
@@ -79,6 +82,7 @@ type ResolvedArtifactFiles = {
   hasManifest: boolean;
   manifestPath: string;
   files: string[];
+  manifestMetadata: Partial<ArtifactCompatibilityMetadata>;
 };
 
 type ReleaseArtifactValidationSnapshot = {
@@ -90,6 +94,14 @@ type ReleaseArtifactValidationSnapshot = {
   hasManifest: boolean;
   manifestSha256: string;
   inventorySha256: string;
+  storageCompatibility: ArtifactStorageCompatibility[];
+  artifactKind: ReleaseArtifactKind;
+  requiresRuntimeConfig: boolean;
+  preservesRuntimeConfig: boolean;
+  requiredFolders: string[];
+  runtimeConfigFiles: string[];
+  compatibilitySource: "manifest" | "inferred" | "unknown";
+  compatibilityWarnings: string[];
   readyForDeploy: boolean;
   validatedAt: Date;
   validationError: string;
@@ -111,6 +123,13 @@ type ReleaseArtifactValidationResult = {
     hasManifest: boolean;
     manifestSha256: string;
     inventorySha256: string;
+    storageCompatibility: ArtifactStorageCompatibility[];
+    artifactKind: ReleaseArtifactKind;
+    requiresRuntimeConfig: boolean;
+    preservesRuntimeConfig: boolean;
+    requiredFolders: string[];
+    runtimeConfigFiles: string[];
+    compatibilitySource: "manifest" | "inferred" | "unknown";
     readyForDeploy: boolean;
   };
   snapshot: ReleaseArtifactValidationSnapshot;
@@ -132,6 +151,7 @@ export type ReleaseArtifactManifest = {
   version: string;
   artifactRef: string;
   artifactRoot: string;
+  compatibility: ArtifactCompatibilityMetadata;
   files: ReleaseArtifactManifestFile[];
   summary: {
     filesCount: number;
@@ -139,6 +159,13 @@ export type ReleaseArtifactManifest = {
     totalSizeBytes: number;
     hasIndexHtml: boolean;
     hasManifest: boolean;
+    storageCompatibility: ArtifactStorageCompatibility[];
+    artifactKind: ReleaseArtifactKind;
+    requiresRuntimeConfig: boolean;
+    preservesRuntimeConfig: boolean;
+    requiredFolders: string[];
+    runtimeConfigFiles: string[];
+    compatibilitySource: "manifest" | "inferred" | "unknown";
     readyForDeploy: boolean;
   };
 };
@@ -195,6 +222,7 @@ export type SiteDeployPlan = {
   releaseVersion: string;
   artifactRef: string;
   artifactRoot: string;
+  artifactCompatibility: ArtifactCompatibilityMetadata;
   siteId: string;
   siteCode: string;
   target: {
@@ -202,6 +230,9 @@ export type SiteDeployPlan = {
     siteCode: string;
     siteDisplayName: string;
     environment: string;
+    storageBackend: string;
+    runtimeConfigPath: string;
+    dataBackendStatus: string;
     sharePointSiteUrl: string;
     finalAppUrl: string;
     currentKnownVersion: string;
@@ -222,6 +253,13 @@ export type SiteDeployPlan = {
     totalSizeBytes: number;
     hasIndexHtml: boolean;
     hasManifest: boolean;
+    storageCompatibility: ArtifactStorageCompatibility[];
+    artifactKind: ReleaseArtifactKind;
+    requiresRuntimeConfig: boolean;
+    preservesRuntimeConfig: boolean;
+    requiredFolders: string[];
+    runtimeConfigFiles: string[];
+    skippedRuntimeConfigFilesCount: number;
     readyForDeploy: boolean;
     readyForDeployExecution: boolean;
     targetInventoryReadOk?: boolean;
@@ -244,8 +282,33 @@ export type SiteDeployPlan = {
   notes: string[];
 };
 
+export type ArtifactCompatibilityMetadata = {
+  storageCompatibility: ArtifactStorageCompatibility[];
+  artifactKind: ReleaseArtifactKind;
+  requiresRuntimeConfig: boolean;
+  preservesRuntimeConfig: boolean;
+  requiredFolders: string[];
+  runtimeConfigFiles: string[];
+  compatibilitySource: "manifest" | "inferred" | "unknown";
+  compatibilityWarnings: string[];
+};
+
 const MANIFEST_NAME = "sharepoint-deploy-manifest.json";
+const RUNTIME_CONFIG_FILENAMES = new Set(["sitebuilder-runtime-config.json", "runtime-config.json"]);
 const SKIP_DIRS = new Set(["node_modules", ".git"]);
+const TEXT_SIGNAL_EXTENSIONS = new Set([".html", ".js", ".mjs", ".cjs", ".css", ".json", ".txt"]);
+const MAX_SIGNAL_SCAN_BYTES = 2 * 1024 * 1024;
+
+const defaultArtifactCompatibility = (): ArtifactCompatibilityMetadata => ({
+  storageCompatibility: [],
+  artifactKind: "unknown",
+  requiresRuntimeConfig: false,
+  preservesRuntimeConfig: true,
+  requiredFolders: [],
+  runtimeConfigFiles: [],
+  compatibilitySource: "unknown",
+  compatibilityWarnings: []
+});
 
 const normalizeRelative = (value: string) => value.replace(/\\/g, "/").split(path.sep).join("/").replace(/^\/+/, "").replace(/\/+/g, "/");
 
@@ -258,6 +321,33 @@ const relativeFromTargetPath = (root: string, targetPath: string) => {
   return normalizeRelative(relative);
 };
 
+const runtimeConfigRelativePath = (resolvedPaths: SiteBuilderResolvedPaths, site: any) => {
+  const runtimeConfigPath = String(site.runtimeConfigPath || resolvedPaths.runtimeConfigPath || "").replace(/\\/g, "/");
+  const root = resolvedPaths.finalDistRoot.replace(/\/+$/g, "");
+  if (runtimeConfigPath.startsWith(`${root}/`)) return normalizeRelative(runtimeConfigPath.slice(root.length + 1));
+  return "";
+};
+
+const isRuntimeConfigDeployFile = (relativePath: string, resolvedPaths: SiteBuilderResolvedPaths, site: any) => {
+  const normalized = normalizeRelative(relativePath);
+  const configuredRelative = runtimeConfigRelativePath(resolvedPaths, site);
+  const filename = normalized.split("/").pop() || normalized;
+  return Boolean((configuredRelative && normalized === configuredRelative) || RUNTIME_CONFIG_FILENAMES.has(filename));
+};
+
+const filterRuntimeConfigDeployFiles = <T extends { relativePath: string }>(
+  files: T[],
+  resolvedPaths: SiteBuilderResolvedPaths,
+  site: any
+) => {
+  if (String(site.storageBackend || "unknown") !== "mongo") return { files, skippedRuntimeConfigFiles: [] as T[] };
+  const skippedRuntimeConfigFiles = files.filter((file) => isRuntimeConfigDeployFile(file.relativePath, resolvedPaths, site));
+  return {
+    files: files.filter((file) => !isRuntimeConfigDeployFile(file.relativePath, resolvedPaths, site)),
+    skippedRuntimeConfigFiles
+  };
+};
+
 const MAX_TARGET_INVENTORY_FILES = 5000;
 const TARGET_INVENTORY_SAMPLE_LIMIT = 50;
 const STALE_FILES_SAMPLE_LIMIT = 100;
@@ -267,6 +357,63 @@ const isSafeRelativeFile = (value: string) => {
   const normalized = normalizeRelative(value);
   if (!normalized || normalized === "." || normalized.split("/").some((segment) => segment === ".." || segment === "")) return false;
   return true;
+};
+
+const isSafeRelativeFolder = (value: string) => {
+  if (!value || path.isAbsolute(value)) return false;
+  const normalized = normalizeRelative(value).replace(/\/+$/g, "");
+  if (!normalized || normalized === "." || normalized.split("/").some((segment) => segment === ".." || segment === "")) return false;
+  return true;
+};
+
+export const deriveRequiredFoldersFromArtifactPaths = (relativePaths: string[]) => {
+  const folders = new Set<string>();
+  for (const value of relativePaths) {
+    const relativePath = normalizeRelative(String(value || "").trim());
+    if (!isSafeRelativeFile(relativePath)) {
+      throw new Error(`deploy-artifact-contains-unsafe-path:${relativePath || value}`);
+    }
+    const segments = relativePath.split("/").filter(Boolean);
+    segments.pop();
+    for (let index = 1; index <= segments.length; index += 1) {
+      folders.add(segments.slice(0, index).join("/"));
+    }
+  }
+  return Array.from(folders).sort((a, b) => a.localeCompare(b));
+};
+
+const runtimeConfigFilesFromPaths = (relativePaths: string[]) =>
+  relativePaths.filter((relativePath) => RUNTIME_CONFIG_FILENAMES.has(normalizeRelative(relativePath).split("/").pop() || ""));
+
+const normalizeStorageCompatibility = (value: unknown): ArtifactStorageCompatibility[] => {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[,\s]+/) : [];
+  return Array.from(
+    new Set(
+      raw
+        .map((item) => String(item || "").trim().toLowerCase())
+        .filter((item): item is ArtifactStorageCompatibility => item === "txt" || item === "mongo")
+    )
+  ).sort();
+};
+
+const normalizeArtifactKind = (value: unknown): ReleaseArtifactKind => {
+  const normalized = String(value || "").trim();
+  return ["site-builder-frontend", "legacy-txt-frontend", "mongo-frontend", "unknown"].includes(normalized)
+    ? normalized as ReleaseArtifactKind
+    : "unknown";
+};
+
+const booleanOrUndefined = (value: unknown) => typeof value === "boolean" ? value : undefined;
+
+const normalizeRequiredFolders = (value: unknown) => {
+  const raw = Array.isArray(value) ? value : [];
+  return Array.from(
+    new Set(
+      raw
+        .map((item) => normalizeRelative(String(item || "").trim()).replace(/\/+$/g, ""))
+        .filter((item) => item && isSafeRelativeFolder(item))
+    )
+  ).sort((a, b) => a.localeCompare(b));
 };
 
 const resolveArtifactRef = async (artifactRef: string) => {
@@ -309,14 +456,29 @@ const walkFiles = async (root: string) => {
   return files.sort();
 };
 
-const readManifest = async (manifestPath: string) => {
+const readManifest = async (manifestPath: string): Promise<{ files: string[]; metadata: Partial<ArtifactCompatibilityMetadata> }> => {
   const raw = await fs.readFile(manifestPath, "utf8");
   const parsed = JSON.parse(raw);
-  if (!Array.isArray(parsed)) throw new Error("deploy-manifest-must-be-array");
-  const files = parsed.map((item) => normalizeRelative(String(item).trim())).filter(Boolean);
+  const manifestIsArray = Array.isArray(parsed);
+  const rawFiles = manifestIsArray ? parsed : Array.isArray(parsed?.files) ? parsed.files : undefined;
+  if (!Array.isArray(rawFiles)) throw new Error("deploy-manifest-must-include-files-array");
+  const files = rawFiles.map((item) => normalizeRelative(String(item).trim())).filter(Boolean);
   const unsafeFiles = files.filter((item) => !isSafeRelativeFile(item));
   if (unsafeFiles.length > 0) throw new Error(`deploy-manifest-contains-unsafe-paths:${unsafeFiles.slice(0, 5).join(",")}`);
-  return [...new Set(files)].sort();
+  const metadata: Partial<ArtifactCompatibilityMetadata> = manifestIsArray ? {} : {
+    storageCompatibility: normalizeStorageCompatibility(parsed.storageCompatibility),
+    artifactKind: normalizeArtifactKind(parsed.artifactKind),
+    requiresRuntimeConfig: booleanOrUndefined(parsed.requiresRuntimeConfig),
+    preservesRuntimeConfig: booleanOrUndefined(parsed.preservesRuntimeConfig),
+    requiredFolders: normalizeRequiredFolders(parsed.requiredFolders),
+    runtimeConfigFiles: Array.isArray(parsed.runtimeConfigFiles)
+      ? runtimeConfigFilesFromPaths(parsed.runtimeConfigFiles.map((item: unknown) => String(item || "")))
+      : undefined,
+    compatibilityWarnings: Array.isArray(parsed.compatibilityWarnings)
+      ? parsed.compatibilityWarnings.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+      : []
+  };
+  return { files: [...new Set(files)].sort(), metadata };
 };
 
 const resolveArtifactFiles = async (artifactRef: string): Promise<ResolvedArtifactFiles> => {
@@ -329,11 +491,13 @@ const resolveArtifactFiles = async (artifactRef: string): Promise<ResolvedArtifa
     }
 
     const artifactRoot = path.dirname(resolved);
+    const manifest = await readManifest(resolved);
     return {
       artifactRoot,
       hasManifest: true,
       manifestPath: resolved,
-      files: await readManifest(resolved)
+      files: manifest.files,
+      manifestMetadata: manifest.metadata
     };
   }
 
@@ -341,11 +505,13 @@ const resolveArtifactFiles = async (artifactRef: string): Promise<ResolvedArtifa
 
   const manifestPath = path.join(resolved, MANIFEST_NAME);
   if (fsSync.existsSync(manifestPath)) {
+    const manifest = await readManifest(manifestPath);
     return {
       artifactRoot: resolved,
       hasManifest: true,
       manifestPath,
-      files: await readManifest(manifestPath)
+      files: manifest.files,
+      manifestMetadata: manifest.metadata
     };
   }
 
@@ -353,7 +519,8 @@ const resolveArtifactFiles = async (artifactRef: string): Promise<ResolvedArtifa
     artifactRoot: resolved,
     hasManifest: false,
     manifestPath: "",
-    files: await walkFiles(resolved)
+    files: await walkFiles(resolved),
+    manifestMetadata: {}
   };
 };
 
@@ -363,6 +530,139 @@ const hashFile = async (sourcePath: string) => {
     bytes,
     sizeBytes: bytes.byteLength,
     sha256: crypto.createHash("sha256").update(bytes).digest("hex")
+  };
+};
+
+const readArtifactSignals = async (artifactRoot: string, relativePaths: string[]) => {
+  let mongoSignal = false;
+  let txtSignal = false;
+  const scannedFiles: string[] = [];
+
+  for (const relativePath of relativePaths) {
+    if (mongoSignal && txtSignal) break;
+    const ext = path.extname(relativePath).toLowerCase();
+    if (!TEXT_SIGNAL_EXTENSIONS.has(ext)) continue;
+    const sourcePath = path.join(artifactRoot, relativePath);
+    let stat;
+    try {
+      stat = await fs.stat(sourcePath);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile() || stat.size > MAX_SIGNAL_SCAN_BYTES) continue;
+
+    const lower = (await fs.readFile(sourcePath, "utf8")).toLowerCase();
+    scannedFiles.push(relativePath);
+    if (
+      lower.includes("sitebuilder-runtime-config.json") ||
+      lower.includes("runtime-config.json") ||
+      lower.includes("storagebackend") ||
+      lower.includes("backendapiurl") ||
+      lower.includes("/api/sites/")
+    ) {
+      mongoSignal = true;
+    }
+    if (
+      lower.includes("bihs_master_config_v1.txt") ||
+      lower.includes("users_data.txt") ||
+      lower.includes("events_data.txt") ||
+      lower.includes("nav_data.txt") ||
+      lower.includes("site_content_data.txt") ||
+      lower.includes("widgets_data.txt")
+    ) {
+      txtSignal = true;
+    }
+  }
+
+  return { mongoSignal, txtSignal, scannedFiles };
+};
+
+const buildArtifactCompatibilityMetadata = async (
+  artifact: ResolvedArtifactFiles,
+  existingRelativePaths: string[]
+): Promise<ArtifactCompatibilityMetadata> => {
+  const defaults = defaultArtifactCompatibility();
+  const explicitStorageCompatibility = normalizeStorageCompatibility(artifact.manifestMetadata.storageCompatibility);
+  const explicitKind = normalizeArtifactKind(artifact.manifestMetadata.artifactKind);
+  const runtimeConfigFiles = Array.from(new Set([
+    ...runtimeConfigFilesFromPaths(existingRelativePaths),
+    ...(artifact.manifestMetadata.runtimeConfigFiles || [])
+  ])).sort();
+  const derivedRequiredFolders = deriveRequiredFoldersFromArtifactPaths(existingRelativePaths);
+  const requiredFolders = artifact.manifestMetadata.requiredFolders?.length
+    ? Array.from(new Set([...artifact.manifestMetadata.requiredFolders, ...derivedRequiredFolders])).sort((a, b) => a.localeCompare(b))
+    : derivedRequiredFolders;
+  const explicitRequiresRuntimeConfig = booleanOrUndefined(artifact.manifestMetadata.requiresRuntimeConfig);
+  const explicitPreservesRuntimeConfig = booleanOrUndefined(artifact.manifestMetadata.preservesRuntimeConfig);
+
+  if (explicitStorageCompatibility.length > 0 || explicitKind !== "unknown") {
+    const storageCompatibility = explicitStorageCompatibility.length
+      ? explicitStorageCompatibility
+      : explicitKind === "mongo-frontend"
+        ? ["mongo" as const]
+        : explicitKind === "legacy-txt-frontend"
+          ? ["txt" as const]
+          : explicitKind === "site-builder-frontend"
+            ? ["mongo" as const, "txt" as const]
+            : [];
+    const artifactKind = explicitKind !== "unknown"
+      ? explicitKind
+      : storageCompatibility.includes("mongo") && storageCompatibility.includes("txt")
+        ? "site-builder-frontend"
+        : storageCompatibility.includes("mongo")
+          ? "mongo-frontend"
+          : storageCompatibility.includes("txt")
+            ? "legacy-txt-frontend"
+            : "unknown";
+
+    return {
+      storageCompatibility,
+      artifactKind,
+      requiresRuntimeConfig: explicitRequiresRuntimeConfig ?? storageCompatibility.includes("mongo"),
+      preservesRuntimeConfig: explicitPreservesRuntimeConfig ?? true,
+      requiredFolders,
+      runtimeConfigFiles,
+      compatibilitySource: "manifest",
+      compatibilityWarnings: artifact.manifestMetadata.compatibilityWarnings || []
+    };
+  }
+
+  const signals = await readArtifactSignals(artifact.artifactRoot, existingRelativePaths);
+  const storageCompatibility = [
+    signals.txtSignal ? "txt" : "",
+    (signals.mongoSignal || runtimeConfigFiles.length > 0) ? "mongo" : ""
+  ].filter(Boolean).sort() as ArtifactStorageCompatibility[];
+  const artifactKind: ReleaseArtifactKind = storageCompatibility.includes("mongo") && storageCompatibility.includes("txt")
+    ? "site-builder-frontend"
+    : storageCompatibility.includes("mongo")
+      ? "mongo-frontend"
+      : storageCompatibility.includes("txt")
+        ? "legacy-txt-frontend"
+        : "unknown";
+
+  if (storageCompatibility.length === 0) {
+    return {
+      ...defaults,
+      requiredFolders,
+      runtimeConfigFiles,
+      compatibilityWarnings: [
+        "artifact-storage-compatibility-unknown",
+        "Create New Site will not auto-select this release until compatibility is declared or inferable."
+      ]
+    };
+  }
+
+  return {
+    storageCompatibility,
+    artifactKind,
+    requiresRuntimeConfig: explicitRequiresRuntimeConfig ?? storageCompatibility.includes("mongo"),
+    preservesRuntimeConfig: explicitPreservesRuntimeConfig ?? true,
+    requiredFolders,
+    runtimeConfigFiles,
+    compatibilitySource: "inferred",
+    compatibilityWarnings: [
+      signals.scannedFiles.length ? `compatibility-inferred-from:${signals.scannedFiles.slice(0, 5).join(",")}` : ""
+    ].filter(Boolean)
   };
 };
 
@@ -521,6 +821,7 @@ const validationFailureSnapshot = (
   hasManifest: false,
   manifestSha256: "",
   inventorySha256: "",
+  ...defaultArtifactCompatibility(),
   readyForDeploy: false,
   validatedAt: new Date(),
   validationError
@@ -545,6 +846,10 @@ const persistArtifactValidationSnapshot = async (
     hasManifest: snapshot.hasManifest,
     manifestSha256: snapshot.manifestSha256 || undefined,
     inventorySha256: snapshot.inventorySha256 || undefined,
+    storageCompatibility: snapshot.storageCompatibility,
+    artifactKind: snapshot.artifactKind,
+    requiresRuntimeConfig: snapshot.requiresRuntimeConfig,
+    requiredFoldersCount: snapshot.requiredFolders.length,
     readyForDeploy: snapshot.readyForDeploy,
     validationError: snapshot.validationError || undefined
   });
@@ -591,6 +896,7 @@ const buildReleaseArtifactValidation = async (
   const totalSizeBytes = files.reduce((sum, file) => sum + file.sizeBytes, 0);
   const manifestSha256 = artifact.manifestPath ? (await hashFile(artifact.manifestPath)).sha256 : "";
   const inventorySha256 = buildInventorySha256(files);
+  const compatibility = await buildArtifactCompatibilityMetadata(artifact, files.map((file) => file.relativePath));
   const blockers = [
     files.length === 0 ? "deploy-artifact-has-no-files" : "",
     !hasIndexHtml ? "deploy-artifact-missing-index-html" : "",
@@ -607,6 +913,14 @@ const buildReleaseArtifactValidation = async (
     hasManifest: artifact.hasManifest,
     manifestSha256,
     inventorySha256,
+    storageCompatibility: compatibility.storageCompatibility,
+    artifactKind: compatibility.artifactKind,
+    requiresRuntimeConfig: compatibility.requiresRuntimeConfig,
+    preservesRuntimeConfig: compatibility.preservesRuntimeConfig,
+    requiredFolders: compatibility.requiredFolders,
+    runtimeConfigFiles: compatibility.runtimeConfigFiles,
+    compatibilitySource: compatibility.compatibilitySource,
+    compatibilityWarnings: compatibility.compatibilityWarnings,
     readyForDeploy,
     validatedAt: new Date(),
     validationError
@@ -628,12 +942,25 @@ const buildReleaseArtifactValidation = async (
       hasManifest: artifact.hasManifest,
       manifestSha256,
       inventorySha256,
+      storageCompatibility: compatibility.storageCompatibility,
+      artifactKind: compatibility.artifactKind,
+      requiresRuntimeConfig: compatibility.requiresRuntimeConfig,
+      preservesRuntimeConfig: compatibility.preservesRuntimeConfig,
+      requiredFolders: compatibility.requiredFolders,
+      runtimeConfigFiles: compatibility.runtimeConfigFiles,
+      compatibilitySource: compatibility.compatibilitySource,
       readyForDeploy
     },
     snapshot,
     notes: [
       artifact.hasManifest ? "Artifact manifest found." : "No manifest found; file list generated from folder.",
       hasIndexHtml ? "index.html is present." : "index.html is missing and deploy should not run.",
+      compatibility.storageCompatibility.length
+        ? `Storage compatibility: ${compatibility.storageCompatibility.join(", ")} (${compatibility.compatibilitySource}).`
+        : "Storage compatibility is unknown; Create New Site will not auto-select this release.",
+      compatibility.runtimeConfigFiles.length
+        ? `Artifact includes runtime config file(s): ${compatibility.runtimeConfigFiles.join(", ")}. Mongo deploy preserves existing runtime config by default.`
+        : "",
       missingFiles.length > 0 ? `${missingFiles.length} manifest file(s) were missing from the artifact root.` : ""
     ].filter(Boolean)
   };
@@ -647,6 +974,9 @@ const buildReleaseArtifactValidation = async (
     totalSizeBytes,
     hasIndexHtml,
     hasManifest: artifact.hasManifest,
+    storageCompatibility: compatibility.storageCompatibility,
+    artifactKind: compatibility.artifactKind,
+    compatibilitySource: compatibility.compatibilitySource,
     readyForDeploy,
     blockers
   });
@@ -684,6 +1014,45 @@ const validateAndPersistReleaseArtifact = async (release: ReleaseHydratedDocumen
       artifactRef,
       validationError
     });
+    const bypassEnvVar = getDangerousValidationBypassEnvVar("release-artifact-validation");
+    if (bypassEnvVar) {
+      logger.warn("releases", "Release artifact validation failure bypassed by dangerous env", {
+        releaseId: release._id.toString(),
+        version: release.version,
+        source,
+        artifactRef,
+        validationError,
+        envVar: bypassEnvVar
+      });
+      return {
+        generatedAt: snapshot.validatedAt.toISOString(),
+        releaseId: release._id.toString(),
+        releaseVersion: release.version,
+        artifactRef,
+        artifactRoot: "",
+        files: [],
+        missingFiles: [],
+        blockers: [validationError],
+        summary: {
+          filesCount: 0,
+          totalSizeBytes: 0,
+          hasIndexHtml: false,
+          hasManifest: false,
+          manifestSha256: "",
+          inventorySha256: "",
+          storageCompatibility: [],
+          artifactKind: "unknown" as const,
+          requiresRuntimeConfig: false,
+          preservesRuntimeConfig: true,
+          requiredFolders: [],
+          runtimeConfigFiles: [],
+          compatibilitySource: "unknown" as const,
+          readyForDeploy: false
+        },
+        snapshot,
+        notes: [`${bypassEnvVar}=true: artifact validation failure was not used as a queue/dry-run blocker.`]
+      };
+    }
     throw error;
   }
 };
@@ -795,6 +1164,7 @@ export type BrowserSharePointDeploymentEvidenceInput = {
   };
   uploadedFilesEvidence?: Array<Record<string, unknown>>;
   readBackEvidence?: Array<Record<string, unknown>>;
+  finalAppUrlVerification?: Record<string, unknown>;
   errors?: Array<Record<string, unknown> | string>;
   startedAt?: string;
   completedAt?: string;
@@ -845,6 +1215,24 @@ const browserEvidenceFromPayload = (
   error: stringValue(payload?.error)
 });
 
+const finalAppUrlEvidenceFromPayload = (
+  payload: BrowserSharePointDeploymentEvidenceInput["finalAppUrlVerification"] | undefined
+): FinalAppUrlHealthEvidence | undefined => {
+  if (!payload) return undefined;
+  const url = stringValue(payload.url || payload.finalAppUrl);
+  return {
+    key: "indexExists",
+    label: stringValue(payload.label) || "Final app URL",
+    url,
+    ok: payload.ok === true,
+    status: payload.status === undefined ? numberValue(payload.httpStatus, 0) || undefined : numberValue(payload.status),
+    statusText: stringValue(payload.statusText || payload.httpStatusText),
+    checkedAt: stringValue(payload.checkedAt) || new Date().toISOString(),
+    authBlocked: payload.authBlocked === true,
+    error: stringValue(payload.error)
+  };
+};
+
 export async function recordBrowserSharePointDeploymentEvidence(params: {
   siteId: string;
   input: BrowserSharePointDeploymentEvidenceInput;
@@ -861,7 +1249,8 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
     throw new Error("browser-deploy-version-after-mismatch");
   }
 
-  const planFiles = manifest.files.map((file) => ({
+  const plannedManifestFiles = filterRuntimeConfigDeployFiles(manifest.files.filter((file) => file.deployable), resolvedPaths, site).files;
+  const planFiles = plannedManifestFiles.map((file) => ({
     relativePath: file.relativePath,
     sourcePath: `artifact:${file.relativePath}`,
     targetPath: `${resolvedPaths.finalDistRoot}/${file.relativePath}`,
@@ -874,16 +1263,27 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
       .map((item) => [stringValue(item.relativePath), item] as const)
       .filter(([relativePath]) => Boolean(relativePath))
   );
-  const verificationEvidence = manifest.files
-    .filter((file) => file.deployable)
+  const verificationEvidence = plannedManifestFiles
     .map((file) => browserEvidenceFromPayload(file, planFilesByRelativePath.get(file.relativePath), evidencePayloads.get(file.relativePath)));
-  const totalSizeBytes = manifest.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+  const totalSizeBytes = plannedManifestFiles.reduce((sum, file) => sum + file.sizeBytes, 0);
   const allVerified =
-    verificationEvidence.length === manifest.summary.deployableFilesCount &&
+    verificationEvidence.length === plannedManifestFiles.length &&
     verificationEvidence.length > 0 &&
     verificationEvidence.every((item) => item.status === "verified" && item.sizeMatches && item.sha256Matches);
   const successRequested = params.input.finalStatus === "success";
-  if (successRequested && !allVerified) throw new Error("browser-deploy-success-evidence-invalid");
+  const browserEvidenceBypassEnvVar = getDangerousValidationBypassEnvVar("browser-evidence-gates");
+  const browserEvidenceBypassed = successRequested && !allVerified && isDangerousValidationBypassEnabled("browser-evidence-gates");
+  if (successRequested && !allVerified && !browserEvidenceBypassed) throw new Error("browser-deploy-success-evidence-invalid");
+  if (browserEvidenceBypassed) {
+    logger.warn("releases", "Browser deploy evidence gate bypassed by dangerous env", {
+      siteId: site._id.toString(),
+      siteCode: site.siteCode,
+      releaseId: release._id.toString(),
+      envVar: browserEvidenceBypassEnvVar,
+      evidenceCount: verificationEvidence.length,
+      expectedDeployableFilesCount: plannedManifestFiles.length
+    });
+  }
 
   const startedAt = dateValue(params.input.startedAt);
   const finishedAt = dateValue(params.input.completedAt, new Date());
@@ -891,6 +1291,7 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
   const errorMessage = successRequested ? "" : evidenceErrorMessage(params.input.errors) || "browser-deploy-failed";
   const deploymentStatus = successRequested ? "succeeded" : "failed";
   const verificationStatus = successRequested ? "verified" : "failed";
+  const finalAppUrlVerification = finalAppUrlEvidenceFromPayload(params.input.finalAppUrlVerification);
 
   const deployment = await SiteVersionDeployment.create({
     siteId: site._id,
@@ -903,7 +1304,15 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
     finishedAt,
     triggeredBy: params.actor || "browser-sharepoint",
     error: errorMessage,
-    verification: buildDeployVerification(verificationEvidence, totalSizeBytes, verificationStatus),
+    verification: {
+      ...buildDeployVerification(verificationEvidence, totalSizeBytes, verificationStatus, { finalAppUrlVerification }),
+      dangerousEvidenceBypass: browserEvidenceBypassed
+        ? {
+            envVar: browserEvidenceBypassEnvVar,
+            reason: "Browser deploy success was accepted without complete read-back evidence."
+          }
+        : undefined
+    },
     logLines: [
       {
         level: successRequested ? "info" : "error",
@@ -914,6 +1323,9 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
       }
     ]
   });
+
+  const verifiedIndexHtml = verificationEvidence.some((item) => item.relativePath === "index.html" && item.status === "verified");
+  const hasAssetFile = plannedManifestFiles.some((file) => file.relativePath.includes("/"));
 
   if (successRequested) {
     site.currentVersion = release.version;
@@ -927,8 +1339,38 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
       ...(site.sharePointStatus as any),
       deployStatus: "succeeded" as any
     };
-    site.filesCount = manifest.summary.deployableFilesCount;
+    site.health = {
+      ...((site.health as any) || {}),
+      distExists: true,
+      indexExists: verifiedIndexHtml || (site.health as any)?.indexExists === true,
+      assetsExists: hasAssetFile || (site.health as any)?.assetsExists === true
+    } as any;
+    site.filesCount = plannedManifestFiles.length;
     site.lastError = "";
+
+    const health = site.health as any;
+    const storageBackend = String((site as any).storageBackend || "unknown");
+    const createFlow = String((site as any).creationMode || "") === "create-new";
+    const sharePointReady = health.siteDbExists === true && health.usersDbExists === true && health.distExists === true && health.indexExists === true;
+    const txtReady = storageBackend === "txt" && sharePointReady && health.txtFilesExist === true;
+    const mongoReady = storageBackend === "mongo" &&
+      sharePointReady &&
+      health.runtimeConfigExists === true &&
+      health.runtimeConfigValid === true &&
+      health.dataBackendReachable === true &&
+      health.mongoRegistryOk === true &&
+      health.mongoCollectionOk === true &&
+      health.mongoSeedOk === true &&
+      health.mongoBackupsOk === true;
+    if (createFlow && (txtReady || mongoReady)) {
+      (site as any).lifecycleStatus = "ready";
+      (site as any).provisioningStatus = "succeeded";
+      site.status = "active";
+    } else if (createFlow) {
+      (site as any).lifecycleStatus = "partially-created";
+      (site as any).provisioningStatus = "partially-created";
+      site.status = "draft";
+    }
   } else {
     site.versionStatus = "failed";
     site.sharePointStatus = {
@@ -998,11 +1440,14 @@ export async function buildSiteDeployPlan(
   const { site, release, resolvedPaths } = await resolveSiteAndRelease(siteId, releaseId);
   const deployPolicy = buildDeployPolicy(options.deployMode);
   const connectorMode: DeployConnectorMode = options.connectorMode === "browser-sharepoint" ? "browser-sharepoint" : "backend-sharepoint";
+  const artifactValidationBypassEnvVar = getDangerousValidationBypassEnvVar("release-artifact-validation");
+  const artifactValidationBypassed = Boolean(artifactValidationBypassEnvVar);
   const artifactValidation = await validateAndPersistReleaseArtifact(release, "deploy-plan");
-  const files: DeployPlanFile[] = artifactValidation.files.map((file) => ({
+  const mappedFiles: DeployPlanFile[] = artifactValidation.files.map((file) => ({
     ...file,
     targetPath: `${resolvedPaths.finalDistRoot}/${file.relativePath}`
   }));
+  const { files, skippedRuntimeConfigFiles } = filterRuntimeConfigDeployFiles(mappedFiles, resolvedPaths, site);
   const targetInventory = await readTargetDistInventory(resolvedPaths, files);
   const staticCapabilities = getSharePointOperationCapabilities();
   let digestWorks = false;
@@ -1032,22 +1477,33 @@ export async function buildSiteDeployPlan(
         },
         reason: digestWorks ? undefined : digestError || staticCapabilities.reason
       };
-  const readyForDeploy = artifactValidation.summary.readyForDeploy;
+  const readyForDeploy = artifactValidation.summary.readyForDeploy || artifactValidationBypassed;
+  const mongoDeployBlockers = String((site as any).storageBackend || "unknown") === "mongo"
+    ? [
+        (site as any).health?.runtimeConfigExists !== true ? "mongo-runtime-config-missing" : "",
+        (site as any).health?.runtimeConfigValid !== true ? "mongo-runtime-config-invalid-or-mismatch" : "",
+        (site as any).health?.dataBackendReachable !== true ? "mongo-backend-not-verified" : "",
+        (site as any).health?.mongoRegistryOk !== true ? "mongo-site-registry-not-verified" : "",
+        (site as any).health?.mongoCollectionOk !== true ? "mongo-safe-collection-not-verified" : "",
+        (site as any).health?.mongoSeedOk !== true ? "mongo-seed-docs-not-verified" : ""
+      ].filter(Boolean)
+    : [];
   const readyForDeployExecution =
     connectorMode === "browser-sharepoint"
-      ? readyForDeploy && deployPolicy.blockers.length === 0
-      : readyForDeploy && capabilities.writeAvailable && capabilities.digest.canRequest && deployPolicy.blockers.length === 0;
+      ? readyForDeploy && deployPolicy.blockers.length === 0 && mongoDeployBlockers.length === 0
+      : readyForDeploy && capabilities.writeAvailable && capabilities.digest.canRequest && deployPolicy.blockers.length === 0 && mongoDeployBlockers.length === 0;
   const blockers = [
     ...deployPolicy.blockers,
-    ...artifactValidation.blockers,
+    ...mongoDeployBlockers,
+    ...(artifactValidationBypassed ? [] : artifactValidation.blockers),
     connectorMode === "backend-sharepoint" && !capabilities.writeAvailable ? "sharepoint-write-not-configured" : "",
     connectorMode === "backend-sharepoint" && !capabilities.digest.canRequest ? "sharepoint-request-digest-not-available" : ""
   ].filter(Boolean);
   const currentKnownVersion = site.currentVersion || site.version || "";
   const targetDistPath = resolvedPaths.finalDistRoot;
   const missingRequirements = [
-    !artifactValidation.artifactRef ? "Deploy cannot run because the release artifact is missing." : "",
-    artifactValidation.artifactRef && !readyForDeploy
+    !artifactValidationBypassed && !artifactValidation.artifactRef ? "Deploy cannot run because the release artifact is missing." : "",
+    !artifactValidationBypassed && artifactValidation.artifactRef && !readyForDeploy
       ? `Deploy cannot run because the release artifact is invalid: ${artifactValidation.blockers.join(", ")}`
       : "",
     connectorMode === "backend-sharepoint" && !capabilities.writeAvailable ? "Deploy cannot run because SharePoint write is not configured." : "",
@@ -1056,7 +1512,7 @@ export async function buildSiteDeployPlan(
         ? "כתיבה ל-SharePoint מוגדרת אבל ההתחברות נכשלה."
         : "Deploy cannot run because SharePoint request digest is not available."
       : "",
-    connectorMode === "browser-sharepoint" ? "Browser deploy requires browser Digest and per-file upload verification at execution time." : "",
+    ...mongoDeployBlockers.map((blocker) => `Mongo deploy readiness blocker: ${blocker}`),
     ...deployPolicy.blockers
   ].filter(Boolean);
 
@@ -1069,6 +1525,16 @@ export async function buildSiteDeployPlan(
     releaseVersion: release.version,
     artifactRef: artifactValidation.artifactRef,
     artifactRoot: artifactValidation.artifactRoot,
+    artifactCompatibility: {
+      storageCompatibility: artifactValidation.summary.storageCompatibility,
+      artifactKind: artifactValidation.summary.artifactKind,
+      requiresRuntimeConfig: artifactValidation.summary.requiresRuntimeConfig,
+      preservesRuntimeConfig: artifactValidation.summary.preservesRuntimeConfig,
+      requiredFolders: artifactValidation.summary.requiredFolders,
+      runtimeConfigFiles: artifactValidation.summary.runtimeConfigFiles,
+      compatibilitySource: artifactValidation.summary.compatibilitySource,
+      compatibilityWarnings: artifactValidation.snapshot.compatibilityWarnings
+    },
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     target: {
@@ -1076,6 +1542,9 @@ export async function buildSiteDeployPlan(
       siteCode: site.siteCode,
       siteDisplayName: site.displayName,
       environment: String((site as any).environment || "unknown"),
+      storageBackend: String((site as any).storageBackend || "unknown"),
+      runtimeConfigPath: String((site as any).runtimeConfigPath || resolvedPaths.runtimeConfigPath || ""),
+      dataBackendStatus: String((site as any).dataBackendStatus || "unknown"),
       sharePointSiteUrl: site.sharePointSiteUrl,
       finalAppUrl: resolvedPaths.finalAppUrl,
       currentKnownVersion: currentKnownVersion || "Unknown",
@@ -1093,9 +1562,16 @@ export async function buildSiteDeployPlan(
     files,
     summary: {
       filesCount: files.length,
-      totalSizeBytes: artifactValidation.summary.totalSizeBytes,
+      totalSizeBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0),
       hasIndexHtml: artifactValidation.summary.hasIndexHtml,
       hasManifest: artifactValidation.summary.hasManifest,
+      storageCompatibility: artifactValidation.summary.storageCompatibility,
+      artifactKind: artifactValidation.summary.artifactKind,
+      requiresRuntimeConfig: artifactValidation.summary.requiresRuntimeConfig,
+      preservesRuntimeConfig: artifactValidation.summary.preservesRuntimeConfig,
+      requiredFolders: artifactValidation.summary.requiredFolders,
+      runtimeConfigFiles: artifactValidation.summary.runtimeConfigFiles,
+      skippedRuntimeConfigFilesCount: skippedRuntimeConfigFiles.length,
       readyForDeploy,
       readyForDeployExecution,
       targetInventoryReadOk: targetInventory.readOk,
@@ -1117,7 +1593,14 @@ export async function buildSiteDeployPlan(
     missingRequirements,
     notes: [
       deployPolicy.warning,
+      artifactValidationBypassed ? `${artifactValidationBypassEnvVar}=true: release artifact validation blockers are not blocking this dry-run/queue path.` : "",
       artifactValidation.summary.hasManifest ? "Deploy file list was loaded from sharepoint-deploy-manifest.json." : "No deploy manifest was found; file inventory was generated from the artifact folder.",
+      skippedRuntimeConfigFiles.length
+        ? `Mongo runtime config preservation: skipped ${skippedRuntimeConfigFiles.length} runtime config file(s) from deploy plan.`
+        : "",
+      artifactValidation.summary.storageCompatibility.length
+        ? `Artifact compatibility: ${artifactValidation.summary.storageCompatibility.join(", ")} (${artifactValidation.summary.artifactKind}).`
+        : "Artifact storage compatibility is unknown; Create New Site will not auto-select it.",
       "Deploy execution overwrites listed files in final dist but does not mirror-delete files that are absent from the artifact.",
       ...targetInventory.notes,
       "Deploy execution reads every uploaded file back from SharePoint and compares sha256/size before marking success.",
@@ -1143,6 +1626,16 @@ export async function validateReleaseArtifact(releaseId: string) {
     artifactRef: artifactValidation.artifactRef,
     artifactRoot: artifactValidation.artifactRoot,
     summary: artifactValidation.summary,
+    compatibility: {
+      storageCompatibility: artifactValidation.summary.storageCompatibility,
+      artifactKind: artifactValidation.summary.artifactKind,
+      requiresRuntimeConfig: artifactValidation.summary.requiresRuntimeConfig,
+      preservesRuntimeConfig: artifactValidation.summary.preservesRuntimeConfig,
+      requiredFolders: artifactValidation.summary.requiredFolders,
+      runtimeConfigFiles: artifactValidation.summary.runtimeConfigFiles,
+      compatibilitySource: artifactValidation.summary.compatibilitySource,
+      compatibilityWarnings: artifactValidation.snapshot.compatibilityWarnings
+    },
     artifactValidation: artifactValidation.snapshot,
     validationError: artifactValidation.snapshot.validationError,
     blockers: artifactValidation.blockers,
@@ -1184,6 +1677,16 @@ export async function getReleaseArtifactManifest(releaseId: string): Promise<Rel
     version: release.version,
     artifactRef: artifactValidation.artifactRef,
     artifactRoot: artifactValidation.artifactRoot,
+    compatibility: {
+      storageCompatibility: artifactValidation.summary.storageCompatibility,
+      artifactKind: artifactValidation.summary.artifactKind,
+      requiresRuntimeConfig: artifactValidation.summary.requiresRuntimeConfig,
+      preservesRuntimeConfig: artifactValidation.summary.preservesRuntimeConfig,
+      requiredFolders: artifactValidation.summary.requiredFolders,
+      runtimeConfigFiles: artifactValidation.summary.runtimeConfigFiles,
+      compatibilitySource: artifactValidation.summary.compatibilitySource,
+      compatibilityWarnings: artifactValidation.snapshot.compatibilityWarnings
+    },
     files,
     summary: {
       filesCount: files.length,
@@ -1191,6 +1694,13 @@ export async function getReleaseArtifactManifest(releaseId: string): Promise<Rel
       totalSizeBytes: artifactValidation.summary.totalSizeBytes,
       hasIndexHtml: artifactValidation.summary.hasIndexHtml,
       hasManifest: artifactValidation.summary.hasManifest,
+      storageCompatibility: artifactValidation.summary.storageCompatibility,
+      artifactKind: artifactValidation.summary.artifactKind,
+      requiresRuntimeConfig: artifactValidation.summary.requiresRuntimeConfig,
+      preservesRuntimeConfig: artifactValidation.summary.preservesRuntimeConfig,
+      requiredFolders: artifactValidation.summary.requiredFolders,
+      runtimeConfigFiles: artifactValidation.summary.runtimeConfigFiles,
+      compatibilitySource: artifactValidation.summary.compatibilitySource,
       readyForDeploy: artifactValidation.summary.readyForDeploy
     }
   };
@@ -1231,7 +1741,7 @@ export async function assertReleaseArtifactReady(releaseId: string) {
   if (!release) throw new Error("release-not-found");
 
   const artifactValidation = await validateAndPersistReleaseArtifact(release, "deploy-queue");
-  if (!artifactValidation.summary.readyForDeploy) {
+  if (!artifactValidation.summary.readyForDeploy && !isDangerousValidationBypassEnabled("release-artifact-validation")) {
     logger.warn("releases", "Deploy queue rejected because release artifact is not ready", {
       releaseId: release._id.toString(),
       version: release.version,
@@ -1241,6 +1751,14 @@ export async function assertReleaseArtifactReady(releaseId: string) {
       blockers: artifactValidation.blockers
     });
     throw new Error("deploy-plan-not-ready");
+  }
+  if (!artifactValidation.summary.readyForDeploy) {
+    logger.warn("releases", "Deploy queue artifact readiness gate bypassed by dangerous env", {
+      releaseId: release._id.toString(),
+      version: release.version,
+      envVar: getDangerousValidationBypassEnvVar("release-artifact-validation"),
+      blockers: artifactValidation.blockers
+    });
   }
 
   logger.info("releases", "Release artifact ready for deploy queue", {
@@ -1277,6 +1795,8 @@ export async function executeSharePointDeploy(input: {
   try {
     plan = await buildSiteDeployPlan(input.siteId, input.releaseId);
     if (!plan.summary.readyForDeploy) throw new Error("deploy-plan-not-ready");
+    if (!plan.summary.readyForDeployExecution) throw new Error("deploy-plan-execution-not-ready");
+    if (!plan.files.length) throw new Error("deploy-artifact-has-no-files");
 
     deployment.status = "running";
     deployment.startedAt = new Date();

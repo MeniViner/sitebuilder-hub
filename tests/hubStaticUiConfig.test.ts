@@ -47,7 +47,7 @@ describe("Hub SharePoint-hosted UI config", () => {
     const analytics = read("client/src/pages/AnalyticsDashboardPage.tsx");
 
     expect(app).toContain('path="/analytics"');
-    expect(sidebar).toContain("דשבורד גרפים");
+    expect(sidebar).toContain("תובנות");
     expect(analytics).toContain("בונה גרפים");
     expect(analytics).toContain("תקינות לפי סביבה");
   });
@@ -59,7 +59,7 @@ describe("Hub SharePoint-hosted UI config", () => {
     const helpContent = read("client/src/help/helpContent.ts");
 
     expect(app).toContain('path="/help"');
-    expect(sidebar).toContain("מרכז הסברים");
+    expect(sidebar).toContain("Playbooks והסברים");
     expect(helpPage).toContain("מרכז הסברים");
     [
       "מה זה Site Builder Hub",
@@ -131,5 +131,44 @@ describe("Hub SharePoint-hosted UI config", () => {
     expect(clientUi).not.toContain("ארכב");
     expect(clientUi).not.toContain("פעולה כותבת מסוכנת");
     expect(clientUi).not.toContain("SharePoint rejected the backend request");
+  });
+
+  it("surfaces storage-backend-aware UI for Mongo and TXT sites", () => {
+    const dashboard = read("client/src/pages/DashboardPage.tsx");
+    const sitesTable = read("client/src/components/SitesTable.tsx");
+    const siteDetails = read("client/src/pages/SiteDetailsPage.tsx");
+    const health = read("client/src/pages/HealthPage.tsx");
+    const diagnostics = read("client/src/pages/DiagnosticsPage.tsx");
+    const admins = read("client/src/pages/AdminsPage.tsx");
+    const backups = read("client/src/pages/BackupsPage.tsx");
+    const settings = read("client/src/pages/SettingsPage.tsx");
+
+    expect(dashboard).toContain("Storage backends");
+    expect(sitesTable).toContain("Seed:");
+    expect(siteDetails).toContain("בדוק runtime config");
+    expect(siteDetails).toContain("בדוק Mongo backend");
+    expect(health).toContain("TXT / Seed");
+    expect(diagnostics).toContain("Builder / Mongo backend connector");
+    expect(admins).toContain("מקור אמת: Mongo / Builder backend");
+    expect(backups).toContain("Mongo מגובה דרך Builder backend");
+    expect(settings).toContain("Storage backend rules");
+  });
+
+  it("surfaces the create-new Mongo-backed site wizard and APIs", () => {
+    const modal = read("client/src/components/SiteFormModal.tsx");
+    const sitesPage = read("client/src/pages/SitesPage.tsx");
+    const api = read("client/src/api/sitesApi.ts");
+    const routes = read("server/src/routes/sites.routes.ts");
+
+    expect(modal).toContain("אתר Mongo חדש");
+    expect(modal).toContain("צור תוכנית Mongo");
+    expect(modal).toContain("Mongo registry נוצר");
+    expect(modal).toContain("קבצי seed חסרים");
+    expect(sitesPage).toContain("executeMongoSiteCreation");
+    expect(sitesPage).toContain("recordMongoCreateBrowserEvidence");
+    expect(api).toContain("mongoRuntimeConfigContent");
+    expect(routes).toContain("/mongo-create/plan");
+    expect(routes).toContain("/mongo-create/execute");
+    expect(routes).toContain("/mongo-create/browser-evidence");
   });
 });

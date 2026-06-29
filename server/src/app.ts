@@ -3,6 +3,7 @@ import express from "express";
 import helmet from "helmet";
 import { env, getClientOrigins } from "./config/env";
 import { getMongoStatus } from "./db/mongo";
+import accessRoutes from "./routes/access.routes";
 import auditRoutes from "./routes/audit.routes";
 import authRoutes from "./routes/auth.routes";
 import backupsRoutes from "./routes/backups.routes";
@@ -124,6 +125,7 @@ app.use("/api/jobs", jobsRoutes);
 app.use("/api/monitoring", monitoringRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/operations", operationsRoutes);
+app.use("/api/access", accessRoutes);
 
 app.use((req, res) => {
   logger.warn("http", "API route not found", {

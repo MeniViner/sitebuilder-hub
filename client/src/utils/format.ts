@@ -59,6 +59,9 @@ export const jobStatusLabel = (status?: string) => {
   const labels: Record<string, string> = {
     "awaiting-approval": "אישור מתקדם",
     queued: "בתור",
+    "browser-required": "ממתין להרצה דרך הדפדפן",
+    "browser-in-progress": "רץ דרך הדפדפן",
+    "blocked-service-auth-required": "דורש הרשאת שרת",
     preflight: "בדיקה מקדימה",
     running: "רץ",
     verifying: "מאמת",

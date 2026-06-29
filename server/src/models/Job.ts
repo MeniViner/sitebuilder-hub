@@ -13,7 +13,7 @@ const jobSchema = new Schema(
   {
     type: {
       type: String,
-      enum: ["health-check", "deploy", "backup", "restore", "admin-sync", "repair", "version-upgrade", "version-rollback", "site-provision", "permissions-setup", "site-bootstrap"],
+      enum: ["health-check", "deploy", "backup", "restore", "admin-sync", "repair", "version-upgrade", "version-rollback", "site-provision", "permissions-setup", "site-bootstrap", "runtime-config-check", "mongo-health-check", "mongo-seed"],
       required: true,
       index: true
     },
@@ -22,10 +22,38 @@ const jobSchema = new Schema(
 
     status: {
       type: String,
-      enum: ["awaiting-approval", "queued", "preflight", "running", "verifying", "succeeded", "failed", "cancelled", "retrying"],
+      enum: [
+        "awaiting-approval",
+        "queued",
+        "browser-required",
+        "browser-in-progress",
+        "blocked-service-auth-required",
+        "preflight",
+        "running",
+        "verifying",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "retrying"
+      ],
       default: "queued",
       index: true
     },
+    executionMode: {
+      type: String,
+      enum: ["backend", "browser-required", "browser-in-progress", "completed", "failed", "blocked-service-auth-required"],
+      default: "backend",
+      index: true
+    },
+    connectorMode: {
+      type: String,
+      enum: ["backend-sharepoint", "browser-sharepoint", "mongo-backend", "server-local", "backend-service-auth-required", "manual", "none"],
+      default: "backend-sharepoint",
+      index: true
+    },
+    operationPolicy: { type: String, default: "" },
+    connectorStatusLabel: { type: String, default: "" },
+    connectorBlocker: { type: String, default: "" },
     progressPercent: { type: Number, default: 0 },
 
     attempt: { type: Number, default: 0 },

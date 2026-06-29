@@ -79,6 +79,13 @@ export function DashboardPage() {
 
   const failedJobs = jobs.filter((job) => job.status === "failed");
   const backupFailures = useMemo(() => sites.filter((site) => site.status !== "archived" && site.backupStatus === "failed"), [sites]);
+  const storageCounts = useMemo(() => ({
+    txt: sites.filter((site) => site.storageBackend === "txt").length,
+    mongo: sites.filter((site) => site.storageBackend === "mongo").length,
+    unknown: sites.filter((site) => !site.storageBackend || site.storageBackend === "unknown").length,
+    mongoDataOk: sites.filter((site) => site.storageBackend === "mongo" && site.dataBackendStatus === "ok").length,
+    mongoSeedMissing: sites.filter((site) => site.storageBackend === "mongo" && site.mongoBackendStatus?.seedStatus && site.mongoBackendStatus.seedStatus !== "ok").length
+  }), [sites]);
   const outdatedSites = useMemo(() => (versionStatus?.sites || []).filter((row: any) => row.status === "outdated").slice(0, 7), [versionStatus]);
   const recentActivity = useMemo(() => {
     const siteRows = sites.flatMap((site) => [
@@ -214,6 +221,16 @@ export function DashboardPage() {
         <KpiCard title="אתרים מנוהלים" value={formatNumber(stats.total)} icon={<FolderKanban size={18} />} description={`${formatNumber(stats.active)} פעילים · ${formatNumber(stats.archived)} בארכיון`} tone="info" variant="hero" helpKey="sites.registry" />
         <KpiCard title="מוכנות פריסה" value={formatNumber(versionStatus?.outdatedSites || 0)} icon={<GitBranch size={18} />} description="אתרים מאחורי latest שדורשים Dry-run לפני Execute" tone={(versionStatus?.outdatedSites || 0) ? "warning" : "success"} variant="hero" helpKey="version.outdated" />
       </div>
+
+      <SectionCard title="Storage backends" subtitle="הפרדה בין אירוח SharePoint לבין מקור הנתונים החיים של Site Builder." helpKey="health">
+        <div className="grid gap-3 md:grid-cols-5">
+          <div className="soft-panel p-3"><p className="field-label">TXT</p><p className="num text-xl font-bold">{formatNumber(storageCounts.txt)}</p></div>
+          <div className="soft-panel p-3"><p className="field-label">Mongo</p><p className="num text-xl font-bold">{formatNumber(storageCounts.mongo)}</p></div>
+          <div className="soft-panel p-3"><p className="field-label">Unknown</p><p className="num text-xl font-bold">{formatNumber(storageCounts.unknown)}</p></div>
+          <div className="soft-panel p-3"><p className="field-label">Mongo data ok</p><p className="num text-xl font-bold">{formatNumber(storageCounts.mongoDataOk)}</p></div>
+          <div className="soft-panel p-3"><p className="field-label">Mongo seed חסר</p><p className="num text-xl font-bold">{formatNumber(storageCounts.mongoSeedMissing)}</p></div>
+        </div>
+      </SectionCard>
 
       <div className="grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
         <SectionCard

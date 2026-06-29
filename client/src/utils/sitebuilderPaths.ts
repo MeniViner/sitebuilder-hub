@@ -3,6 +3,7 @@ const DEFAULT_SITE_DB_LIBRARY = "siteDB";
 const DEFAULT_USERS_DB_LIBRARY = "siteUsersDb";
 const DEFAULT_BOOTSTRAP_LIBRARY = "SiteAssets";
 const DEFAULT_BOOTSTRAP_FOLDER = "sitebuilder-bootstrap";
+const DEFAULT_RUNTIME_CONFIG_FILE = "sitebuilder-runtime-config.json";
 
 export type WidgetsDbTarget = "users" | "site";
 
@@ -15,6 +16,7 @@ export type SiteBuilderPathInput = {
   bootstrapLibrary?: string;
   bootstrapFolder?: string;
   widgetsDbTarget?: string;
+  runtimeConfigPath?: string;
 };
 
 export type SiteBuilderResolvedPaths = {
@@ -35,6 +37,8 @@ export type SiteBuilderResolvedPaths = {
   bootstrapDistRoot: string;
   bootstrapUrl: string;
   backupsRoot: string;
+  runtimeConfigPath: string;
+  runtimeConfigUrl: string;
   deployManifestFile: string;
   permissionsMarkerFile: string;
   widgetsDbTarget: WidgetsDbTarget;
@@ -88,9 +92,18 @@ const joinServerRelative = (...parts: string[]) => {
 const deriveSiteRoot = (sharePointSiteUrl: string | undefined, siteCode: string) => {
   const segments = toServerRelativePath(sharePointSiteUrl).split("/").filter(Boolean);
   if (segments.length >= 2 && ["sites", "teams"].includes(segments[0].toLowerCase())) {
-    return `/${segments[0]}/${segments[1]}`;
+    return `/${segments.join("/")}`;
   }
   return `/sites/${siteCode}`;
+};
+
+const resolveRuntimeConfigPath = (value: string | undefined, finalDistRoot: string) => {
+  const serverRelative = toServerRelativePath(value);
+  if (serverRelative) return serverRelative;
+  const trimmed = String(value || "").trim();
+  if (trimmed.startsWith("/")) return trimmed.replace(/\/+$/g, "");
+  if (trimmed) return joinServerRelative(finalDistRoot, normalizeSegment(trimmed, DEFAULT_RUNTIME_CONFIG_FILE));
+  return joinServerRelative(finalDistRoot, DEFAULT_RUNTIME_CONFIG_FILE);
 };
 
 const resolveLibraryRoot = (value: string | undefined, fallbackName: string, siteRoot: string) => {
@@ -122,6 +135,7 @@ export const resolveSiteBuilderPaths = (input: SiteBuilderPathInput): SiteBuilde
   const siteAssetsRoot = joinServerRelative(siteDbRoot, "siteAssets");
   const imagesRoot = joinServerRelative(siteDbRoot, "images");
   const finalDistRoot = joinServerRelative(siteDbRoot, "dist");
+  const runtimeConfigPath = resolveRuntimeConfigPath(input.runtimeConfigPath, finalDistRoot);
   const bootstrapRoot = joinServerRelative(siteRoot, bootstrapLibrary, bootstrapFolder);
   const bootstrapDistRoot = joinServerRelative(bootstrapRoot, "dist");
   const backupsRoot = joinServerRelative(siteAssetsRoot, "Backups");
@@ -141,6 +155,8 @@ export const resolveSiteBuilderPaths = (input: SiteBuilderPathInput): SiteBuilde
     imagesRoot,
     finalDistRoot,
     finalAppUrl: `${buildAbsoluteUrl(host, finalDistRoot)}/index.html`,
+    runtimeConfigPath,
+    runtimeConfigUrl: buildAbsoluteUrl(host, runtimeConfigPath),
     bootstrapRoot,
     bootstrapDistRoot,
     bootstrapUrl: `${buildAbsoluteUrl(host, bootstrapDistRoot)}/index.html#/admin/sharepoint-setup`,

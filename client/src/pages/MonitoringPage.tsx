@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BellRing, CheckCircle2, RefreshCcw, ShieldAlert } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, BellRing, CheckCircle2, RefreshCcw, ShieldAlert } from "lucide-react";
 import { sitesApi, MonitoringSummary, OperationalAlert } from "../api/sitesApi";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { DetailsDrawer } from "../components/DetailsDrawer";
@@ -39,10 +39,55 @@ const statusClass: Record<string, string> = {
   resolved: "badge-success"
 };
 
+const categoryLabel: Record<OperationalAlert["category"], string> = {
+  failed_job: "Job failure",
+  stale_backup: "Backup stale",
+  failed_health_check: "Health failed"
+};
+
 const firstEntity = (alert: OperationalAlert, type?: string) =>
   alert.entityRefs?.find((item) => (type ? item.type === type : true));
 
 const countFor = (record: Record<string, number> | undefined, key: string) => Number(record?.[key] || 0);
+
+const alertDetectedAt = (alert: OperationalAlert) =>
+  alert.firstDetectedAt || alert.lastDetectedAt || alert.createdAt || alert.updatedAt || "";
+
+const incidentAgeLabel = (alert: OperationalAlert) => {
+  const detectedAt = alertDetectedAt(alert);
+  const detectedTime = detectedAt ? new Date(detectedAt).getTime() : Number.NaN;
+  if (!Number.isFinite(detectedTime)) return "לא ידוע";
+  const minutes = Math.max(0, Math.floor((Date.now() - detectedTime) / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+};
+
+const incidentSlaState = (alert: OperationalAlert) => {
+  if (alert.status === "resolved") return { label: "Closed", className: "badge-success" };
+  const detectedAt = alertDetectedAt(alert);
+  const detectedTime = detectedAt ? new Date(detectedAt).getTime() : Number.NaN;
+  const ageHours = Number.isFinite(detectedTime) ? (Date.now() - detectedTime) / 3600000 : 0;
+  if (alert.severity === "critical" && alert.status === "active" && ageHours >= 1) return { label: "SLA risk", className: "badge-danger" };
+  if (alert.status === "acknowledged") return { label: "Owned", className: "badge-warning" };
+  return { label: "Needs triage", className: alert.severity === "critical" ? "badge-danger" : "badge-warning" };
+};
+
+const incidentOwner = (alert: OperationalAlert) => {
+  if (alert.acknowledgedBy) return alert.acknowledgedBy;
+  if (alert.category === "failed_job") return "Operations";
+  if (alert.category === "stale_backup") return "Recovery owner";
+  if (alert.category === "failed_health_check") return "Site reliability";
+  return "Platform admin";
+};
+
+const incidentTarget = (alert: OperationalAlert) => {
+  if (alert.category === "failed_job") return { href: "#/jobs", label: "Open Operations Queue" };
+  if (alert.category === "stale_backup") return { href: "#/backups?tab=plan", label: "Open Recovery Center" };
+  if (alert.category === "failed_health_check") return { href: "#/health", label: "Open Health checks" };
+  return { href: "#/diagnostics", label: "Open Diagnostics" };
+};
 
 const suggestedAlertAction = (alert: OperationalAlert) => {
   if (alert.category === "failed_job") return "פתח את ה-Job הרלוונטי במסך Jobs, בדוק error/evidence, ואז החלט אם rerun או escalation.";
@@ -150,35 +195,52 @@ export function MonitoringPage() {
   const criticalAlerts = countFor(summary?.counts.bySeverity, "critical");
   const staleBackups = countFor(summary?.counts.byCategory, "stale_backup");
   const failedJobs = countFor(summary?.counts.byCategory, "failed_job");
+  const activeAlerts = Number(summary?.counts.active || 0);
+  const acknowledgedAlerts = Number(summary?.counts.acknowledged || 0);
   const alertColumns: DataTableColumn<OperationalAlert>[] = [
     {
-      key: "severity",
-      header: "Severity",
+      key: "impact",
+      header: "Impact",
       helpKey: "alert.severity",
-      render: (alert) => <span className={`badge ${severityClass[alert.severity] || "badge-neutral"}`}>{severityLabel[alert.severity] || alert.severity}</span>
+      render: (alert) => (
+        <div className="space-y-1">
+          <span className={`badge ${severityClass[alert.severity] || "badge-neutral"}`}>{severityLabel[alert.severity] || alert.severity}</span>
+          <span className="badge badge-neutral">{categoryLabel[alert.category] || alert.category}</span>
+        </div>
+      )
     },
     {
-      key: "category",
-      header: "Category",
-      helpKey: "monitoring.alert",
-      render: (alert) => alert.category
-    },
-    {
-      key: "status",
-      header: "Status",
+      key: "ownership",
+      header: "Owner / State",
       helpKey: "alert.status",
-      render: (alert) => <span className={`badge ${statusClass[alert.status] || "badge-neutral"}`}>{statusLabel[alert.status] || alert.status}</span>
+      render: (alert) => {
+        const sla = incidentSlaState(alert);
+        return (
+          <div className="space-y-1">
+            <span className={`badge ${statusClass[alert.status] || "badge-neutral"}`}>{statusLabel[alert.status] || alert.status}</span>
+            <span className={`badge ${sla.className}`}>{sla.label}</span>
+            <p className="text-xs muted">{incidentOwner(alert)}</p>
+          </div>
+        );
+      }
     },
     {
       key: "message",
-      header: "התראה",
+      header: "Incident / Next step",
       helpKey: "monitoring.alert",
-      render: (alert) => (
-        <div>
-          <p className="font-bold" style={{ color: "var(--text-strong)" }}>{alert.message}</p>
-          {alert.acknowledgedBy ? <p className="text-xs muted">בטיפול: {alert.acknowledgedBy}</p> : null}
-        </div>
-      )
+      render: (alert) => {
+        const target = incidentTarget(alert);
+        return (
+          <div className="max-w-xl">
+            <p className="font-bold" style={{ color: "var(--text-strong)" }}>{alert.message}</p>
+            <p className="mt-1 text-xs muted">{suggestedAlertAction(alert)}</p>
+            <a className="mt-2 inline-flex items-center gap-1 text-xs font-bold" href={target.href} style={{ color: "var(--accent)" }}>
+              {target.label}
+              <ArrowUpRight size={12} />
+            </a>
+          </div>
+        );
+      }
     },
     {
       key: "entity",
@@ -196,10 +258,15 @@ export function MonitoringPage() {
       }
     },
     {
-      key: "detected",
-      header: "זוהתה",
+      key: "age",
+      header: "Age",
       helpKey: "history",
-      render: (alert) => <span className="num text-xs">{formatDateTime(alert.lastDetectedAt || alert.createdAt)}</span>
+      render: (alert) => (
+        <div className="space-y-1">
+          <span className="num font-bold">{incidentAgeLabel(alert)}</span>
+          <p className="num text-xs muted">{formatDateTime(alert.lastDetectedAt || alert.createdAt)}</p>
+        </div>
+      )
     },
     {
       key: "actions",
@@ -222,6 +289,8 @@ export function MonitoringPage() {
   const alertMobileCard = (alert: OperationalAlert) => {
     const siteRef = firstEntity(alert, "Site");
     const primaryRef = siteRef || firstEntity(alert);
+    const target = incidentTarget(alert);
+    const sla = incidentSlaState(alert);
     return (
       <div className="space-y-3">
         <div className="flex items-start justify-between gap-3">
@@ -233,11 +302,14 @@ export function MonitoringPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <span className={`badge ${statusClass[alert.status] || "badge-neutral"}`}>{statusLabel[alert.status] || alert.status}</span>
+          <span className={`badge ${sla.className}`}>{sla.label}</span>
           <span className="badge badge-neutral">{primaryRef?.label || primaryRef?.type || "ללא entity"}</span>
         </div>
+        <p className="text-xs muted">{suggestedAlertAction(alert)}</p>
         <p className="num text-xs muted">{formatDateTime(alert.lastDetectedAt || alert.createdAt)}</p>
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" type="button" onClick={() => setSelectedAlert(alert)}>פתח</button>
+          <a className="btn btn-secondary min-h-0 px-2 py-1 text-xs" href={target.href}><ArrowUpRight size={13} />פתח מסך</a>
           {alert.status === "active" ? (
             <button className="btn btn-primary min-h-0 px-2 py-1 text-xs" type="button" onClick={() => acknowledge(alert)} disabled={busyAlertId === alert._id}>
               <CheckCircle2 size={13} />
@@ -252,8 +324,8 @@ export function MonitoringPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="ניטור והתראות"
-        subtitle="התראות תפעוליות על Jobs שנכשלו, גיבויים שהתיישנו ובדיקות תקינות שנכשלו."
+        title="Incident Inbox"
+        subtitle="תור תפעולי להתראות שדורשות triage: כשלי Jobs, גיבויים שהתיישנו ובדיקות תקינות שנכשלו. כל incident צריך owner, next step וסגירה ברורה."
         helpKey="monitoring.alert"
         actions={<MetadataOnlyBadge mode="readonly" />}
       />
@@ -265,15 +337,36 @@ export function MonitoringPage() {
       {!loading && !error ? (
         <>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard variant="inline" title="פתוחות" value={formatNumber(summary?.counts.open)} icon={<BellRing size={18} />} description="דורשות טיפול" tone={summary?.counts.open ? "danger" : "success"} helpKey="monitoring.alert" />
+            <KpiCard variant="inline" title="חדשות ל־triage" value={formatNumber(activeAlerts)} icon={<BellRing size={18} />} description="עדיין ללא owner" tone={activeAlerts ? "danger" : "success"} helpKey="monitoring.alert" />
+            <KpiCard variant="inline" title="בטיפול" value={formatNumber(acknowledgedAlerts)} icon={<CheckCircle2 size={18} />} description="acknowledged incidents" tone={acknowledgedAlerts ? "warning" : "neutral"} helpKey="alert.status" />
             <KpiCard variant="inline" title="קריטיות" value={formatNumber(criticalAlerts)} icon={<ShieldAlert size={18} />} description="severity=critical" tone={criticalAlerts ? "danger" : "success"} helpKey="alert.severity" />
-            <KpiCard variant="inline" title="גיבויים מיושנים" value={formatNumber(staleBackups)} icon={<AlertTriangle size={18} />} description="category=stale_backup" tone={staleBackups ? "warning" : "success"} helpKey="backup.schedule" />
-            <KpiCard variant="inline" title="Jobs שנכשלו" value={formatNumber(failedJobs)} icon={<AlertTriangle size={18} />} description="category=failed_job" tone={failedJobs ? "danger" : "success"} helpKey="job.failed" />
+            <KpiCard variant="inline" title="Jobs שנכשלו" value={formatNumber(failedJobs)} icon={<AlertTriangle size={18} />} description={`${formatNumber(staleBackups)} stale backups`} tone={failedJobs || staleBackups ? "warning" : "success"} helpKey="job.failed" />
           </div>
 
+          <SectionCard title="Triage Summary" subtitle="החלטה מהירה לפני כניסה לפרטים" helpKey="monitoring.alert">
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="soft-panel p-4">
+                <p className="field-label">Priority</p>
+                <p className="font-bold" style={{ color: criticalAlerts || activeAlerts ? "var(--danger)" : "var(--success)" }}>
+                  {criticalAlerts ? "Critical incidents first" : activeAlerts ? "Assign owners" : "No immediate triage"}
+                </p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Recommended first action</p>
+                <p className="font-bold" style={{ color: "var(--text-strong)" }}>
+                  {failedJobs ? "Open Operations Queue" : staleBackups ? "Open Recovery Center" : criticalAlerts ? "Open Health checks" : "Scan now or continue monitoring"}
+                </p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Last generated</p>
+                <p className="num font-bold" style={{ color: "var(--text-strong)" }}>{formatDateTime(summary?.generatedAt)}</p>
+              </div>
+            </div>
+          </SectionCard>
+
           <SectionCard
-            title="התראות פעילות"
-            subtitle={summary?.generatedAt ? `עודכן: ${formatDateTime(summary.generatedAt)}` : "רשימת התראות תפעוליות"}
+            title="Incident Queue"
+            subtitle={summary?.generatedAt ? `עודכן: ${formatDateTime(summary.generatedAt)} · ${formatNumber(summary.counts.open)} open incidents` : "רשימת incidents תפעוליים"}
             helpKey="monitoring.alert"
             actions={
               <button className="btn btn-primary" type="button" onClick={refreshAlerts} disabled={refreshing}>
@@ -311,7 +404,12 @@ export function MonitoringPage() {
             </FilterBar>
 
             {alerts.length === 0 ? (
-              <EmptyState title="אין התראות" description="לא נמצאו התראות לפי הסינון הנוכחי." />
+              <EmptyState
+                title={statusFilter === "open" ? "אין incidents פתוחים" : "אין incidents בסינון הנוכחי"}
+                description={statusFilter === "open"
+                  ? "אין כרגע כשלי Jobs, גיבויים שהתיישנו או health checks פתוחים. אפשר להריץ סריקה ידנית כדי לוודא שהמצב עדכני."
+                  : "שנו סטטוס, severity או category כדי לראות incidents אחרים."}
+              />
             ) : (
               <DataTable columns={alertColumns} rows={alerts} rowKey={(alert) => alert._id} mobileCard={alertMobileCard} minWidth={1120} density="dense" />
             )}
@@ -322,6 +420,38 @@ export function MonitoringPage() {
       <DetailsDrawer open={Boolean(selectedAlert)} title={selectedAlert?.message || "התראה"} subtitle={selectedAlert?._id} onClose={() => setSelectedAlert(null)}>
         {selectedAlert ? (
           <div className="space-y-4">
+            {(() => {
+              const target = incidentTarget(selectedAlert);
+              const sla = incidentSlaState(selectedAlert);
+              return (
+                <div className="rounded-lg border p-4" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="field-label">Incident response</p>
+                      <p className="mt-1 font-bold" style={{ color: "var(--text-strong)" }}>{categoryLabel[selectedAlert.category] || selectedAlert.category}</p>
+                    </div>
+                    <span className={`badge ${sla.className}`}>{sla.label}</span>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <span className="field-label">Owner</span>
+                      <p className="font-bold" style={{ color: "var(--text-strong)" }}>{incidentOwner(selectedAlert)}</p>
+                    </div>
+                    <div>
+                      <span className="field-label">Age</span>
+                      <p className="num font-bold" style={{ color: "var(--text-strong)" }}>{incidentAgeLabel(selectedAlert)}</p>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="field-label">Recommended workspace</span>
+                      <a className="mt-1 inline-flex items-center gap-1 text-sm font-bold" href={target.href} style={{ color: "var(--accent)" }}>
+                        {target.label}
+                        <ArrowUpRight size={14} />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="grid gap-3 md:grid-cols-2">
               <div className="soft-panel p-3">
                 <p className="field-label"><HelpLabel helpKey="alert.severity">Severity</HelpLabel></p>
@@ -358,7 +488,7 @@ export function MonitoringPage() {
               </div>
             ) : null}
             <details className="rounded-lg border p-3" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
-              <summary className="cursor-pointer text-sm font-bold" style={{ color: "var(--text-strong)" }}>Raw alert payload</summary>
+              <summary className="cursor-pointer text-sm font-bold" style={{ color: "var(--text-strong)" }}>Advanced raw alert payload</summary>
               <pre className="mt-3 overflow-x-auto text-xs">{JSON.stringify(selectedAlert, null, 2)}</pre>
             </details>
           </div>

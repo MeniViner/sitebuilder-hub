@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { env } from "../config/env";
 import { logger } from "../utils/logger";
+import { ensureSiteIndexes } from "./siteIndexes";
 
 mongoose.set("debug", (collectionName, methodName, ...methodArgs) => {
   logger.debug("db", "Mongoose operation", {
@@ -19,6 +20,7 @@ mongoose.connection.on("error", (error) => logger.error("db", "MongoDB connectio
 export const connectMongo = async () => {
   logger.info("db", "MongoDB connect requested", { mongoUri: env.MONGO_URI });
   await mongoose.connect(env.MONGO_URI);
+  await ensureSiteIndexes();
   logger.info("db", "MongoDB connected", { mongoUri: env.MONGO_URI, readyState: mongoose.connection.readyState });
 };
 

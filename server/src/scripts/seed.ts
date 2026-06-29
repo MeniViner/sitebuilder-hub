@@ -3,6 +3,7 @@ import { connectMongo } from "../db/mongo";
 import { Release } from "../models/Release";
 import { Site } from "../models/Site";
 import { applyResolvedSiteBuilderPaths } from "../utils/sitebuilderPaths";
+import { buildSiteIdentityKeyFromResolvedPaths } from "../utils/siteIdentity";
 
 dotenv.config();
 
@@ -87,7 +88,9 @@ async function seed() {
   await connectMongo();
 
   for (const sample of samples) {
-    await Site.updateOne({ siteCode: sample.siteCode }, { $set: applyResolvedSiteBuilderPaths(sample) }, { upsert: true });
+    const resolvedSample = applyResolvedSiteBuilderPaths(sample);
+    const siteIdentityKey = buildSiteIdentityKeyFromResolvedPaths(resolvedSample.resolvedPaths);
+    await Site.updateOne({ siteIdentityKey }, { $set: { ...resolvedSample, siteIdentityKey } }, { upsert: true });
   }
 
   for (const rel of releases) {

@@ -145,6 +145,16 @@ describe("browser deploy artifact access and evidence storage", () => {
         versionBefore: "1.2.3",
         versionAfter: "1.2.4",
         targetSite: { siteId: "site-1", siteCode: "schedule", sharePointSiteUrl: "https://portal.army.idf/sites/schedule" },
+        finalAppUrlVerification: {
+          key: "finalAppUrl",
+          label: "Final app URL",
+          url: "https://portal.army.idf/sites/schedule/siteDB/dist/index.html",
+          finalAppUrl: "https://portal.army.idf/sites/schedule/siteDB/dist/index.html",
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          checkedAt: "2026-06-18T10:00:00.000Z"
+        },
         readBackEvidence: [
           {
             relativePath: "index.html",
@@ -183,7 +193,14 @@ describe("browser deploy artifact access and evidence storage", () => {
     });
     expect(mocks.SiteVersionDeployment.create).toHaveBeenCalledWith(expect.objectContaining({
       status: "succeeded",
-      triggeredBy: "s8856096"
+      triggeredBy: "s8856096",
+      verification: expect.objectContaining({
+        finalAppUrlVerification: expect.objectContaining({
+          ok: true,
+          status: 200,
+          url: "https://portal.army.idf/sites/schedule/siteDB/dist/index.html"
+        })
+      })
     }));
     expect(site.currentVersion).toBe("1.2.4");
     expect(site.version).toBe("1.2.4");

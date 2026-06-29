@@ -5,6 +5,9 @@ import { SiteBackup } from "../models/SiteBackup";
 import { SiteVersionDeployment } from "../models/SiteVersionDeployment";
 import { getSharePointOperationCapabilities } from "./sharepointOperationClient";
 import { logger } from "../utils/logger";
+import { getActiveDangerousValidationBypasses } from "./dangerousBackupBypass.service";
+import { getSharePointOperationInventory } from "./sharepointOperationPolicy.service";
+import { getBuilderBackendRuntimeSettings } from "./builderMongoHealth.service";
 
 const writeBlockers = (sharePoint: ReturnType<typeof getSharePointOperationCapabilities>) => [
   !sharePoint.writeEnabled ? "sharepoint-write-disabled" : "",
@@ -18,10 +21,40 @@ export async function getOperationsCapabilities() {
   logger.info("operations", "Building operations capabilities");
   const sharePoint = getSharePointOperationCapabilities();
   const blockers = writeBlockers(sharePoint);
+  const dangerousOverrides = getActiveDangerousValidationBypasses();
+  const operationInventory = getSharePointOperationInventory();
+  const builderBackendConfig = getBuilderBackendRuntimeSettings();
+  const builderBackendApiUrls = builderBackendConfig.builderBackendOptions.map((option) => option.backendApiUrl);
 
   const capabilities = {
     generatedAt: new Date().toISOString(),
     sharePoint,
+    storageBackends: {
+      supported: ["txt", "mongo", "unknown"],
+      txt: {
+        sourceOfTruth: "SharePoint TXT files",
+        backupMode: "browser-sharepoint-file-copy",
+        adminSource: "users_data.txt"
+      },
+      mongo: {
+        sourceOfTruth: "Site Builder backend API backed by MongoDB",
+        connectorMode: "mongo-backend",
+        allowedBackendApiUrls: builderBackendApiUrls,
+        defaultApiKeyRef: builderBackendConfig.defaultBuilderApiKeyRef,
+        defaultBackendApiUrl: builderBackendConfig.defaultBuilderBackendApiUrl,
+        builderBackendOptions: builderBackendConfig.builderBackendOptions,
+        rawApiKeysExposed: false,
+        backupMode: "builder-backend-api",
+        adminSource: "mongo-admins-scope"
+      }
+    },
+    builderBackendConfig,
+    sharePointOperationInventory: operationInventory,
+    dangerousOverrides: {
+      active: dangerousOverrides.length > 0,
+      activeCount: dangerousOverrides.length,
+      gates: dangerousOverrides
+    },
     operations: {
       healthReadOnly: { available: sharePoint.readAvailable, writeRequired: false },
       backupPlan: { available: sharePoint.readAvailable, writeRequired: false },
@@ -78,6 +111,7 @@ export async function getOperationsCapabilities() {
   logger.info("operations", "Operations capabilities built", {
     readAvailable: capabilities.sharePoint.readAvailable,
     writeAvailable: capabilities.sharePoint.writeAvailable,
+    dangerousOverrides: capabilities.dangerousOverrides.activeCount,
     blockers
   });
   return capabilities;
@@ -97,6 +131,8 @@ export async function getSiteOperationsSummary(siteId: string) {
   ]);
   const capabilities = await getOperationsCapabilities();
   const writeReady = capabilities.readiness.writePreflight.ready;
+  const storageBackend = String(site.storageBackend || "unknown");
+  const isMongoSite = storageBackend === "mongo";
 
   const summary = {
     generatedAt: new Date().toISOString(),
@@ -106,6 +142,10 @@ export async function getSiteOperationsSummary(siteId: string) {
       siteCode: site.siteCode,
       displayName: site.displayName,
       status: site.status,
+      storageBackend,
+      dataBackendStatus: site.dataBackendStatus,
+      runtimeConfigStatus: site.runtimeConfigStatus,
+      mongoBackendStatus: site.mongoBackendStatus,
       version: site.currentVersion || site.version,
       finalAppUrl: site.finalAppUrl,
       resolvedPaths: site.resolvedPaths,
@@ -138,10 +178,13 @@ export async function getSiteOperationsSummary(siteId: string) {
       },
       backup: {
         readyForPlan: capabilities.sharePoint.readAvailable,
-        readyForExecution: writeReady && site.health?.txtFilesExist !== false,
+        readyForExecution: isMongoSite
+          ? site.health?.mongoBackupsOk === true
+          : writeReady && site.health?.txtFilesExist !== false,
         blockers: [
-          ...capabilities.readiness.backup.blockers,
-          site.health?.txtFilesExist === false ? "site-required-txt-files-missing" : ""
+          ...(isMongoSite ? [] : capabilities.readiness.backup.blockers),
+          isMongoSite && site.health?.mongoBackupsOk !== true ? "mongo-backup-capability-not-verified" : "",
+          !isMongoSite && site.health?.txtFilesExist === false ? "site-required-txt-files-missing" : ""
         ].filter(Boolean)
       },
       deploy: {
@@ -160,8 +203,10 @@ export async function getSiteOperationsSummary(siteId: string) {
       !site.health?.siteDbExists || !site.health?.usersDbExists ? "run-provision-plan" : "",
       !site.health?.permissionsOk ? "run-permissions-plan" : "",
       !site.lastHealthCheckAt ? "run-readonly-health" : "",
-      !site.lastBackupAt ? "run-backup-plan" : "",
-      (site.adminDifferences?.missingInTxt || []).length > 0 ? "run-admin-txt-repair-plan" : "",
+      isMongoSite && site.mongoBackendStatus?.seedStatus !== "ok" ? "run-mongo-backend-health" : "",
+      isMongoSite && site.health?.mongoBackupsOk !== true ? "verify-mongo-backup-capability" : "",
+      !isMongoSite && !site.lastBackupAt ? "run-backup-plan" : "",
+      !isMongoSite && (site.adminDifferences?.missingInTxt || []).length > 0 ? "run-admin-txt-repair-plan" : "",
       site.versionStatus === "outdated" ? "run-deploy-plan" : ""
     ].filter(Boolean)
   };

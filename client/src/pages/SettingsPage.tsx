@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Database, KeyRound, LogIn, LogOut, RefreshCw, Server, ShieldCheck } from "lucide-react";
+import { Database, KeyRound, LogIn, LogOut, RefreshCw, Server, ShieldAlert, ShieldCheck } from "lucide-react";
 import { AuthBootstrapStatus, OperationCapabilities, sitesApi, WhoAmIResult } from "../api/sitesApi";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { ErrorState } from "../components/ErrorState";
@@ -189,6 +189,9 @@ export function SettingsPage({
       <p className="text-sm">{row.nextStep}</p>
     </div>
   );
+  const dangerousOverrides = capabilities?.dangerousOverrides?.gates || [];
+  const builderBackendConfig = capabilities?.builderBackendConfig;
+  const builderBackendRows = builderBackendConfig?.builderBackendOptions || [];
 
   return (
     <div className="space-y-5">
@@ -291,6 +294,140 @@ export function SettingsPage({
               ) : null}
             </SectionCard>
           </div>
+
+          <SectionCard title="Storage backend rules" subtitle="התנהגות HUB עבור אתרי TXT מול Mongo. סודות מוצגים כסטטוס או reference בלבד." helpKey="site.mongodb">
+            <div className="grid gap-3 xl:grid-cols-3">
+              <div className="soft-panel p-4">
+                <p className="field-label">Supported modes</p>
+                <p className="font-bold" style={{ color: "var(--text-strong)" }}>{capabilities?.storageBackends?.supported?.join(", ") || "txt, mongo, unknown"}</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">TXT behavior</p>
+                <p className="text-sm muted">Source: {capabilities?.storageBackends?.txt?.sourceOfTruth || "SharePoint TXT files"}</p>
+                <p className="text-sm muted">Backup: {capabilities?.storageBackends?.txt?.backupMode || "browser-sharepoint-file-copy"}</p>
+                <p className="text-sm muted">Admins: {capabilities?.storageBackends?.txt?.adminSource || "users_data.txt"}</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Mongo behavior</p>
+                <p className="text-sm muted">Connector: {capabilities?.storageBackends?.mongo?.connectorMode || "mongo-backend"}</p>
+                <p className="text-sm muted">Credential ref: {capabilities?.storageBackends?.mongo?.defaultApiKeyRef || "not configured"}</p>
+                <p className="text-sm muted">Raw API keys exposed: {capabilities?.storageBackends?.mongo?.rawApiKeysExposed ? "yes" : "no"}</p>
+              </div>
+            </div>
+            <div className="mt-3 soft-panel p-4">
+              <p className="field-label">Allowed Builder backend URLs</p>
+              {(capabilities?.storageBackends?.mongo?.allowedBackendApiUrls || []).length ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {capabilities?.storageBackends?.mongo?.allowedBackendApiUrls?.map((url) => <span key={url} className="badge badge-neutral num">{url}</span>)}
+                </div>
+              ) : (
+                <p className="text-sm muted">לא הוגדרה allowlist. ה־HUB עדיין יציג runtime/backend status, אבל מומלץ להגדיר SITE_BUILDER_BACKEND_API_URLS לפני שימוש מבוקר.</p>
+              )}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Builder Backend" subtitle="הגדרות runtime בטוחות ליצירת אתרי Mongo. לא מוצגים API keys גולמיים." helpKey="create.backendApiUrl">
+            <div className="grid gap-3 xl:grid-cols-4">
+              <div className="soft-panel p-4">
+                <p className="field-label">Current environment</p>
+                <p className="font-bold" style={{ color: "var(--text-strong)" }}>{builderBackendConfig?.currentEnvironment || "unknown"}</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Default backend</p>
+                <p className="num text-sm font-bold" style={{ color: "var(--text-strong)" }}>{builderBackendConfig?.defaultBuilderBackendApiUrl || "not configured"}</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Default credential ref</p>
+                <p className="num text-sm font-bold" style={{ color: "var(--text-strong)" }}>{builderBackendConfig?.defaultBuilderApiKeyRef || "not configured"}</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Production/classified default</p>
+                <p className="font-bold" style={{ color: builderBackendConfig?.productionClassifiedDefaultExists ? "var(--success)" : "var(--warning)" }}>{builderBackendConfig?.productionClassifiedDefaultExists ? "קיים" : "חסר"}</p>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-3">
+              {builderBackendRows.length ? builderBackendRows.map((option) => (
+                <div key={option.backendApiUrl} className="soft-panel p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-bold" style={{ color: "var(--text-strong)" }}>{option.label}</p>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {option.default ? <span className="badge badge-success">default</span> : null}
+                      <span className={`badge ${option.allowed ? "badge-success" : "badge-danger"}`}>{option.allowed ? "allowed" : "blocked"}</span>
+                      <span className={`badge ${option.credentialConfigured ? "badge-success" : "badge-warning"}`}>{option.credentialConfigured ? "credential configured" : "credential missing"}</span>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
+                    <p className="muted">URL: <span className="num">{option.backendApiUrl}</span></p>
+                    <p className="muted">Host: <span className="num">{option.backendApiUrlHost}</span></p>
+                    <p className="muted">Environment: {option.environment}</p>
+                    <p className="muted">Credential ref: <span className="num">{option.credentialRef || "not configured"}</span></p>
+                  </div>
+                </div>
+              )) : (
+                <div className="soft-panel p-4 text-sm muted">לא מוגדר Backend של Site Builder. הגדירו SITE_BUILDER_DEFAULT_BACKEND_API_URL או SITE_BUILDER_BACKEND_API_URLS.</div>
+              )}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="ברירות מחדל ליצירת אתרים" subtitle="מה האשפים ימלאו אוטומטית לפני מעבר להגדרות מתקדמות." helpKey="site.createNew">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <div className="soft-panel p-4">
+                <p className="field-label">Default SharePoint host/root</p>
+                <p className="num font-bold" style={{ color: "var(--text-strong)" }}>portal.army.idf / sites</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Default Builder backend</p>
+                <p className="num text-sm font-bold" style={{ color: "var(--text-strong)" }}>{builderBackendConfig?.defaultBuilderBackendApiUrl || "not configured"}</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Default credential ref</p>
+                <p className="num text-sm font-bold" style={{ color: "var(--text-strong)" }}>{builderBackendConfig?.defaultBuilderApiKeyRef || "not configured"}</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Default storage backend</p>
+                <p className="font-bold" style={{ color: "var(--text-strong)" }}>{builderBackendConfig?.defaultStorageBackend || "unknown"}</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Advanced manual fields</p>
+                <p className="font-bold" style={{ color: builderBackendConfig?.advancedManualFieldsEnabled === false ? "var(--warning)" : "var(--success)" }}>{builderBackendConfig?.advancedManualFieldsEnabled === false ? "disabled" : "enabled"}</p>
+              </div>
+              <div className="soft-panel p-4">
+                <p className="field-label">Production/local mode</p>
+                <p className="font-bold" style={{ color: "var(--text-strong)" }}>{builderBackendConfig?.currentEnvironment === "production" ? "production/classified" : "local/dev capable"}</p>
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard
+            title="Danger zone env overrides"
+            subtitle="דגלי env שפותחים חסמי ולידציה של ה־HUB. שינוי שלהם דורש restart לשרת."
+            helpKey="system.env"
+          >
+            <div className="grid gap-3 md:grid-cols-[220px_1fr]">
+              <div className="soft-panel p-4">
+                <ShieldAlert className="mb-2" size={20} style={{ color: dangerousOverrides.length ? "var(--danger)" : "var(--success)" }} />
+                <p className="field-label">Overrides active</p>
+                <p className="num text-2xl font-bold" style={{ color: dangerousOverrides.length ? "var(--danger)" : "var(--success)" }}>
+                  {dangerousOverrides.length}
+                </p>
+              </div>
+              <div className="soft-panel p-4">
+                {dangerousOverrides.length ? (
+                  <div className="space-y-2">
+                    {dangerousOverrides.map((override) => (
+                      <div key={`${override.gate}-${override.envVar}`} className="rounded-md border p-3" style={{ borderColor: "color-mix(in srgb, var(--danger) 38%, var(--border))", background: "var(--danger-soft)" }}>
+                        <p className="num text-xs font-bold" style={{ color: "var(--danger)" }}>{override.envVar}=true</p>
+                        <p className="mt-1 text-sm" style={{ color: "var(--text-strong)" }}>{override.gate}</p>
+                        <p className="mt-1 text-xs muted">{override.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm muted">אין כרגע dangerous overrides פעילים. חסמי approval/backup/artifact/SharePoint preflight עובדים לפי המדיניות הרגילה.</p>
+                )}
+              </div>
+            </div>
+          </SectionCard>
 
           <SectionCard title="מפת פעולות" subtitle="מה זמין לקריאה ומה דורש כתיבה" helpKey="operation.map">
             {operationRows.length ? (

@@ -7,6 +7,7 @@ import {
   getOwnerPersonalNumbers,
   normalizePersonalNumber
 } from "../services/personal-auth.service";
+import { resolveAuthOwnerMode, withOwnerMode } from "../services/authOwnerMode.service";
 
 export const loginByPersonalNumber = async (req: Request, res: Response) => {
   const raw = String(req.body?.personalNumber || "");
@@ -20,13 +21,26 @@ export const loginByPersonalNumber = async (req: Request, res: Response) => {
   if (!match) {
     return fail(res, "UNAUTHORIZED", "המשתמש לא מורשה למערכת", undefined, 401);
   }
+  const identityMode = match.source === "owner" ? "explicit-owner" as const : undefined;
+  const ownerMode = resolveAuthOwnerMode({
+    id: `pn:${match.personalNumber}`,
+    name: match.isBootstrapAdmin ? `Bootstrap Admin ${match.personalNumber}` : `Admin ${match.personalNumber}`,
+    role: match.role,
+    personalNumber: match.personalNumber,
+    source: match.source,
+    identityMode,
+    isBootstrapAdmin: match.isBootstrapAdmin
+  });
 
   return ok(res, {
     authenticated: true,
     personalNumber: match.personalNumber,
     role: match.role,
     source: match.source,
+    identityMode,
     isBootstrapAdmin: match.isBootstrapAdmin,
+    ownerMode: ownerMode.ownerMode,
+    ownerModeReason: ownerMode.ownerModeReason,
     matchedSite: match.siteId
       ? {
           siteId: match.siteId,
@@ -48,8 +62,12 @@ export const bootstrapStatus = async (_req: Request, res: Response) => {
 };
 
 export const whoAmI = async (req: Request, res: Response) => {
+  const user = withOwnerMode(req.user || null);
+  const ownerMode = resolveAuthOwnerMode(user);
   return ok(res, {
-    authenticated: Boolean(req.user),
-    user: req.user || null
+    authenticated: Boolean(user),
+    ownerMode: ownerMode.ownerMode,
+    ownerModeReason: ownerMode.ownerModeReason,
+    user
   });
 };

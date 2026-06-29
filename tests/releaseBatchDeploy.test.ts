@@ -296,7 +296,7 @@ describe("batch deploy planning", () => {
         authMode: "none"
       },
       blockers: [],
-      missingRequirements: [],
+      missingRequirements: ["Browser deploy requires browser Digest and per-file upload verification at execution time."],
       browserConnector: {
         connectorMode: "browser-sharepoint",
         backendSharePointRequired: false,
@@ -320,6 +320,7 @@ describe("batch deploy planning", () => {
     expect(plan.summary.readySites).toBe(1);
     expect(plan.summary.executionReady).toBe(true);
     expect(plan.results[0].status).toBe("ready");
+    expect(plan.results[0].blockers).not.toContain("Browser deploy requires browser Digest and per-file upload verification at execution time.");
     expect(mocks.buildSiteDeployPlan).toHaveBeenCalledWith("site-1", "release-1", expect.objectContaining({
       connectorMode: "browser-sharepoint"
     }));

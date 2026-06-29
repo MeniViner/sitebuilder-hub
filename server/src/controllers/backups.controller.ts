@@ -17,9 +17,13 @@ import {
   getBackupById,
   listBackups,
   listSiteBackups,
+  recordBrowserSharePointBackupEvidence,
+  recordBrowserSharePointBackupVerification,
   verifyBackup
 } from "../services/backups.service";
 import {
+  browserBackupEvidenceSchema,
+  browserBackupVerificationEvidenceSchema,
   queueRestoreSchema,
   restorePlanSchema,
   runAllBackupsSchema,
@@ -81,6 +85,42 @@ export const runSiteBackup = async (req: Request, res: Response) => {
     });
 
     return ok(res, result, undefined, 202);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const recordBrowserBackupEvidence = async (req: Request, res: Response) => {
+  try {
+    const payload = browserBackupEvidenceSchema.parse(req.body || {});
+    const result = await recordBrowserSharePointBackupEvidence({
+      siteId: req.params.id,
+      actor: req.user?.name || "browser-sharepoint",
+      input: payload
+    });
+
+    await writeAuditLog({
+      req,
+      action: "sites.browser-backup-evidence",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: {
+        backupId: result.backup.backupId,
+        jobId: payload.jobId || "",
+        connectorMode: "browser-sharepoint",
+        finalStatus: payload.finalStatus,
+        filesCount: result.summary.filesCount,
+        verifiedFilesCount: result.summary.verifiedFilesCount,
+        failedFilesCount: result.summary.failedFilesCount,
+        siteBackupUpdated: result.summary.siteBackupUpdated
+      }
+    });
+
+    return ok(res, {
+      backup: result.backup,
+      site: result.site,
+      summary: result.summary
+    }, undefined, 201);
   } catch (error) {
     return handleError(error, res);
   }
@@ -201,6 +241,39 @@ export const postVerifyBackup = async (req: Request, res: Response) => {
   }
 };
 
+export const postBrowserVerifyBackup = async (req: Request, res: Response) => {
+  try {
+    const payload = browserBackupVerificationEvidenceSchema.parse(req.body || {});
+    const result = await recordBrowserSharePointBackupVerification({
+      backupId: req.params.id,
+      actor: req.user?.name || "browser-sharepoint",
+      input: payload
+    });
+
+    await writeAuditLog({
+      req,
+      action: "backups.browser-verify",
+      entityType: "SiteBackup",
+      entityId: result.backup._id.toString(),
+      metadata: {
+        connectorMode: "browser-sharepoint",
+        status: result.backup.status,
+        filesCount: result.summary.filesCount,
+        verifiedFilesCount: result.summary.verifiedFilesCount,
+        failedFilesCount: result.summary.failedFilesCount
+      }
+    });
+
+    return ok(res, {
+      backup: result.backup,
+      site: result.site,
+      summary: result.summary
+    });
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
 export const postRestorePlan = async (req: Request, res: Response) => {
   try {
     const payload = restorePlanSchema.parse(req.body || {});
@@ -229,7 +302,9 @@ export const postRestoreBackup = async (req: Request, res: Response) => {
     const result = await enqueueBackupRestore({
       backupId: req.params.id,
       createdBy: req.user?.name || "system",
-      notes: payload.notes
+      notes: payload.notes,
+      connectorMode: payload.connectorMode,
+      confirmBackendSharePoint: payload.confirmBackendSharePoint
     });
 
     await writeAuditLog({

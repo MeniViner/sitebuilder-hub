@@ -173,7 +173,9 @@ export async function runReadOnlySharePointHealthCheck(siteId: string): Promise<
 
   site.health = { ...(site.health as Partial<SiteHealth>), ...nextHealth } as any;
   site.lastHealthCheckAt = new Date();
+  site.lastSharePointHostingVerificationAt = site.lastHealthCheckAt;
   site.resolvedPaths = resolvedPaths as any;
+  site.sharePointPathEvidence = evidence as any;
   site.sharePointStatus.documentLibrariesStatus =
     siteDbExists === true && usersDbExists === true
       ? "ok"
@@ -191,7 +193,7 @@ export async function runReadOnlySharePointHealthCheck(siteId: string): Promise<
     updatedHealthKeys: Object.keys(nextHealth)
   });
 
-  const derivedHealthStatus = deriveHealthStatus(site.health, site.lastHealthCheckAt);
+  const derivedHealthStatus = deriveHealthStatus(site.health, site.lastHealthCheckAt, site.storageBackend);
   logger.info("sharepoint", "Read-only SharePoint health check completed", {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
@@ -251,7 +253,9 @@ export async function recordBrowserSharePointHealthCheck(
 
   site.health = { ...(site.health as Partial<SiteHealth>), ...nextHealth } as any;
   site.lastHealthCheckAt = Number.isNaN(checkedAt.getTime()) ? new Date() : checkedAt;
+  site.lastSharePointHostingVerificationAt = site.lastHealthCheckAt;
   site.resolvedPaths = resolvedPaths as any;
+  site.sharePointPathEvidence = evidence as any;
   site.sharePointStatus.documentLibrariesStatus =
     nextHealth.siteDbExists === true && nextHealth.usersDbExists === true
       ? "ok"
@@ -263,7 +267,7 @@ export async function recordBrowserSharePointHealthCheck(
 
   await site.save();
 
-  const derivedHealthStatus = deriveHealthStatus(site.health, site.lastHealthCheckAt);
+  const derivedHealthStatus = deriveHealthStatus(site.health, site.lastHealthCheckAt, site.storageBackend);
   logger.info("sites", "Browser SharePoint health evidence recorded", {
     siteId: site._id.toString(),
     siteCode: site.siteCode,

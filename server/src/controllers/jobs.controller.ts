@@ -3,7 +3,7 @@ import { ZodError } from "zod";
 import { fail, ok } from "../utils/http";
 import { normalizeError } from "../utils/errors";
 import { logger } from "../utils/logger";
-import { jobApprovalDecisionSchema, jobsQuerySchema } from "../validators/job.schema";
+import { jobApprovalDecisionSchema, jobRerunSchema, jobsQuerySchema } from "../validators/job.schema";
 import { approveJobWithActor, getJobById, listJobs, rejectJobWithActor } from "../services/jobs.service";
 import { runJobNow } from "../services/jobs.worker";
 import { writeAuditLog } from "../services/audit.service";
@@ -49,7 +49,21 @@ export const getJob = async (req: Request, res: Response) => {
 
 export const rerunJob = async (req: Request, res: Response) => {
   try {
+    const payload = jobRerunSchema.parse(req.body || {});
     const job = await runJobNow(req.params.id);
+    await writeAuditLog({
+      req,
+      action: "jobs.rerun",
+      entityType: "Job",
+      entityId: job?._id?.toString?.() || req.params.id,
+      metadata: {
+        jobId: req.params.id,
+        type: job?.type,
+        siteId: job?.siteId?.toString(),
+        reason: payload.reason || "",
+        status: job?.status
+      }
+    });
     return ok(res, job);
   } catch (error) {
     return handleError(error, req, res, "Rerun job request failed");

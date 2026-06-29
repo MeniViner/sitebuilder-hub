@@ -138,7 +138,9 @@ export function Sidebar({
   }
 
   return (
-    <aside className={`sidebar-shell sidebar-shell-desktop hidden shrink-0 lg:sticky lg:top-24 lg:block ${collapsed ? "sidebar-shell-collapsed" : ""}`}>
+    <aside
+      className={`sidebar-shell sidebar-shell-desktop hidden shrink-0 lg:sticky lg:top-24 lg:block ${collapsed ? "sidebar-shell-collapsed" : ""}`}
+    >
       <SidebarContent collapsed={collapsed} onToggleCollapsed={onToggleCollapsed} />
     </aside>
   );

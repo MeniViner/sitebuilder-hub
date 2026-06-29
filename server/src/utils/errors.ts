@@ -1,5 +1,31 @@
 export function normalizeError(error: unknown): { code: string; message: string; status: number; details?: unknown } {
+  if (error instanceof Error && error.message === "site-identity-duplicate") {
+    return {
+      code: "SITE_IDENTITY_DUPLICATE",
+      message: "כבר קיימת רשומת אתר עבור אותו יעד SharePoint ואותם נתיבי siteDB/siteUsersDb. אפשר להשתמש באותו קוד אתר רק אם נתיבי היעד שונים.",
+      status: 409,
+      details: (error as Error & { details?: unknown }).details
+    };
+  }
+
   if (error instanceof Error && /duplicate key/.test(error.message)) {
+    const keyPattern = (error as Error & { keyPattern?: Record<string, unknown> }).keyPattern || {};
+    if (keyPattern.siteIdentityKey) {
+      return {
+        code: "SITE_IDENTITY_DUPLICATE",
+        message: "כבר קיימת רשומת אתר עבור אותו יעד SharePoint ואותם נתיבי siteDB/siteUsersDb.",
+        status: 409
+      };
+    }
+
+    if (keyPattern.siteCode) {
+      return {
+        code: "LEGACY_SITE_CODE_INDEX_CONFLICT",
+        message: "האינדקס הישן על קוד אתר עדיין פעיל ב־Mongo. יש להפעיל מחדש את שרת ה־HUB כדי שמיגרציית האינדקסים תוריד אותו.",
+        status: 409
+      };
+    }
+
     return { code: "DUPLICATE", message: "ערך ייחודי כבר קיים", status: 409 };
   }
 
@@ -46,6 +72,62 @@ export function normalizeError(error: unknown): { code: string; message: string;
     return { code: "NOT_FOUND", message: "Backup לא נמצא", status: 404 };
   }
 
+  if (error instanceof Error && error.message === "mongo-backup-execution-not-implemented") {
+    return {
+      code: "MONGO_BACKUP_EXECUTION_NOT_IMPLEMENTED",
+      message: "אתר Mongo צריך גיבוי דרך Builder backend ולא העתקת קבצי TXT מ־SharePoint. בשלב זה ה־HUB יודע לאמת יכולת backup אבל עדיין לא מריץ יצירת backup Mongo מלאה.",
+      status: 409,
+      details: (error as Error & { details?: unknown }).details
+    };
+  }
+
+  if (error instanceof Error && error.message === "mongo-site-create-plan-not-ready") {
+    return {
+      code: "MONGO_SITE_CREATE_PLAN_NOT_READY",
+      message: "תוכנית יצירת אתר Mongo אינה מוכנה לביצוע. יש לפתור את החסמים לפני קריאה ל־Builder backend.",
+      status: 409,
+      details: (error as Error & { details?: unknown }).details
+    };
+  }
+
+  if (error instanceof Error && error.message === "mongo-site-runtime-config-credential-missing") {
+    return {
+      code: "MONGO_RUNTIME_CONFIG_CREDENTIAL_MISSING",
+      message: "אי אפשר ליצור runtime config כי credential reference ל־Builder backend לא מוגדר או לא נמצא בסביבה.",
+      status: 409
+    };
+  }
+
+  if (error instanceof Error && error.message === "browser-sharepoint-evidence-connector-mode-required") {
+    return {
+      code: "BROWSER_SHAREPOINT_EVIDENCE_INVALID",
+      message: "Evidence של פעולת SharePoint בדפדפן אינו תקין.",
+      status: 400
+    };
+  }
+
+  if (
+    error instanceof Error &&
+    [
+      "browser-backup-connector-mode-required",
+      "browser-backup-id-required",
+      "browser-backup-target-folder-invalid",
+      "browser-backup-target-folder-mismatch",
+      "browser-backup-root-mismatch",
+      "browser-backup-site-mismatch",
+      "browser-backup-source-path-mismatch",
+      "browser-backup-target-path-mismatch",
+      "browser-backup-success-evidence-invalid",
+      "backup-verification-evidence-missing"
+    ].includes(error.message)
+  ) {
+    return {
+      code: "BROWSER_BACKUP_EVIDENCE_INVALID",
+      message: "Evidence של browser backup אינו תקין או אינו מספיק לאימות גיבוי.",
+      status: 400
+    };
+  }
+
   if (error instanceof Error && error.message === "backup-restore-evidence-missing") {
     return {
       code: "BACKUP_RESTORE_EVIDENCE_MISSING",
@@ -75,6 +157,52 @@ export function normalizeError(error: unknown): { code: string; message: string;
       code: "RESTORE_JOB_REQUIRES_APPROVAL",
       message: "Restore job must be approved before it can run.",
       status: 409
+    };
+  }
+
+  if (error instanceof Error && error.message === "restore-browser-sharepoint-not-implemented") {
+    return {
+      code: "RESTORE_BROWSER_SHAREPOINT_NOT_IMPLEMENTED",
+      message: "שחזור דורש הרשאת שרת ל־SharePoint או מימוש שחזור דרך הדפדפן.",
+      status: 409
+    };
+  }
+
+  if (error instanceof Error && error.message === "browser-sharepoint-operation-not-implemented") {
+    return {
+      code: "BROWSER_SHAREPOINT_OPERATION_NOT_IMPLEMENTED",
+      message: "הפעולה הזאת עדיין לא הוסבה לחיבור דרך הדפדפן.",
+      status: 409
+    };
+  }
+
+  if (error instanceof Error && error.message === "backend-sharepoint-service-auth-required") {
+    return {
+      code: "BACKEND_SHAREPOINT_SERVICE_AUTH_REQUIRED",
+      message: "הפעולה הזאת עדיין רצה דרך השרת ולכן דורשת הרשאת שרת ל־SharePoint.",
+      status: 409
+    };
+  }
+
+  if (error instanceof Error && error.message === "admin-sync-backend-service-auth-or-browser-required") {
+    return {
+      code: "ADMIN_SYNC_BACKEND_SERVICE_AUTH_OR_BROWSER_REQUIRED",
+      message: "סנכרון מנהלים דרך השרת עדיין דורש הרשאת שרת ל־SharePoint או הסבה לחיבור דרך הדפדפן.",
+      status: 409
+    };
+  }
+
+  if (
+    error instanceof Error &&
+    [
+      "browser-admin-evidence-connector-mode-required",
+      "browser-admin-evidence-source-status-required"
+    ].includes(error.message)
+  ) {
+    return {
+      code: "BROWSER_ADMIN_EVIDENCE_INVALID",
+      message: "Evidence של קריאת מנהלים דרך הדפדפן אינו תקין.",
+      status: 400
     };
   }
 
@@ -214,6 +342,14 @@ export function normalizeError(error: unknown): { code: string; message: string;
     };
   }
 
+  if (error instanceof Error && error.message === "mongo-admin-txt-repair-not-applicable") {
+    return {
+      code: "MONGO_ADMIN_TXT_REPAIR_NOT_APPLICABLE",
+      message: "באתר Mongo מקור מנהלי האפליקציה הוא Builder backend/Mongo. תיקון users_data.txt אינו פעולה ראשית לאתר הזה.",
+      status: 409
+    };
+  }
+
   if (error instanceof Error && error.message === "admin-txt-repair-plan-not-ready") {
     return {
       code: "ADMIN_TXT_REPAIR_PLAN_NOT_READY",
@@ -308,6 +444,14 @@ export function normalizeError(error: unknown): { code: string; message: string;
     return {
       code: "DEPLOY_PLAN_NOT_READY",
       message: "Deploy cannot run because the release artifact is invalid.",
+      status: 409
+    };
+  }
+
+  if (error instanceof Error && error.message === "deploy-plan-execution-not-ready") {
+    return {
+      code: "DEPLOY_PLAN_EXECUTION_NOT_READY",
+      message: "Deploy cannot run because required site readiness checks are missing or failed.",
       status: 409
     };
   }

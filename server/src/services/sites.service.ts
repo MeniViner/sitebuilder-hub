@@ -2,6 +2,7 @@ import { FilterQuery } from "mongoose";
 import { Site, SiteDocument, SiteHealth } from "../models/Site";
 import { deriveHealthStatus } from "../utils/health";
 import { applyResolvedSiteBuilderPaths, resolveSiteBuilderPaths, SiteBuilderPathInput } from "../utils/sitebuilderPaths";
+import { buildSiteIdentityKeyFromResolvedPaths } from "../utils/siteIdentity";
 import { logger } from "../utils/logger";
 
 export type SiteQueryFilters = {
@@ -57,15 +58,118 @@ const toPathInput = (value: Record<string, unknown>): SiteBuilderPathInput => ({
   usersDbLibrary: String(value.usersDbLibrary || ""),
   bootstrapLibrary: String(value.bootstrapLibrary || ""),
   bootstrapFolder: String(value.bootstrapFolder || ""),
-  widgetsDbTarget: String(value.widgetsDbTarget || "")
+  widgetsDbTarget: String(value.widgetsDbTarget || ""),
+  runtimeConfigPath: String(value.runtimeConfigPath || "")
 });
 
 const withResolvedPathsForPersistence = (payload: Record<string, unknown>, base: Record<string, unknown> = {}) => {
   const merged = { ...base, ...payload };
-  return {
+  const resolved = applyResolvedSiteBuilderPaths(toPathInput(merged));
+  const runtimeConfigPath = String(payload.runtimeConfigPath || resolved.resolvedPaths.runtimeConfigPath || "");
+  const runtimeConfigUrl = String(payload.runtimeConfigUrl || resolved.resolvedPaths.runtimeConfigUrl || "");
+  const storageBackend = String(payload.storageBackend || base.storageBackend || "unknown");
+  const builderSiteId = String(payload.builderSiteId || base.builderSiteId || payload.mongoSiteId || base.mongoSiteId || "");
+  const mongoSiteId = String(payload.mongoSiteId || base.mongoSiteId || builderSiteId || "");
+  const safeCollectionName = String(payload.safeCollectionName || base.safeCollectionName || "");
+  const next = {
     ...payload,
-    ...applyResolvedSiteBuilderPaths(toPathInput(merged))
+    ...resolved,
+    runtimeConfigPath,
+    runtimeConfigUrl,
+    builderSiteId,
+    mongoSiteId,
+    storageBackend,
+    authoritativeAdminSource: String(payload.authoritativeAdminSource || base.authoritativeAdminSource || "") ||
+      (storageBackend === "mongo" ? "mongo" : storageBackend === "txt" ? "txt" : "unknown"),
+    siteIdentityKey: buildSiteIdentityKeyFromResolvedPaths(resolved.resolvedPaths, {
+      storageBackend,
+      builderSiteId,
+      mongoSiteId,
+      safeCollectionName
+    })
   };
+  return guardMongoReadiness(next, merged);
+};
+
+const guardMongoReadiness = (next: Record<string, unknown>, merged: Record<string, unknown>) => {
+  if (String(next.storageBackend || "unknown") !== "mongo") return next;
+
+  const health = (merged.health || next.health || {}) as Partial<SiteHealth>;
+  const runtimeConfigStatus = (merged.runtimeConfigStatus || next.runtimeConfigStatus || {}) as Record<string, unknown>;
+  const mongoBackendStatus = (merged.mongoBackendStatus || next.mongoBackendStatus || {}) as Record<string, unknown>;
+  const runtimeReady =
+    health.runtimeConfigExists === true &&
+    health.runtimeConfigValid === true &&
+    ["configured", "ok"].includes(String(runtimeConfigStatus.readStatus || "configured"));
+  const hostingReady =
+    health.siteDbExists === true &&
+    health.usersDbExists === true &&
+    health.distExists === true &&
+    health.indexExists === true;
+  const mongoReady =
+    health.dataBackendReachable === true &&
+    health.mongoRegistryOk === true &&
+    health.mongoCollectionOk === true &&
+    health.mongoSeedOk === true &&
+    String(mongoBackendStatus.seedStatus || "ok") === "ok";
+  const ready = hostingReady && runtimeReady && mongoReady;
+
+  if (ready) {
+    return {
+      ...next,
+      lifecycleStatus: next.lifecycleStatus || "ready",
+      provisioningStatus: next.provisioningStatus || "succeeded"
+    };
+  }
+
+  return {
+    ...next,
+    status: next.status === "active" ? "draft" : next.status,
+    lifecycleStatus: next.lifecycleStatus === "ready" ? "partially-created" : next.lifecycleStatus || "draft",
+    provisioningStatus: next.provisioningStatus === "succeeded" ? "partially-created" : next.provisioningStatus || "unknown"
+  };
+};
+
+const throwSiteIdentityDuplicate = (details: Record<string, unknown>) => {
+  const error = new Error("site-identity-duplicate") as Error & { details?: Record<string, unknown> };
+  error.details = details;
+  throw error;
+};
+
+const assertSiteIdentityAvailable = async (siteIdentityKey: string, exceptId?: unknown) => {
+  const query: FilterQuery<SiteDocument> = { siteIdentityKey };
+  if (exceptId) {
+    query._id = { $ne: exceptId } as any;
+  }
+
+  const existing = await Site.findOne(query, {
+    _id: 1,
+    siteCode: 1,
+    displayName: 1,
+    sharePointSiteUrl: 1,
+    siteDbLibrary: 1,
+    usersDbLibrary: 1,
+    storageBackend: 1,
+    builderSiteId: 1,
+    mongoSiteId: 1,
+    safeCollectionName: 1,
+    runtimeConfigPath: 1
+  }).lean();
+  if (!existing) return;
+
+  throwSiteIdentityDuplicate({
+    existingSiteId: String(existing._id),
+    existingSiteCode: existing.siteCode,
+    existingDisplayName: existing.displayName,
+    sharePointSiteUrl: existing.sharePointSiteUrl,
+    siteDbLibrary: existing.siteDbLibrary,
+    usersDbLibrary: existing.usersDbLibrary,
+    storageBackend: existing.storageBackend,
+    builderSiteId: existing.builderSiteId,
+    mongoSiteId: existing.mongoSiteId,
+    safeCollectionName: existing.safeCollectionName,
+    runtimeConfigPath: existing.runtimeConfigPath
+  });
 };
 
 const withResolvedPathsForResponse = <T extends Record<string, unknown>>(site: T) => {
@@ -77,6 +181,8 @@ const withResolvedPathsForResponse = <T extends Record<string, unknown>>(site: T
       sharePointSiteUrl: resolvedPaths.sharePointSiteUrl,
       finalAppUrl: resolvedPaths.finalAppUrl,
       bootstrapUrl: resolvedPaths.bootstrapUrl,
+      runtimeConfigPath: resolvedPaths.runtimeConfigPath,
+      runtimeConfigUrl: resolvedPaths.runtimeConfigUrl,
       siteDbLibrary: resolvedPaths.siteDbLibrary,
       usersDbLibrary: resolvedPaths.usersDbLibrary,
       bootstrapLibrary: resolvedPaths.bootstrapLibrary,
@@ -95,8 +201,10 @@ export const createSite = async (payload: Record<string, unknown>) => {
     displayName: payload.displayName,
     status: payload.status
   });
-  const site = await Site.create(withResolvedPathsForPersistence(payload));
-  logger.info("sites", "Site persisted", { id: site._id.toString(), siteCode: site.siteCode });
+  const nextSite = withResolvedPathsForPersistence(payload);
+  await assertSiteIdentityAvailable(String(nextSite.siteIdentityKey || ""));
+  const site = await Site.create(nextSite);
+  logger.info("sites", "Site persisted", { id: site._id.toString(), siteCode: site.siteCode, siteIdentityKey: site.siteIdentityKey });
   return site;
 };
 
@@ -108,9 +216,11 @@ export const updateSite = async (id: string, payload: Record<string, unknown>) =
     return null;
   }
 
-  site.set(withResolvedPathsForPersistence(payload, site.toObject()));
+  const nextSite = withResolvedPathsForPersistence(payload, site.toObject());
+  await assertSiteIdentityAvailable(String(nextSite.siteIdentityKey || ""), site._id);
+  site.set(nextSite);
   const saved = await site.save();
-  logger.info("sites", "Site update persisted", { id: saved._id.toString(), siteCode: saved.siteCode });
+  logger.info("sites", "Site update persisted", { id: saved._id.toString(), siteCode: saved.siteCode, siteIdentityKey: saved.siteIdentityKey });
   return saved;
 };
 
@@ -128,7 +238,11 @@ export const manualHealthCheck = (id: string, health: Record<string, boolean>) =
 
 export const withDerivedHealth = <T extends Record<string, unknown> & { health?: unknown; lastHealthCheckAt?: Date | null }>(site: T) => ({
   ...withResolvedPathsForResponse(site),
-  derivedHealthStatus: deriveHealthStatus(site.health as Partial<SiteHealth>, site.lastHealthCheckAt ?? null)
+  derivedHealthStatus: deriveHealthStatus(
+    site.health as Partial<SiteHealth>,
+    site.lastHealthCheckAt ?? null,
+    String(site.storageBackend || "unknown")
+  )
 });
 
 export const getStats = async () => {
@@ -139,7 +253,7 @@ export const getStats = async () => {
   let totalStorageMb = 0;
   for (const site of sites) {
     totalStorageMb += site.storageMb ?? 0;
-    const key = deriveHealthStatus(site.health, site.lastHealthCheckAt ?? null);
+    const key = deriveHealthStatus(site.health, site.lastHealthCheckAt ?? null, String(site.storageBackend || "unknown"));
     summary[key] += 1;
   }
 

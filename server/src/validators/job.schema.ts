@@ -3,6 +3,9 @@ import { z } from "zod";
 export const jobStatusSchema = z.enum([
   "awaiting-approval",
   "queued",
+  "browser-required",
+  "browser-in-progress",
+  "blocked-service-auth-required",
   "preflight",
   "running",
   "verifying",
@@ -19,5 +22,9 @@ export const jobsQuerySchema = z.object({
 });
 
 export const jobApprovalDecisionSchema = z.object({
+  reason: z.string().trim().max(2000).optional()
+});
+
+export const jobRerunSchema = z.object({
   reason: z.string().trim().max(2000).optional()
 });

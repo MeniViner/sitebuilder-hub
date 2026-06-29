@@ -6,15 +6,14 @@ import { logger } from "../utils/logger";
 import { writeAuditLog } from "../services/audit.service";
 import {
   addSiteAdmin,
-  buildAdminTxtRepairPlan,
   enqueueAdminSync,
   enqueueAdminTxtRepair,
   getAdminsDiff,
   getSiteAdmins,
+  recordBrowserAdminLiveReadEvidence,
   removeSiteAdmin
 } from "../services/admins.service";
-import { readLiveAdminSources } from "../services/liveAdminSources.service";
-import { addAdminSchema, adminTxtRepairSchema, removeAdminSchema, syncAdminsSchema } from "../validators/admin.schema";
+import { addAdminSchema, adminTxtRepairSchema, browserAdminLiveReadEvidenceSchema, removeAdminSchema, syncAdminsSchema } from "../validators/admin.schema";
 
 const handleError = (error: unknown, res: Response) => {
   if (error instanceof ZodError) {
@@ -74,7 +73,7 @@ export const addAdmin = async (req: Request, res: Response) => {
       action: "admins.add",
       entityType: "Site",
       entityId: req.params.id,
-      metadata: { admin: payload.admin }
+      metadata: { admin: payload.admin, reason: payload.reason || "" }
     });
 
     return ok(res, site);
@@ -85,7 +84,10 @@ export const addAdmin = async (req: Request, res: Response) => {
 
 export const deleteAdmin = async (req: Request, res: Response) => {
   try {
-    const payload = removeAdminSchema.parse({ source: req.query.source });
+    const payload = removeAdminSchema.parse({
+      source: req.query.source || req.body?.source,
+      reason: req.body?.reason || req.query.reason
+    });
     const site = await removeSiteAdmin({
       siteId: req.params.id,
       adminId: req.params.adminId,
@@ -97,7 +99,7 @@ export const deleteAdmin = async (req: Request, res: Response) => {
       action: "admins.remove",
       entityType: "Site",
       entityId: req.params.id,
-      metadata: { adminId: req.params.adminId, source: payload.source }
+      metadata: { adminId: req.params.adminId, source: payload.source, reason: payload.reason || "" }
     });
 
     return ok(res, site);
@@ -117,20 +119,37 @@ export const getAdminsDiffEndpoint = async (req: Request, res: Response) => {
 
 export const readLiveAdminsEndpoint = async (req: Request, res: Response) => {
   try {
-    const data = await readLiveAdminSources(req.params.id, { persist: false, capturedBy: req.user?.name || "system" });
+    return handleError(new Error("browser-sharepoint-operation-not-implemented"), res);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const browserLiveReadEvidenceEndpoint = async (req: Request, res: Response) => {
+  try {
+    const payload = browserAdminLiveReadEvidenceSchema.parse(req.body || {});
+    const result = await recordBrowserAdminLiveReadEvidence({
+      siteId: req.params.id,
+      actor: req.user?.name || "system",
+      input: payload
+    });
 
     await writeAuditLog({
       req,
-      action: "admins.live-read",
+      action: "admins.browser-live-read-evidence",
       entityType: "Site",
       entityId: req.params.id,
       metadata: {
-        sourceStatus: data.sourceStatus,
-        adminsCount: data.adminsCount
+        connectorMode: payload.connectorMode,
+        targetSiteUrl: payload.targetSiteUrl,
+        snapshotId: result.snapshot?._id?.toString?.(),
+        syncStatus: result.summary.adminSyncStatus,
+        adminsCount: result.summary.adminsCount,
+        failedSources: result.liveRead.sourceStatus.filter((source) => !source.ok).map((source) => source.source)
       }
     });
 
-    return ok(res, data);
+    return ok(res, result);
   } catch (error) {
     return handleError(error, res);
   }
@@ -138,27 +157,7 @@ export const readLiveAdminsEndpoint = async (req: Request, res: Response) => {
 
 export const planTxtAdminRepair = async (req: Request, res: Response) => {
   try {
-    const payload = adminTxtRepairSchema.parse(req.body || {});
-    const reason = payload.reason || payload.notes || "";
-    const data = await buildAdminTxtRepairPlan(req.params.id, {
-      capturedBy: req.user?.name || "system",
-      reason
-    });
-
-    await writeAuditLog({
-      req,
-      action: "admins.repair-txt-plan",
-      entityType: "Site",
-      entityId: req.params.id,
-      metadata: {
-        targetPath: data.targetPath,
-        readyForRepair: data.summary.readyForRepair,
-        missingInTxtCount: data.summary.missingInTxtCount,
-        reason
-      }
-    });
-
-    return ok(res, data);
+    return handleError(new Error("browser-sharepoint-operation-not-implemented"), res);
   } catch (error) {
     return handleError(error, res);
   }

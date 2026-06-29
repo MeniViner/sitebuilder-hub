@@ -177,7 +177,7 @@ export function DiagnosticsPage() {
             <KpiCard title="מצב אפליקציה" value={diagnostics.appMode} icon={<Cable size={18} />} tone="info" helpKey="mode.localDevOwner" />
             <KpiCard title="זהות פעילה" value={diagnostics.auth.activeBackendUser?.name || "לא ידוע"} icon={<CheckCircle2 size={18} />} tone={diagnostics.auth.activeBackendUser?.source === "sharepoint" ? "success" : diagnostics.auth.localFallbackActive ? "warning" : "neutral"} helpKey="sharepoint.currentUser" />
             <KpiCard title="SharePoint write" value={diagnostics.sharePoint.writeEnabled ? "מוגדר" : "כבוי"} icon={<ShieldAlert size={18} />} tone={diagnostics.sharePoint.writeEnabled ? "warning" : "neutral"} helpKey="sharepoint.write" />
-            <KpiCard title="Owner direct" value={diagnostics.auth.ownerDirectMode ? "פעיל" : "כבוי"} icon={<CheckCircle2 size={18} />} tone={diagnostics.auth.ownerDirectMode ? "success" : "warning"} helpKey="mode.owner" />
+            <KpiCard title="Storage backend" value={diagnostics.selectedSite?.storageBackend || "unknown"} icon={<CheckCircle2 size={18} />} tone={diagnostics.selectedSite?.storageBackend === "mongo" ? "info" : diagnostics.selectedSite?.storageBackend === "txt" ? "success" : "neutral"} helpKey="mode.owner" />
           </div>
 
           <SectionCard title="מצב וחיבורי בסיס" subtitle="Origin, API וזהות שהשרת רואה" helpKey="system.apiBaseUrl">
@@ -290,6 +290,98 @@ export function DiagnosticsPage() {
               </div>
             ) : (
               <EmptyState title="Backend SharePoint עדיין לא נבדק" description="לחצו על בדיקה כדי לראות אם השרת המקומי מחובר ל־SharePoint." />
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Builder Backend"
+            subtitle="הגדרות Builder backend שה־HUB מחזיר ל־Frontend בזמן ריצה. אין כאן API keys גולמיים."
+            helpKey="create.backendApiUrl"
+          >
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <LinkRow label="Current environment" value={diagnostics.builderBackendConfig?.currentEnvironment || "unknown"} />
+              <LinkRow label="Default backend" value={diagnostics.builderBackendConfig?.defaultBuilderBackendApiUrl || "not configured"} />
+              <LinkRow label="Default credential ref" value={diagnostics.builderBackendConfig?.defaultBuilderApiKeyRef || "not configured"} />
+              <LinkRow label="Production/classified default" value={diagnostics.builderBackendConfig?.productionClassifiedDefaultExists ? "קיים" : "חסר"} />
+            </div>
+            <div className="mt-3 grid gap-2">
+              {diagnostics.builderBackendConfig?.builderBackendOptions?.length ? diagnostics.builderBackendConfig.builderBackendOptions.map((option) => (
+                <div key={option.backendApiUrl} className="rounded-md border p-3 text-sm" style={{ borderColor: "var(--border)", background: "var(--surface-muted)" }}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-bold" style={{ color: "var(--text-strong)" }}>{option.label}</p>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {option.default ? <span className="badge badge-success">default</span> : null}
+                      <span className={`badge ${option.allowed ? "badge-success" : "badge-danger"}`}>{option.allowed ? "allowed" : "blocked"}</span>
+                      <span className={`badge ${option.credentialConfigured ? "badge-success" : "badge-warning"}`}>{option.credentialConfigured ? "credential configured" : "credential missing"}</span>
+                    </div>
+                  </div>
+                  <div className="mt-2 grid gap-1 md:grid-cols-2">
+                    <LinkRow label="URL" value={option.backendApiUrl} />
+                    <LinkRow label="Host" value={option.backendApiUrlHost} />
+                    <LinkRow label="Environment" value={option.environment} />
+                    <LinkRow label="Credential ref" value={option.credentialRef || "not configured"} />
+                  </div>
+                </div>
+              )) : (
+                <EmptyState title="לא הוגדר Builder backend" description="יש להגדיר SITE_BUILDER_DEFAULT_BACKEND_API_URL או SITE_BUILDER_BACKEND_API_URLS." />
+              )}
+            </div>
+          </SectionCard>
+
+          <SectionCard
+            title="Runtime config"
+            subtitle="סטטוס שמור של קובץ runtime config. API key מוצג כסטטוס בלבד, לא כערך."
+            helpKey="diagnostics"
+          >
+            {diagnostics.runtimeConfig ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <span className={`badge ${diagnostics.runtimeConfig.status === "configured" ? "badge-success" : "badge-warning"}`}>{diagnostics.runtimeConfig.status || "unknown"}</span>
+                  <span className="badge badge-neutral">API key: {diagnostics.runtimeConfig.apiKeyStatus || "unknown"}</span>
+                  <span className={`badge ${diagnostics.runtimeConfig.belongsToSite ? "badge-success" : "badge-warning"}`}>{diagnostics.runtimeConfig.belongsToSite ? "שייך לאתר" : "דורש בדיקה"}</span>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <LinkRow label="Path" value={diagnostics.runtimeConfig.path || "-"} />
+                  <LinkRow label="URL" value={diagnostics.runtimeConfig.url || "-"} isUrl />
+                  <LinkRow label="Storage backend" value={diagnostics.runtimeConfig.storageBackend || "-"} />
+                  <LinkRow label="Backend host" value={diagnostics.runtimeConfig.backendApiUrlHost || "-"} />
+                  <LinkRow label="siteId" value={diagnostics.runtimeConfig.builderSiteId || "-"} />
+                  <LinkRow label="Checked at" value={formatDateTime(diagnostics.runtimeConfig.checkedAt)} />
+                </div>
+                {diagnostics.runtimeConfig.warnings?.length ? <div className="badge badge-warning px-3 py-2">{diagnostics.runtimeConfig.warnings.join(" · ")}</div> : null}
+              </div>
+            ) : (
+              <EmptyState title="אין runtime config להצגה" description="בחרו אתר כדי לראות סטטוס runtime config." />
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Builder / Mongo backend connector"
+            subtitle="סטטוס שמור של בדיקות Builder backend, registry, safeCollectionName ו־seed docs."
+            helpKey="diagnostics"
+          >
+            {diagnostics.builderBackend ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <span className={`badge ${diagnostics.builderBackend.backendReachable ? "badge-success" : "badge-warning"}`}>API {diagnostics.builderBackend.backendReachable ? "reachable" : "not verified"}</span>
+                  <span className={`badge ${diagnostics.builderBackend.seedStatus === "ok" ? "badge-success" : "badge-warning"}`}>Seed {diagnostics.builderBackend.seedStatus || "unknown"}</span>
+                  <span className="badge badge-neutral">Credential: {diagnostics.builderBackend.apiKeyConfigured ? "configured" : "missing"}</span>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <LinkRow label="Backend host" value={diagnostics.builderBackend.backendApiUrlHost || "-"} />
+                  <LinkRow label="Mongo siteId" value={diagnostics.builderBackend.siteId || "-"} />
+                  <LinkRow label="safeCollectionName" value={diagnostics.builderBackend.safeCollectionName || "-"} />
+                  <LinkRow label="Registry" value={diagnostics.builderBackend.registryStatus || "unknown"} />
+                  <LinkRow label="Collection" value={diagnostics.builderBackend.collectionStatus || "unknown"} />
+                  <LinkRow label="Backups" value={diagnostics.builderBackend.backupsStatus || "unknown"} />
+                  <LinkRow label="Revisions/Audit" value={diagnostics.builderBackend.revisionsAuditStatus || "unknown"} />
+                  <LinkRow label="Checked at" value={formatDateTime(diagnostics.builderBackend.checkedAt)} />
+                </div>
+                {diagnostics.builderBackend.missingDocs?.length ? <div className="badge badge-warning px-3 py-2">Missing seed docs: {diagnostics.builderBackend.missingDocs.join(", ")}</div> : null}
+                {diagnostics.builderBackend.warnings?.length ? <div className="badge badge-warning px-3 py-2">{diagnostics.builderBackend.warnings.join(" · ")}</div> : null}
+              </div>
+            ) : (
+              <EmptyState title="אין סטטוס Builder backend" description="בחרו אתר Mongo והריצו בדיקת Mongo backend כדי לראות ראיות." />
             )}
           </SectionCard>
 

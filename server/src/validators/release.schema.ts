@@ -20,7 +20,8 @@ export const batchDeployPlanSchema = z.object({
   targetMode: deploymentTargetModeSchema.default("all"),
   targetSiteIds: z.array(z.string().min(1)).optional().default([]),
   deployMode: z.enum(["local-dev-owner", "production-safe"]).optional().default("local-dev-owner"),
-  connectorMode: sharePointConnectorModeSchema.optional().default("backend-sharepoint")
+  connectorMode: sharePointConnectorModeSchema.optional().default("backend-sharepoint"),
+  allowDeployWithoutBackup: z.coerce.boolean().optional().default(false)
 });
 
 export const batchDeployExecuteSchema = batchDeployPlanSchema.extend({
@@ -30,7 +31,8 @@ export const batchDeployExecuteSchema = batchDeployPlanSchema.extend({
 export const deploySiteSchema = z.object({
   releaseId: z.string().min(1, "releaseId הוא שדה חובה"),
   deployMode: z.enum(["local-dev-owner", "production-safe"]).optional().default("local-dev-owner"),
-  connectorMode: sharePointConnectorModeSchema.optional().default("backend-sharepoint")
+  connectorMode: sharePointConnectorModeSchema.optional().default("backend-sharepoint"),
+  allowDeployWithoutBackup: z.coerce.boolean().optional().default(false)
 });
 
 export const rollbackSiteSchema = z.object({

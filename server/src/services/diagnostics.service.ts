@@ -5,6 +5,8 @@ import { Site } from "../models/Site";
 import { resolveSiteBuilderPaths, SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
 import { getMongoStatus } from "../db/mongo";
 import { getSharePointOperationCapabilities, getSharePointReadHeaders } from "./sharepointOperationClient";
+import { getActiveDangerousValidationBypasses } from "./dangerousBackupBypass.service";
+import { getBuilderBackendRuntimeSettings } from "./builderMongoHealth.service";
 
 type ProbeResult = {
   ok: boolean;
@@ -213,6 +215,8 @@ export async function getDiagnostics(req: Request) {
       })
     : null;
   const capabilities = getSharePointOperationCapabilities();
+  const dangerousOverrides = getActiveDangerousValidationBypasses();
+  const builderBackendConfig = getBuilderBackendRuntimeSettings();
 
   return {
     generatedAt: new Date().toISOString(),
@@ -237,14 +241,48 @@ export async function getDiagnostics(req: Request) {
       authCookieNames: configuredCookieNames(),
       bearerTokenConfigured: Boolean(env.SHAREPOINT_BEARER_TOKEN),
       unauthenticatedWriteBypassEnabled: env.SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE,
-      capabilities
+      capabilities,
+      dangerousOverrides
     },
+    builderBackendConfig,
     selectedSite: selectedSite ? {
       id: selectedSite._id.toString(),
       siteCode: selectedSite.siteCode,
       displayName: selectedSite.displayName,
       environment: selectedSite.environment,
-      status: selectedSite.status
+      status: selectedSite.status,
+      storageBackend: selectedSite.storageBackend || "unknown",
+      builderSiteId: selectedSite.builderSiteId || selectedSite.mongoSiteId || "",
+      dataBackendStatus: selectedSite.dataBackendStatus || "unknown"
+    } : null,
+    runtimeConfig: selectedSite ? {
+      path: selectedSite.runtimeConfigPath || resolvedPaths?.runtimeConfigPath || "",
+      url: selectedSite.runtimeConfigUrl || resolvedPaths?.runtimeConfigUrl || "",
+      status: selectedSite.runtimeConfigStatus?.readStatus || "unknown",
+      storageBackend: selectedSite.runtimeConfigStatus?.storageBackend || "",
+      backendApiUrlHost: selectedSite.runtimeConfigStatus?.backendApiUrlHost || "",
+      builderSiteId: selectedSite.runtimeConfigStatus?.builderSiteId || "",
+      apiKeyStatus: selectedSite.runtimeConfigStatus?.apiKeyStatus || "unknown",
+      belongsToSite: selectedSite.runtimeConfigStatus?.belongsToSite ?? false,
+      warnings: selectedSite.runtimeConfigStatus?.warnings || [],
+      checkedAt: selectedSite.runtimeConfigStatus?.checkedAt
+    } : null,
+    builderBackend: selectedSite ? {
+      connectorMode: "mongo-backend",
+      backendApiUrlHost: selectedSite.mongoBackendStatus?.backendApiUrlHost || "",
+      siteId: selectedSite.mongoBackendStatus?.siteId || selectedSite.mongoSiteId || selectedSite.builderSiteId || "",
+      safeCollectionName: selectedSite.mongoBackendStatus?.safeCollectionName || selectedSite.safeCollectionName || "",
+      apiKeyConfigured: selectedSite.mongoBackendStatus?.apiKeyConfigured ?? false,
+      backendReachable: selectedSite.mongoBackendStatus?.backendReachable ?? false,
+      registryStatus: selectedSite.mongoBackendStatus?.registryStatus || "unknown",
+      collectionStatus: selectedSite.mongoBackendStatus?.collectionStatus || "unknown",
+      seedStatus: selectedSite.mongoBackendStatus?.seedStatus || "unknown",
+      missingScopes: selectedSite.mongoBackendStatus?.missingScopes || [],
+      missingDocs: selectedSite.mongoBackendStatus?.missingDocs || [],
+      backupsStatus: selectedSite.mongoBackendStatus?.backupsStatus || "unknown",
+      revisionsAuditStatus: selectedSite.mongoBackendStatus?.revisionsAuditStatus || "unknown",
+      warnings: selectedSite.mongoBackendStatus?.warnings || [],
+      checkedAt: selectedSite.mongoBackendStatus?.checkedAt
     } : null,
     paths: resolvedPaths ? {
       siteBaseUrl: resolvedPaths.sharePointSiteUrl,
@@ -259,7 +297,8 @@ export async function getDiagnostics(req: Request) {
       env.SHAREPOINT_WRITE_ENABLED && env.SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE && !env.SHAREPOINT_AUTH_COOKIE && !env.SHAREPOINT_BEARER_TOKEN
         ? "SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE=true does not mean SharePoint will accept writes. Configure cookie or bearer token and verify contextinfo."
         : "",
-      env.AUTH_ENABLED === false ? "AUTH_ENABLED=false: owner-direct/local fallback is active unless SharePoint current user headers are present." : ""
+      env.AUTH_ENABLED === false ? "AUTH_ENABLED=false: owner-direct/local fallback is active unless SharePoint current user headers are present." : "",
+      ...dangerousOverrides.map((override) => `${override.envVar}=true: ${override.description}`)
     ].filter(Boolean)
   };
 }

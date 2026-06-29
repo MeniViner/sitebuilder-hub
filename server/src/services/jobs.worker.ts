@@ -18,7 +18,9 @@ import {
   assertRecentVerifiedBackupForDangerousWrite
 } from "./writeSafety.service";
 import { buildDeployPolicy, buildLocalDevDeploySafetySnapshot } from "./deployPolicy.service";
+import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
 import { writeSystemAuditLog } from "./audit.service";
+import { isBrowserRequiredJob, shouldBlockBackendSharePointByDefault } from "./sharepointOperationPolicy.service";
 import {
   claimNextJob,
   setJobEvidence,
@@ -52,6 +54,16 @@ const shouldPersistJobFailureToSite = (job: any) =>
 
 const assertApprovedForExecution = (job: any, errorCode: string) => {
   if (job.requiresApproval && (!job.approvedAt || !job.approvedBy)) {
+    const bypassEnvVar = getDangerousValidationBypassEnvVar("approval-gates");
+    if (bypassEnvVar) {
+      logger.warn("jobs", "Approval-gated job execution bypassed by dangerous env", {
+        jobId: job._id.toString(),
+        type: job.type,
+        siteId: job.siteId?.toString(),
+        envVar: bypassEnvVar
+      });
+      return;
+    }
     logger.error("jobs", "Approval-gated job blocked before execution", {
       jobId: job._id.toString(),
       type: job.type,
@@ -205,6 +217,16 @@ async function handleVersionUpgrade(job: any) {
       requiresRecentVerifiedBackup?: boolean;
       mode?: string;
     };
+    backupSafety?: {
+      policy?: string;
+      required?: boolean;
+      satisfied?: boolean;
+      reason?: string;
+      backup?: {
+        id?: string;
+        backupId?: string;
+      };
+    };
   };
 
   if (!job.siteId || !payload.releaseId || !payload.deploymentId) {
@@ -222,8 +244,14 @@ async function handleVersionUpgrade(job: any) {
   }
 
   const deployPolicy = payload.deployPolicy?.mode
-    ? { ...buildDeployPolicy(payload.deployPolicy.mode), ...payload.deployPolicy }
-    : buildDeployPolicy(payload.deployMode);
+    ? { ...buildDeployPolicy(payload.deployPolicy.mode, isRollback ? "rollback" : "deploy"), ...payload.deployPolicy }
+    : buildDeployPolicy(payload.deployMode, isRollback ? "rollback" : "deploy");
+  const storedBackupSafety = payload.backupSafety;
+  const storedBackupOverrideAccepted = Boolean(
+    storedBackupSafety?.satisfied &&
+    storedBackupSafety?.required === false &&
+    (storedBackupSafety?.policy === "local-dev-owner-override" || storedBackupSafety?.policy === "dangerous-env-backup-bypass")
+  );
   await setJobProgress(
     job._id.toString(),
     15,
@@ -233,12 +261,14 @@ async function handleVersionUpgrade(job: any) {
         : "Checking recent verified backup before SharePoint deploy"
       : "Local/dev owner deploy: backup policy is recorded as not required"
   );
-  const backupSafety = deployPolicy.requiresRecentVerifiedBackup
+  const backupSafety = deployPolicy.requiresRecentVerifiedBackup && !storedBackupOverrideAccepted
     ? await assertRecentVerifiedBackupForDangerousWrite({
         siteId: site._id,
         operation: isRollback ? "rollback" : "deploy"
       })
-    : buildLocalDevDeploySafetySnapshot(isRollback ? "rollback" : "deploy");
+    : storedBackupOverrideAccepted
+      ? storedBackupSafety
+      : buildLocalDevDeploySafetySnapshot(isRollback ? "rollback" : "deploy");
   logger.info("backups", "Execution-time dangerous write backup safety satisfied", {
     jobId: job._id.toString(),
     siteId: site._id.toString(),
@@ -251,8 +281,8 @@ async function handleVersionUpgrade(job: any) {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     operation: isRollback ? "rollback" : "deploy",
-    backupId: "backup" in backupSafety ? backupSafety.backup?.id : undefined,
-    backupExternalId: "backup" in backupSafety ? backupSafety.backup?.backupId : undefined
+    backupId: backupSafety && "backup" in backupSafety ? backupSafety.backup?.id : undefined,
+    backupExternalId: backupSafety && "backup" in backupSafety ? backupSafety.backup?.backupId : undefined
   });
 
   site.targetVersion = release.version;
@@ -364,7 +394,7 @@ async function handleRestore(job: any) {
     approvedAt: job.approvedAt
   });
 
-  if (!job.requiresApproval || !job.approvedAt || !job.approvedBy) {
+  if ((!job.requiresApproval || !job.approvedAt || !job.approvedBy) && !isDangerousValidationBypassEnabled("approval-gates")) {
     logger.error("errors", "Restore job blocked because approval is missing", {
       jobId: job._id.toString(),
       siteId: job.siteId?.toString(),
@@ -548,6 +578,14 @@ async function handleAdminSync(job: any) {
     payload: logger.isPayloadLoggingEnabled() ? job.payload : undefined
   });
   if (!job.siteId) throw new Error("Missing siteId for admin sync job");
+  if (shouldBlockBackendSharePointByDefault("admin-sync")) {
+    logger.warn("jobs", "Admin sync backend SharePoint read blocked before worker execution", {
+      jobId: job._id.toString(),
+      siteId: job.siteId?.toString(),
+      mode
+    });
+    throw new Error("admin-sync-backend-service-auth-or-browser-required");
+  }
 
   await setJobProgress(
     job._id.toString(),
@@ -655,7 +693,7 @@ async function handleRepair(job: any) {
   });
 
   if (!job.siteId) throw new Error("Missing siteId for repair job");
-  if (!job.requiresApproval || !job.approvedAt || !job.approvedBy) {
+  if ((!job.requiresApproval || !job.approvedAt || !job.approvedBy) && !isDangerousValidationBypassEnabled("approval-gates")) {
     logger.error("jobs", "Repair job blocked because approval is missing", {
       jobId: job._id.toString(),
       siteId: job.siteId?.toString(),
@@ -737,8 +775,20 @@ async function processJob(job: any) {
   logger.info("jobs", "Processing job by type", {
     jobId: job._id.toString(),
     type: job.type,
-    siteId: job.siteId?.toString()
+    siteId: job.siteId?.toString(),
+    executionMode: job.executionMode,
+    connectorMode: job.connectorMode
   });
+  if (isBrowserRequiredJob(job)) {
+    logger.warn("jobs", "Worker refused to process browser-required SharePoint job", {
+      jobId: job._id.toString(),
+      type: job.type,
+      siteId: job.siteId?.toString(),
+      executionMode: job.executionMode,
+      connectorMode: job.connectorMode
+    });
+    throw new Error("browser-required-job-cannot-run-in-worker");
+  }
   switch (job.type) {
     case "version-upgrade":
     case "version-rollback":
@@ -884,10 +934,25 @@ export async function runJobNow(jobId: string) {
   }
 
   const now = new Date();
-  const nextStatus = job.requiresApproval ? "awaiting-approval" : "queued";
+  const executionMode = String((job as any).executionMode || "backend");
+  const browserConnector = job.connectorMode === "browser-sharepoint" || (job.payload as any)?.connectorMode === "browser-sharepoint";
+  const blockedServiceAuth = job.connectorMode === "backend-sharepoint" && (job.status === "blocked-service-auth-required" || executionMode === "blocked-service-auth-required");
+  const nextStatus = job.requiresApproval
+    ? "awaiting-approval"
+    : browserConnector
+      ? "browser-required"
+      : blockedServiceAuth
+        ? "blocked-service-auth-required"
+        : "queued";
+  const nextExecutionMode = nextStatus === "browser-required"
+    ? "browser-required"
+    : nextStatus === "blocked-service-auth-required"
+      ? "blocked-service-auth-required"
+      : "backend";
   await Job.findByIdAndUpdate(jobId, {
     $set: {
       status: nextStatus,
+      executionMode: nextExecutionMode,
       progressPercent: 0,
       errorCode: "",
       errorMessage: "",
@@ -920,7 +985,13 @@ export async function runJobNow(jobId: string) {
     $push: {
       logs: {
         level: "info",
-        message: job.requiresApproval ? "Job rerun requested and is awaiting approval" : "Job queued for immediate rerun",
+        message: job.requiresApproval
+          ? "Job rerun requested and is awaiting approval"
+          : nextStatus === "browser-required"
+            ? "Job rerun requested and is waiting for browser SharePoint execution"
+            : nextStatus === "blocked-service-auth-required"
+              ? "Job rerun remains blocked because backend SharePoint service auth is required"
+              : "Job queued for immediate rerun",
         at: now
       }
     }
@@ -928,6 +999,14 @@ export async function runJobNow(jobId: string) {
 
   if (job.requiresApproval) {
     logger.info("jobs", "Approval-gated job rerun requested", { jobId, status: nextStatus });
+    return Job.findById(jobId);
+  }
+  if (nextStatus !== "queued") {
+    logger.info("jobs", "Non-backend job rerun requested without worker execution", {
+      jobId,
+      status: nextStatus,
+      executionMode
+    });
     return Job.findById(jobId);
   }
 

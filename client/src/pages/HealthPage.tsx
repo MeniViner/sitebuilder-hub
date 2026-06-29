@@ -82,6 +82,40 @@ export function HealthPage() {
 
   const runReadOnly = async () => runReadOnlyFor(selectedSiteId);
 
+  const runRuntimeConfigFor = async (siteId = selectedSiteId) => {
+    if (!siteId) return;
+    setSelectedSiteId(siteId);
+    setBusyAction(`runtime-${siteId}`);
+    setError("");
+    setMessage("");
+    try {
+      await sitesApi.validateRuntimeConfig(siteId);
+      setMessage("בדיקת runtime config הסתיימה ונשמרה");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "שגיאה בבדיקת runtime config");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const runMongoHealthFor = async (siteId = selectedSiteId) => {
+    if (!siteId) return;
+    setSelectedSiteId(siteId);
+    setBusyAction(`mongo-${siteId}`);
+    setError("");
+    setMessage("");
+    try {
+      await sitesApi.runMongoBackendHealth(siteId);
+      setMessage("בדיקת Mongo backend הסתיימה ונשמרה");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "שגיאה בבדיקת Mongo backend");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
   const saveSchedule = async () => {
     if (!selectedSiteId) return;
     setBusyAction("health-schedule");
@@ -135,6 +169,19 @@ export function HealthPage() {
       render: (site) => <HealthBadge status={site.derivedHealthStatus} />
     },
     {
+      key: "storage",
+      header: "Storage",
+      render: (site) => (
+        <div className="space-y-1 text-xs">
+          <span className={`badge ${site.storageBackend === "mongo" ? "badge-info" : site.storageBackend === "txt" ? "badge-success" : "badge-neutral"}`}>
+            {site.storageBackend === "mongo" ? "Mongo" : site.storageBackend === "txt" ? "TXT" : "Unknown"}
+          </span>
+          <p className="muted">Runtime: <span className="num">{site.runtimeConfigStatus?.readStatus || "unknown"}</span></p>
+          <p className="muted">Data: <span className="num">{site.dataBackendStatus || "unknown"}</span></p>
+        </div>
+      )
+    },
+    {
       key: "checked",
       header: "בדיקה אחרונה",
       helpKey: "health.readOnly",
@@ -154,9 +201,11 @@ export function HealthPage() {
     },
     {
       key: "txt",
-      header: "TXT",
+      header: "TXT / Seed",
       helpKey: "site.txtAdmins",
-      render: (site) => <span className={`badge ${site.health?.txtFilesExist ? "badge-success" : "badge-neutral"}`}>{site.health?.txtFilesExist ? "כן" : "לא/לא ידוע"}</span>
+      render: (site) => site.storageBackend === "mongo"
+        ? <span className={`badge ${site.mongoBackendStatus?.seedStatus === "ok" ? "badge-success" : "badge-warning"}`}>Seed {site.mongoBackendStatus?.seedStatus || "unknown"}</span>
+        : <span className={`badge ${site.health?.txtFilesExist ? "badge-success" : "badge-neutral"}`}>{site.health?.txtFilesExist ? "כן" : "לא/לא ידוע"}</span>
     },
     {
       key: "actions",
@@ -165,6 +214,8 @@ export function HealthPage() {
       render: (site) => (
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-primary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `readonly-${site._id}`} onClick={() => void runReadOnlyFor(site._id)} type="button">בדוק</button>
+          <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `runtime-${site._id}`} onClick={() => void runRuntimeConfigFor(site._id)} type="button">Runtime</button>
+          {site.storageBackend === "mongo" ? <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `mongo-${site._id}`} onClick={() => void runMongoHealthFor(site._id)} type="button">Mongo</button> : null}
           <Link className="btn btn-secondary min-h-0 px-2 py-1 text-xs" to={`/sites/${site._id}`}>פרטים</Link>
         </div>
       )
@@ -182,15 +233,18 @@ export function HealthPage() {
       </div>
       <div className="flex flex-wrap gap-2">
         <StatusBadge status={site.status} />
+        <span className={`badge ${site.storageBackend === "mongo" ? "badge-info" : site.storageBackend === "txt" ? "badge-success" : "badge-neutral"}`}>{site.storageBackend || "unknown"}</span>
         <span className="badge badge-neutral">Last: {formatDateTime(site.lastHealthCheckAt)}</span>
       </div>
       <div className="grid grid-cols-3 gap-2 text-xs">
         <span className={`badge ${site.health?.siteDbExists ? "badge-success" : "badge-neutral"}`}>siteDB</span>
         <span className={`badge ${site.health?.distExists && site.health?.indexExists ? "badge-success" : "badge-neutral"}`}>dist</span>
-        <span className={`badge ${site.health?.txtFilesExist ? "badge-success" : "badge-neutral"}`}>TXT</span>
+        <span className={`badge ${site.storageBackend === "mongo" ? site.mongoBackendStatus?.seedStatus === "ok" ? "badge-success" : "badge-warning" : site.health?.txtFilesExist ? "badge-success" : "badge-neutral"}`}>{site.storageBackend === "mongo" ? "Seed" : "TXT"}</span>
       </div>
       <div className="flex flex-wrap gap-2">
         <button className="btn btn-primary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `readonly-${site._id}`} onClick={() => void runReadOnlyFor(site._id)} type="button">בדוק</button>
+        <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `runtime-${site._id}`} onClick={() => void runRuntimeConfigFor(site._id)} type="button">Runtime</button>
+        {site.storageBackend === "mongo" ? <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `mongo-${site._id}`} onClick={() => void runMongoHealthFor(site._id)} type="button">Mongo</button> : null}
         <Link className="btn btn-secondary min-h-0 px-2 py-1 text-xs" to={`/sites/${site._id}`}>פרטים</Link>
       </div>
     </div>
@@ -240,7 +294,7 @@ export function HealthPage() {
             <KpiCard variant="inline" title="לא נבדקו" value={formatNumber(counts.unknown)} icon={<HeartPulse size={18} />} description="אין health אחרון" tone="neutral" helpKey="health.readOnly" />
           </div>
 
-          <SectionCard title="הרצת בדיקה Read-only" subtitle="בודקת דרך הדפדפן ספריות, dist, index, assets וקבצי TXT ללא כתיבה ל־SharePoint." helpKey="health.readOnly">
+          <SectionCard title="הרצת בדיקה Read-only" subtitle="בודקת דרך הדפדפן אירוח SharePoint; Runtime/Mongo נבדקים בפעולות נפרדות." helpKey="health.readOnly">
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
               <label className="block">
                 <span className="field-label"><HelpLabel helpKey="sites.registry">אתר</HelpLabel></span>

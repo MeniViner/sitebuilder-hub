@@ -43,6 +43,9 @@ function authUserFromLogin(result: AuthLoginResult): AuthUser {
     role: result.role,
     personalNumber: result.personalNumber,
     source: result.source,
+    identityMode: result.identityMode,
+    ownerMode: result.ownerMode,
+    ownerModeReason: result.ownerModeReason,
     isBootstrapAdmin: result.isBootstrapAdmin
   };
 }
@@ -251,6 +254,7 @@ export default function App() {
       const meRes = await sitesApi.me();
       clientLogger.info("auth", "Current auth user loaded", {
         authenticated: meRes.data.authenticated,
+        ownerMode: meRes.data.ownerMode,
         userId: meRes.data.user?.id,
         role: meRes.data.user?.role,
         source: meRes.data.user?.source
@@ -294,6 +298,7 @@ export default function App() {
     clientLogger.info("auth", "Login accepted", {
       role: loginRes.data.role,
       source: loginRes.data.source,
+      ownerMode: loginRes.data.ownerMode,
       isBootstrapAdmin: loginRes.data.isBootstrapAdmin,
       matchedSite: loginRes.data.matchedSite
     });
@@ -305,7 +310,8 @@ export default function App() {
       clientLogger.info("auth", "Post-login user refresh completed", {
         userId: meRes.data.user?.id,
         role: meRes.data.user?.role,
-        source: meRes.data.user?.source
+        source: meRes.data.user?.source,
+        ownerMode: meRes.data.ownerMode
       });
       setAuthUser(meRes.data.user ?? authUserFromLogin(loginRes.data));
     } catch (error) {
@@ -357,7 +363,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/analytics" element={<AnalyticsDashboardPage />} />
-            <Route path="/sites" element={<SitesPage />} />
+            <Route path="/sites" element={<SitesPage authUser={authUser} />} />
             <Route path="/sites/:id" element={<SiteDetailsPage />} />
             <Route path="/releases" element={<ReleasesPage />} />
             <Route path="/backups" element={<BackupsPage />} />

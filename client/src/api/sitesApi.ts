@@ -13,7 +13,10 @@ export type AuthLoginResult = {
   personalNumber: string;
   role: "admin";
   source: "owner" | "bootstrap" | "site-admin";
+  identityMode?: "explicit-owner";
   isBootstrapAdmin: boolean;
+  ownerMode?: boolean;
+  ownerModeReason?: string;
   matchedSite: null | {
     siteId: string;
     siteCode?: string;
@@ -31,6 +34,8 @@ export type AuthBootstrapStatus = {
 
 export type WhoAmIResult = {
   authenticated: boolean;
+  ownerMode?: boolean;
+  ownerModeReason?: string;
   user: null | {
     id: string;
     name: string;
@@ -41,6 +46,8 @@ export type WhoAmIResult = {
     email?: string;
     identityMode?: "sharepoint-user" | "explicit-owner" | "local-fallback" | "api-key";
     isBootstrapAdmin?: boolean;
+    ownerMode?: boolean;
+    ownerModeReason?: string;
   };
 };
 
@@ -74,6 +81,14 @@ export type Release = {
     totalSizeBytes?: number;
     hasIndexHtml?: boolean;
     hasManifest?: boolean;
+    storageCompatibility?: Array<"txt" | "mongo">;
+    artifactKind?: ReleaseArtifactKind;
+    requiresRuntimeConfig?: boolean;
+    preservesRuntimeConfig?: boolean;
+    requiredFolders?: string[];
+    runtimeConfigFiles?: string[];
+    compatibilitySource?: "manifest" | "inferred" | "unknown";
+    compatibilityWarnings?: string[];
     readyForDeploy?: boolean;
     validatedAt?: string;
     validationError?: string;
@@ -86,7 +101,24 @@ export type Release = {
 export type Job = {
   _id: string;
   type: string;
-  status: "awaiting-approval" | "queued" | "preflight" | "running" | "verifying" | "succeeded" | "failed" | "cancelled" | "retrying";
+  status:
+    | "awaiting-approval"
+    | "queued"
+    | "browser-required"
+    | "browser-in-progress"
+    | "blocked-service-auth-required"
+    | "preflight"
+    | "running"
+    | "verifying"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "retrying";
+  executionMode?: "backend" | "browser-required" | "browser-in-progress" | "completed" | "failed" | "blocked-service-auth-required";
+  connectorMode?: "backend-sharepoint" | "browser-sharepoint" | "mongo-backend" | "server-local" | "backend-service-auth-required" | "manual" | "none";
+  operationPolicy?: string;
+  connectorStatusLabel?: string;
+  connectorBlocker?: string;
   progressPercent: number;
   createdBy?: string;
   siteId?: string;
@@ -110,6 +142,175 @@ export type Job = {
   startedAt?: string;
   finishedAt?: string;
   logs?: Array<{ at: string; level: string; message: string }>;
+};
+
+export type AccessRoleType =
+  | "regular-user"
+  | "app-admin"
+  | "site-owner"
+  | "hub-metadata-owner"
+  | "hub-metadata-admin"
+  | "sharepoint-owners-group"
+  | "sharepoint-site-collection-admin"
+  | "unknown";
+
+export type AccessSourceType =
+  | "hub-metadata-owner"
+  | "hub-metadata-admin"
+  | "txt-users-data"
+  | "txt-admins"
+  | "mongo-users-data"
+  | "builder-backend-users"
+  | "sharepoint-owners-group"
+  | "sharepoint-site-collection-admin"
+  | "unknown";
+
+export type AccessUserStatus =
+  | "healthy"
+  | "conflict"
+  | "stale"
+  | "source-failed"
+  | "missing-email"
+  | "duplicate-identity"
+  | "not-verified";
+
+export type AccessReadStatus = "success" | "failed" | "stale" | "unknown" | "skipped";
+export type AccessSourceAuthority = "authoritative" | "supporting" | "hosting" | "metadata" | "unknown";
+export type AccessExecutionMode = "browser-sharepoint" | "mongo-backend" | "server-local" | "backend-service-auth-required" | "manual" | "metadata-only";
+
+export type AccessSiteMembership = {
+  siteId: string;
+  siteCode: string;
+  displayName: string;
+  environment: string;
+  storageBackend: string;
+  roleType: AccessRoleType;
+  sourceType: AccessSourceType;
+  sourceAuthority: AccessSourceAuthority;
+  effectiveAccess: string;
+  readStatus: AccessReadStatus;
+  lastReadAt?: string;
+  evidence: {
+    sourceUrl?: string;
+    httpStatus?: number;
+    httpStatusText?: string;
+    errorCode?: string;
+    errorMessage?: string;
+    connectorMode?: string;
+    coverage?: "full-users" | "admin-only" | "metadata-only" | "unavailable";
+  };
+  warnings: string[];
+  blockers: string[];
+};
+
+export type AccessDirectoryUser = {
+  principalId: string;
+  displayName: string;
+  normalizedPersonalNumber: string;
+  emails: string[];
+  aliases: string[];
+  unitName: string;
+  sites: AccessSiteMembership[];
+  roles: AccessRoleType[];
+  sources: AccessSourceType[];
+  conflicts: string[];
+  lastVerifiedAt?: string;
+  status: AccessUserStatus[];
+  evidenceRefs: string[];
+};
+
+export type AccessDirectorySite = {
+  siteId: string;
+  siteCode: string;
+  displayName: string;
+  environment: string;
+  storageBackend: string;
+  status: string;
+  lifecycleStatus?: string;
+  archived: boolean;
+  sourceHealth: AccessReadStatus;
+  writeCapability: "blocked" | "plan-only" | "metadata-only" | "unknown";
+};
+
+export type AccessSourceMatrixRow = {
+  id: string;
+  siteId: string;
+  siteCode: string;
+  siteName: string;
+  environment: string;
+  storageBackend: string;
+  sourceType: AccessSourceType;
+  status: AccessReadStatus;
+  count?: number;
+  lastReadAt?: string;
+  connector: AccessExecutionMode | "unknown";
+  error?: string;
+  blocker?: string;
+  coverage: "full-users" | "admin-only" | "metadata-only" | "unavailable";
+  authority: AccessSourceAuthority;
+  httpStatus?: number;
+  sourceUrl?: string;
+};
+
+export type AccessDirectory = {
+  generatedAt: string;
+  summary: {
+    totalUsers: number;
+    totalAppAdmins: number;
+    totalSiteOwners: number;
+    usersWithConflicts: number;
+    failedOrStaleSources: number;
+    lastSuccessfulLiveRead?: string;
+    connectorMode: "browser-sharepoint" | "mongo-backend" | "metadata-only" | "backend-service-auth-required";
+    connectorModeLabelHe: string;
+    generatedAt: string;
+  };
+  users: AccessDirectoryUser[];
+  sites: AccessDirectorySite[];
+  sourceMatrix: AccessSourceMatrixRow[];
+  issues: Array<{ severity: "danger" | "warning" | "info"; titleHe: string; detailHe: string; actionHe: string }>;
+};
+
+export type AccessChangeAction = "add-to-site" | "remove-from-site" | "change-access";
+
+export type AccessChangePlanInput = {
+  action: AccessChangeAction;
+  principalId?: string;
+  targetSiteIds?: string[];
+  sourceType?: AccessSourceType;
+  roleType?: AccessRoleType;
+  reason?: string;
+};
+
+export type AccessChangePlan = {
+  operation: "access-change-plan";
+  generatedAt: string;
+  action: AccessChangeAction;
+  principalId: string;
+  user?: Pick<AccessDirectoryUser, "principalId" | "displayName" | "normalizedPersonalNumber" | "emails" | "aliases" | "status">;
+  targetSource: AccessSourceType;
+  targetRole: AccessRoleType;
+  executionMode: AccessExecutionMode;
+  liveWrite: boolean;
+  approvalRequired: boolean;
+  strongerConfirmationRequired: boolean;
+  affectedSites: Array<{
+    siteId: string;
+    siteCode: string;
+    displayName: string;
+    environment: string;
+    storageBackend: string;
+    currentAccess: string[];
+    before: string;
+    after: string;
+    writeCapability: AccessDirectorySite["writeCapability"];
+  }>;
+  willChange: string[];
+  willNotChange: string[];
+  blockers: string[];
+  warnings: string[];
+  reasonRequired: true;
+  canExecute: boolean;
 };
 
 export type BackupVerificationEvidence = {
@@ -295,6 +496,202 @@ export type SharePointHealthResult = {
   note?: string;
 };
 
+export type RuntimeConfigValidationResult = {
+  checkedAt: string;
+  siteId: string;
+  siteCode: string;
+  runtimeConfigPath: string;
+  runtimeConfigUrl: string;
+  readStatus: "unknown" | "configured" | "missing" | "invalid" | "mismatch" | "auth-blocked" | "error";
+  storageBackend: "txt" | "mongo" | "unknown" | "";
+  backendApiUrl: string;
+  backendApiUrlHost: string;
+  builderSiteId: string;
+  apiKeyStatus: "unknown" | "configured" | "missing" | "invalid";
+  belongsToSite: boolean;
+  warnings: string[];
+  evidence?: {
+    attemptedPaths?: string[];
+    selectedPath?: string;
+    sizeBytes?: number;
+    httpStatus?: number;
+    error?: string;
+  };
+};
+
+export type BuilderMongoHealthResult = {
+  checkedAt: string;
+  siteId: string;
+  siteCode: string;
+  storageBackend: string;
+  backendApiUrl: string;
+  backendApiUrlHost: string;
+  builderSiteId: string;
+  apiKeyConfigured: boolean;
+  backendReachable: boolean;
+  registryStatus: "ok" | "missing" | "mismatch" | "error" | "unknown";
+  collectionStatus: "ok" | "missing" | "error" | "unknown";
+  seedStatus: "ok" | "missing" | "partial" | "error" | "unknown";
+  adminsStatus: "ok" | "missing" | "error" | "unknown";
+  backupsStatus: "ok" | "missing" | "error" | "unknown";
+  revisionsAuditStatus: "ok" | "unsupported" | "error" | "unknown";
+  safeCollectionName: string;
+  expectedScopes: string[];
+  missingScopes: string[];
+  missingDocs: string[];
+  warnings: string[];
+  seedChecks: Array<{ key: string; scope: string; entityId: string; ok: boolean; status: "ok" | "missing" | "error"; message?: string }>;
+};
+
+export type MongoSiteCreationPlan = {
+  operation: "create-mongo-site";
+  generatedAt: string;
+  siteId: string;
+  siteCode: string;
+  displayName: string;
+  storageBackend: "mongo";
+  lifecycleStatus: string;
+  provisioningStatus: string;
+  identity: {
+    siteCode: string;
+    builderSiteId: string;
+    mongoSiteId: string;
+    siteIdentityKey: string;
+    duplicateStatus: "available" | "duplicate" | "unknown";
+    duplicate?: Record<string, unknown>;
+  };
+  resolvedPaths: Record<string, any>;
+  runtimeConfig: {
+    path: string;
+    url: string;
+    fileName: string;
+    redactedPreview: Record<string, unknown>;
+    apiKeyStatus: "configured" | "missing";
+    backendApiUrlHost: string;
+  };
+  sharePointHosting: {
+    sharePointSiteUrl: string;
+    siteDbTarget: string;
+    siteUsersDbTarget: string;
+    siteDbUsersDbSameTarget: boolean;
+    siteAssetsPath: string;
+    imagesPath: string;
+    distPath: string;
+    distAssetsPath: string;
+    runtimeConfigPath: string;
+    connectorPreference: "browser-sharepoint";
+    libraryCreationFallback: "backend-service-auth-required-or-manual";
+  };
+  builderBackend: {
+    backendApiUrl: string;
+    backendApiUrlHost: string;
+    label?: string;
+    environment?: string;
+    allowedBackendApiUrls: string[];
+    backendUrlAllowed: boolean;
+    backendConfigured?: boolean;
+    backendWillBeWrittenToRuntimeConfig?: boolean;
+    credentialRef: string;
+    credentialConfigured: boolean;
+    siteId: string;
+    safeCollectionNameStrategy: "generated-by-builder-backend" | "verify-explicit";
+    expectedSafeCollectionName: string;
+  };
+  seedDocs: Array<{ key: string; scope: string; entityId: string; source: string; data?: unknown }>;
+  steps: Array<{
+    key: string;
+    label: string;
+    executionClass: "server-local" | "browser-sharepoint" | "mongo-backend" | "backend-service-auth-required" | "manual";
+    target: string;
+    status: "planned" | "blocked" | "optional" | "succeeded" | "failed" | "skipped";
+    required: boolean;
+    blocker?: string;
+    warning?: string;
+  }>;
+  blockers: string[];
+  warnings: string[];
+  summary: {
+    totalSteps: number;
+    browserSharePointSteps: number;
+    mongoBackendSteps: number;
+    manualSteps: number;
+    readyForPlanReview: boolean;
+    readyForMongoBackendExecution: boolean;
+    readyForBrowserSharePointExecution: boolean;
+    createsApprovalJob: false;
+  };
+  readinessRules: string[];
+};
+
+export type MongoSiteCreationExecuteResult = {
+  operation: "create-mongo-site-execute";
+  executedAt: string;
+  siteId: string;
+  siteCode: string;
+  builderBackend: MongoSiteCreationPlan["builderBackend"];
+  registry: { status: "ok" | "failed"; safeCollectionName: string; evidence?: unknown };
+  seed: {
+    status: "ok" | "partial" | "failed";
+    written: string[];
+    skippedExisting: string[];
+    failed: Array<{ key: string; error: string }>;
+    evidence?: unknown;
+  };
+  backupCapability: { status: "ok" | "missing" | "failed"; evidence?: unknown };
+  health?: BuilderMongoHealthResult;
+  finalStatus: "partially-created" | "failed";
+  warnings: string[];
+};
+
+export type MongoRuntimeConfigContent = {
+  siteId: string;
+  siteCode: string;
+  runtimeConfigPath: string;
+  runtimeConfigUrl: string;
+  content: string;
+  contentType: string;
+  sizeBytes: number;
+  sha256: string;
+  redactedPreview: Record<string, unknown>;
+};
+
+export type MongoCreateBrowserEvidenceInput = {
+  connectorMode: "browser-sharepoint";
+  targetSharePointSiteUrl?: string;
+  capturedAt?: string;
+  steps?: Array<{ step: string; status: "succeeded" | "failed" | "skipped"; path?: string; httpStatus?: number; error?: string }>;
+  runtimeConfig?: {
+    path?: string;
+    uploaded?: boolean;
+    verified?: boolean;
+    storageBackend?: string;
+    backendApiUrlHost?: string;
+    siteId?: string;
+    apiKeyConfigured?: boolean;
+  };
+  hosting?: {
+    siteDbRootReady?: boolean;
+    usersDbRootReady?: boolean;
+    finalDistRootReady?: boolean;
+    siteAssetsRootReady?: boolean;
+    assetsFolderReady?: boolean;
+    indexHtmlVerified?: boolean;
+  };
+  warnings?: string[];
+};
+
+export type MongoSiteCreationVerifyResult = {
+  checkedAt: string;
+  siteId: string;
+  siteCode: string;
+  ready: boolean;
+  status: "ready" | "partially-created";
+  message: string;
+  runtimeConfig?: RuntimeConfigValidationResult | { error: string };
+  mongoHealth?: BuilderMongoHealthResult | { error: string };
+  health?: SiteHealth;
+};
+
 export type BackupPlanSource = {
   key: string;
   label: string;
@@ -313,10 +710,13 @@ export type BackupPlan = {
   generatedAt: string;
   siteId: string;
   siteCode: string;
+  storageBackend?: string;
   backupIdPreview: string;
   target: {
     backupsRoot: string;
     backupFolder: string;
+    backendApiUrl?: string;
+    builderSiteId?: string;
   };
   sources: BackupPlanSource[];
   summary: {
@@ -476,6 +876,7 @@ export type SiteBootstrapPlan = {
 
 export type OperationCapabilities = {
   generatedAt: string;
+  builderBackendConfig?: BuilderBackendRuntimeSettings;
   sharePoint: {
     readAvailable: boolean;
     writeEnabled: boolean;
@@ -484,6 +885,8 @@ export type OperationCapabilities = {
       authCookieConfigured: boolean;
       bearerTokenConfigured: boolean;
       unauthenticatedWriteBypassEnabled: boolean;
+      dangerousWriteGateBypassEnabled?: boolean;
+      dangerousWriteGateBypassEnvVar?: string;
     };
     hasAuthMaterial: boolean;
     unauthenticatedWriteAllowed: boolean;
@@ -492,7 +895,73 @@ export type OperationCapabilities = {
     authMode: "bearer" | "cookie" | "none";
     reason?: string;
   };
+  storageBackends?: {
+    supported: Array<"txt" | "mongo" | "unknown" | string>;
+    txt?: {
+      sourceOfTruth?: string;
+      backupMode?: string;
+      adminSource?: string;
+    };
+    mongo?: {
+      sourceOfTruth?: string;
+      connectorMode?: string;
+      allowedBackendApiUrls?: string[];
+      defaultBackendApiUrl?: string;
+      defaultApiKeyRef?: string;
+      builderBackendOptions?: BuilderBackendOption[];
+      rawApiKeysExposed?: boolean;
+      backupMode?: string;
+      adminSource?: string;
+    };
+  };
+  sharePointOperationInventory?: Array<{
+    operation: string;
+    label: string;
+    uiEntryPoint: string;
+    backendRoute: string;
+    controller: string;
+    service: string;
+    jobType?: string;
+    readsSharePoint: boolean;
+    writesSharePoint: boolean;
+    needsDigest: boolean;
+    policy: "browser-supported" | "backend-service-auth-required" | "not-implemented";
+    connectorMode: "browser-sharepoint" | "backend-sharepoint" | "mongo-backend" | "server-local" | "backend-service-auth-required" | "manual" | "none";
+    canRunFromBrowser: boolean;
+    backendServiceAuthOnly: boolean;
+    currentFailureMode: string;
+    statusLabelHe: string;
+    blockerHe?: string;
+  }>;
+  dangerousOverrides?: {
+    active: boolean;
+    activeCount: number;
+    gates: Array<{ gate: string; envVar: string; active: true; description: string }>;
+  };
   operations: Record<string, { available: boolean; writeRequired: boolean; reason?: string }>;
+};
+
+export type BuilderBackendOption = {
+  label: string;
+  backendApiUrl: string;
+  backendApiUrlHost: string;
+  environment: "local" | "dev" | "test" | "staging" | "production" | "unknown" | string;
+  default: boolean;
+  credentialRef: string;
+  credentialConfigured: boolean;
+  allowed: boolean;
+  localhost: boolean;
+};
+
+export type BuilderBackendRuntimeSettings = {
+  builderBackendOptions: BuilderBackendOption[];
+  defaultBuilderBackendApiUrl: string;
+  defaultBuilderApiKeyRef: string;
+  currentEnvironment: string;
+  productionClassifiedDefaultExists: boolean;
+  defaultStorageBackend: "txt" | "mongo" | "unknown";
+  advancedManualFieldsEnabled: boolean;
+  rawApiKeysExposed: false;
 };
 
 export type PermissionsSetupPlan = {
@@ -515,6 +984,12 @@ export type DeployPolicy = {
   requiresApproval: boolean;
   requiresRecentVerifiedBackup: boolean;
   ownerOverrideAllowed: boolean;
+  dangerousBackupBypass?: {
+    active: boolean;
+    envVar: string;
+    operation: "deploy" | "rollback" | "restore";
+    reason: string;
+  };
   checkedAt: string;
   warning: string;
   blockers: string[];
@@ -529,6 +1004,7 @@ export type DeployPlan = {
   releaseVersion: string;
   artifactRef: string;
   artifactRoot: string;
+  artifactCompatibility?: ReleaseArtifactCompatibility;
   siteId: string;
   siteCode: string;
   target?: {
@@ -536,6 +1012,9 @@ export type DeployPlan = {
     siteCode: string;
     siteDisplayName: string;
     environment: string;
+    storageBackend?: string;
+    runtimeConfigPath?: string;
+    dataBackendStatus?: string;
     sharePointSiteUrl: string;
     finalAppUrl: string;
     currentKnownVersion: string;
@@ -561,6 +1040,13 @@ export type DeployPlan = {
     totalSizeBytes: number;
     hasIndexHtml: boolean;
     hasManifest: boolean;
+    storageCompatibility?: Array<"txt" | "mongo">;
+    artifactKind?: ReleaseArtifactKind;
+    requiresRuntimeConfig?: boolean;
+    preservesRuntimeConfig?: boolean;
+    requiredFolders?: string[];
+    runtimeConfigFiles?: string[];
+    skippedRuntimeConfigFilesCount?: number;
     readyForDeploy: boolean;
     readyForDeployExecution?: boolean;
     targetInventoryReadOk?: boolean;
@@ -611,6 +1097,7 @@ export type BatchDeployPlan = {
   targetSiteIds: string[];
   deployMode: DeployMode;
   connectorMode?: SharePointConnectorMode;
+  allowDeployWithoutBackup?: boolean;
   summary: {
     totalSelectedSites: number;
     readySites: number;
@@ -629,6 +1116,7 @@ export type BatchDeployRequest = {
   targetSiteIds?: string[];
   deployMode?: DeployMode;
   connectorMode?: SharePointConnectorMode;
+  allowDeployWithoutBackup?: boolean;
 };
 
 export type BatchDeployResult = {
@@ -696,17 +1184,67 @@ export type LiveAdminSourcesResult = {
   siteId: string;
   siteCode: string;
   capturedAt: string;
+  generatedAt?: string;
+  readAt?: string;
+  connectorMode?: "browser-sharepoint" | "backend-sharepoint";
+  targetSiteUrl?: string;
   adminsCount: number;
   txtAdmins: any[];
   siteCollectionAdmins: any[];
   ownersGroupAdmins: any[];
+  uniqueAdmins?: any[];
   adminDifferences: Record<string, string[]>;
   sourceStatus: Array<{
     source: "txt" | "siteCollection" | "ownersGroup";
+    status?: "success" | "failed" | "skipped";
     ok: boolean;
-    count: number;
+    count?: number;
+    rawCount?: number;
+    normalizedCount?: number;
+    httpStatus?: number;
+    httpStatusText?: string;
+    sourceUrl?: string;
+    readAt?: string;
+    errorCode?: string;
+    errorMessage?: string;
     error?: string;
+    warnings?: string[];
   }>;
+  rawCounts?: Record<string, number>;
+  normalizedCounts?: Record<string, number>;
+  warnings?: string[];
+  evidence?: Record<string, unknown>;
+};
+
+export type BrowserAdminLiveReadEvidencePayload = LiveAdminSourcesResult & {
+  connectorMode: "browser-sharepoint";
+  targetSiteUrl?: string;
+};
+
+export type BrowserAdminLiveReadEvidenceResult = {
+  siteId: string;
+  siteCode: string;
+  connectorMode: "browser-sharepoint";
+  targetSiteUrl?: string;
+  capturedAt: string;
+  liveRead: LiveAdminSourcesResult;
+  summary: {
+    siteId: string;
+    siteCode: string;
+    adminsCount: number;
+    lastAdminSyncAt?: string;
+    lastAdminLiveReadAt?: string;
+    lastAdminLiveReadSource?: string;
+    adminSyncStatus?: string;
+    txtAdmins: any[];
+    siteCollectionAdmins: any[];
+    ownersGroupAdmins: any[];
+    adminDifferences: Record<string, string[]>;
+    sourceStatus: LiveAdminSourcesResult["sourceStatus"];
+    sourceCounts?: Record<string, number | null>;
+    latestSnapshot?: any;
+  };
+  snapshot: any;
 };
 
 export type AdminTxtRepairPlan = {
@@ -773,10 +1311,31 @@ export type ReleaseArtifactValidation = {
     totalSizeBytes: number;
     hasIndexHtml: boolean;
     hasManifest: boolean;
+    storageCompatibility?: Array<"txt" | "mongo">;
+    artifactKind?: ReleaseArtifactKind;
+    requiresRuntimeConfig?: boolean;
+    preservesRuntimeConfig?: boolean;
+    requiredFolders?: string[];
+    runtimeConfigFiles?: string[];
+    compatibilitySource?: "manifest" | "inferred" | "unknown";
     readyForDeploy: boolean;
   };
+  compatibility?: ReleaseArtifactCompatibility;
   sampleFiles: Array<{ relativePath: string; sourcePath: string; sizeBytes: number; sha256: string }>;
   notes: string[];
+};
+
+export type ReleaseArtifactKind = "site-builder-frontend" | "legacy-txt-frontend" | "mongo-frontend" | "unknown";
+
+export type ReleaseArtifactCompatibility = {
+  storageCompatibility: Array<"txt" | "mongo">;
+  artifactKind: ReleaseArtifactKind;
+  requiresRuntimeConfig: boolean;
+  preservesRuntimeConfig: boolean;
+  requiredFolders: string[];
+  runtimeConfigFiles: string[];
+  compatibilitySource: "manifest" | "inferred" | "unknown";
+  compatibilityWarnings: string[];
 };
 
 export type ReleaseArtifactManifestFile = {
@@ -794,6 +1353,7 @@ export type ReleaseArtifactManifest = {
   version: string;
   artifactRef: string;
   artifactRoot: string;
+  compatibility?: ReleaseArtifactCompatibility;
   files: ReleaseArtifactManifestFile[];
   summary: {
     filesCount: number;
@@ -801,6 +1361,13 @@ export type ReleaseArtifactManifest = {
     totalSizeBytes: number;
     hasIndexHtml: boolean;
     hasManifest: boolean;
+    storageCompatibility?: Array<"txt" | "mongo">;
+    artifactKind?: ReleaseArtifactKind;
+    requiresRuntimeConfig?: boolean;
+    preservesRuntimeConfig?: boolean;
+    requiredFolders?: string[];
+    runtimeConfigFiles?: string[];
+    compatibilitySource?: "manifest" | "inferred" | "unknown";
     readyForDeploy: boolean;
   };
 };
@@ -828,12 +1395,54 @@ export type BrowserDeployEvidencePayload = {
   };
   uploadedFilesEvidence?: DeploymentVerificationEvidence[];
   readBackEvidence?: DeploymentVerificationEvidence[];
+  finalAppUrlVerification?: DeploymentFinalAppUrlVerification;
   errors?: Array<{ relativePath?: string; targetPath?: string; error: string; status?: number } | string>;
   startedAt?: string;
   completedAt?: string;
   finalStatus: "success" | "failed";
   versionBefore?: string;
   versionAfter?: string;
+};
+
+export type BrowserBackupEvidencePayload = {
+  connectorMode: "browser-sharepoint";
+  jobId?: string;
+  targetSiteUrl?: string;
+  backupId: string;
+  target: {
+    backupsRoot?: string;
+    backupFolder: string;
+  };
+  sourcePaths?: BackupSourceEvidence[];
+  verificationEvidence?: BackupVerificationEvidence[];
+  errors?: Array<{ sourcePath?: string; targetPath?: string; error: string; status?: number } | string>;
+  startedAt?: string;
+  completedAt?: string;
+  finalStatus: "success" | "failed";
+};
+
+export type BrowserBackupOperationPlan = {
+  operation: "backup";
+  connectorMode: "browser-sharepoint";
+  executionMode: "browser-required";
+  siteId: string;
+  siteCode: string;
+  targetSiteUrl: string;
+  backupId: string;
+  target: {
+    backupsRoot: string;
+    backupFolder: string;
+  };
+  sourcePaths: string[];
+  message?: string;
+};
+
+export type BrowserBackupVerificationPayload = {
+  connectorMode: "browser-sharepoint";
+  targetSiteUrl?: string;
+  verificationEvidence: BackupVerificationEvidence[];
+  checkedAt?: string;
+  finalStatus: "success" | "failed";
 };
 
 export type AllBackupPlans = {
@@ -978,17 +1587,50 @@ export type DiagnosticsResult = {
     authCookieNames?: string[];
     bearerTokenConfigured: boolean;
     unauthenticatedWriteBypassEnabled: boolean;
+    dangerousOverrides?: Array<{ gate: string; envVar: string; active: true; description: string }>;
     capabilities: OperationCapabilities["sharePoint"] & {
       configured?: {
         writeEnabled: boolean;
         authCookieConfigured: boolean;
         bearerTokenConfigured: boolean;
         unauthenticatedWriteBypassEnabled: boolean;
+        dangerousWriteGateBypassEnabled?: boolean;
+        dangerousWriteGateBypassEnvVar?: string;
       };
       writeVerified?: boolean;
     };
   };
+  builderBackendConfig?: BuilderBackendRuntimeSettings;
   selectedSite?: Partial<Site> | null;
+  runtimeConfig?: {
+    path?: string;
+    url?: string;
+    status?: string;
+    storageBackend?: string;
+    backendApiUrlHost?: string;
+    builderSiteId?: string;
+    apiKeyStatus?: string;
+    belongsToSite?: boolean;
+    warnings?: string[];
+    checkedAt?: string;
+  } | null;
+  builderBackend?: {
+    connectorMode: "mongo-backend";
+    backendApiUrlHost?: string;
+    siteId?: string;
+    safeCollectionName?: string;
+    apiKeyConfigured?: boolean;
+    backendReachable?: boolean;
+    registryStatus?: string;
+    collectionStatus?: string;
+    seedStatus?: string;
+    missingScopes?: string[];
+    missingDocs?: string[];
+    backupsStatus?: string;
+    revisionsAuditStatus?: string;
+    warnings?: string[];
+    checkedAt?: string;
+  } | null;
   paths?: {
     siteBaseUrl: string;
     siteRoot: string;
@@ -1379,6 +2021,52 @@ export const sitesApi = {
         ...asJson(result)
       })
     ),
+  validateRuntimeConfig: async (id: string) =>
+    parseResponse<RuntimeConfigValidationResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/runtime-config/validate`, {
+        method: "POST",
+        ...asJson({})
+      })
+    ),
+  runMongoBackendHealth: async (id: string) =>
+    parseResponse<BuilderMongoHealthResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/health-check/mongo-backend`, {
+        method: "POST",
+        ...asJson({})
+      })
+    ),
+  planMongoSiteCreationFromPayload: async (site: Partial<Site>) =>
+    parseResponse<MongoSiteCreationPlan>(
+      await apiFetch(`${API_BASE_URL}/sites/mongo-create/plan`, {
+        method: "POST",
+        ...asJson(site)
+      })
+    ),
+  mongoSiteCreationPlan: async (id: string) =>
+    parseResponse<MongoSiteCreationPlan>(await apiFetch(`${API_BASE_URL}/sites/${id}/mongo-create/plan`)),
+  executeMongoSiteCreation: async (id: string) =>
+    parseResponse<MongoSiteCreationExecuteResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/mongo-create/execute`, {
+        method: "POST",
+        ...asJson({})
+      })
+    ),
+  mongoRuntimeConfigContent: async (id: string) =>
+    parseResponse<MongoRuntimeConfigContent>(await apiFetch(`${API_BASE_URL}/sites/${id}/mongo-create/runtime-config-content`)),
+  recordMongoCreateBrowserEvidence: async (id: string, evidence: MongoCreateBrowserEvidenceInput) =>
+    parseResponse<{ siteId: string; siteCode: string; connectorMode: "browser-sharepoint"; capturedAt: string; runtimeConfigVerified: boolean; ready: boolean; health: SiteHealth }>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/mongo-create/browser-evidence`, {
+        method: "POST",
+        ...asJson(evidence)
+      })
+    ),
+  verifyMongoSiteCreation: async (id: string) =>
+    parseResponse<MongoSiteCreationVerifyResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/mongo-create/verify`, {
+        method: "POST",
+        ...asJson({})
+      })
+    ),
   siteProvisionPlan: async (id: string) => parseResponse<SiteProvisionPlan>(await apiFetch(`${API_BASE_URL}/sites/${id}/provision/plan`)),
   queueSiteProvision: async (id: string) =>
     parseResponse<{ job: Job }>(
@@ -1458,11 +2146,17 @@ export const sitesApi = {
       contentType: response.headers.get("content-type") || blob.type || "application/octet-stream"
     };
   },
-  deploySiteVersion: async (siteId: string, releaseId: string, deployMode: DeployMode = "production-safe") =>
+  deploySiteVersion: async (
+    siteId: string,
+    releaseId: string,
+    deployMode: DeployMode = "production-safe",
+    connectorMode: SharePointConnectorMode = "backend-sharepoint",
+    allowDeployWithoutBackup = false
+  ) =>
     parseResponse<{ job: Job; deployment?: SiteDeployment; requiresApproval?: boolean; approvalStatus?: string; message?: string; deployMode?: DeployMode; deployPolicy?: DeployPolicy }>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/deploy-version`, {
         method: "POST",
-        ...asJson({ releaseId, deployMode })
+        ...asJson({ releaseId, deployMode, connectorMode, allowDeployWithoutBackup })
       })
     ),
   deploySiteVersionPlan: async (siteId: string, releaseId: string, deployMode: DeployMode = "production-safe", connectorMode: SharePointConnectorMode = "backend-sharepoint") =>
@@ -1517,10 +2211,17 @@ export const sitesApi = {
       })
     ),
   runSiteBackup: async (siteId: string) =>
-    parseResponse<{ job: Job }>(
+    parseResponse<{ job: Job; browserOperationPlan?: BrowserBackupOperationPlan; connectorMode?: "browser-sharepoint" | "backend-sharepoint"; executionMode?: string; message?: string }>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/backups`, {
         method: "POST",
         ...asJson({})
+      })
+    ),
+  recordBrowserBackupEvidence: async (siteId: string, payload: BrowserBackupEvidencePayload) =>
+    parseResponse<{ backup: Backup; site: Site; summary: Record<string, unknown> }>(
+      await apiFetch(`${API_BASE_URL}/sites/${siteId}/backups/browser-evidence`, {
+        method: "POST",
+        ...asJson(payload)
       })
     ),
   runAllBackups: async () =>
@@ -1542,6 +2243,13 @@ export const sitesApi = {
       await apiFetch(`${API_BASE_URL}/backups/${backupId}/verify`, {
         method: "POST",
         ...asJson({ details })
+      })
+    ),
+  recordBrowserBackupVerification: async (backupId: string, payload: BrowserBackupVerificationPayload) =>
+    parseResponse<{ backup: Backup; site: Site; summary: Record<string, unknown> }>(
+      await apiFetch(`${API_BASE_URL}/backups/${backupId}/browser-verify`, {
+        method: "POST",
+        ...asJson(payload)
       })
     ),
   restorePlan: async (backupId: string, notes = "") =>
@@ -1567,6 +2275,13 @@ export const sitesApi = {
         ...asJson({})
       })
     ),
+  recordBrowserAdminLiveReadEvidence: async (siteId: string, evidence: BrowserAdminLiveReadEvidencePayload) =>
+    parseResponse<BrowserAdminLiveReadEvidenceResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${siteId}/admins/browser-live-read-evidence`, {
+        method: "POST",
+        ...asJson(evidence)
+      })
+    ),
   syncSiteAdmins: async (siteId: string, mode: "read-only" | "sync" = "sync") =>
     parseResponse<{ job: Job }>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/admins/sync`, {
@@ -1574,18 +2289,43 @@ export const sitesApi = {
         ...asJson({ mode })
       })
     ),
-  addSiteAdmin: async (siteId: string, admin: Record<string, string>) =>
+  addSiteAdmin: async (siteId: string, admin: Record<string, string>, reason = "") =>
     parseResponse<any>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/admins`, {
         method: "POST",
-        ...asJson({ admin })
+        ...asJson({ admin, reason })
       })
     ),
-  removeSiteAdmin: async (siteId: string, adminId: string, source?: "txt" | "siteCollection" | "ownersGroup") => {
+  removeSiteAdmin: async (siteId: string, adminId: string, source?: "txt" | "siteCollection" | "ownersGroup", reason = "") => {
     const query = source ? `?source=${encodeURIComponent(source)}` : "";
-    return parseResponse<any>(await apiFetch(`${API_BASE_URL}/sites/${siteId}/admins/${encodeURIComponent(adminId)}${query}`, { method: "DELETE" }));
+    return parseResponse<any>(
+      await apiFetch(`${API_BASE_URL}/sites/${siteId}/admins/${encodeURIComponent(adminId)}${query}`, {
+        method: "DELETE",
+        ...asJson({ source, reason })
+      })
+    );
   },
   adminsDiff: async (siteId: string) => parseResponse<any>(await apiFetch(`${API_BASE_URL}/sites/${siteId}/admins/diff`)),
+  accessDirectory: async () => parseResponse<AccessDirectory>(await apiFetch(`${API_BASE_URL}/access/users`)),
+  accessUser: async (principalId: string) => parseResponse<AccessDirectoryUser>(await apiFetch(`${API_BASE_URL}/access/users/${encodeURIComponent(principalId)}`)),
+  accessUserSites: async (principalId: string) =>
+    parseResponse<{ principalId: string; sites: AccessSiteMembership[] }>(
+      await apiFetch(`${API_BASE_URL}/access/users/${encodeURIComponent(principalId)}/sites`)
+    ),
+  planAccessChange: async (payload: AccessChangePlanInput) =>
+    parseResponse<AccessChangePlan>(
+      await apiFetch(`${API_BASE_URL}/access/changes/plan`, {
+        method: "POST",
+        ...asJson(payload)
+      })
+    ),
+  executeAccessChange: async (payload: AccessChangePlanInput) =>
+    parseResponse<{ plan: AccessChangePlan; executed: false; message: string }>(
+      await apiFetch(`${API_BASE_URL}/access/changes/execute`, {
+        method: "POST",
+        ...asJson(payload)
+      })
+    ),
   queueAdminTxtRepairPlan: async (siteId: string, notes = "") =>
     parseResponse<AdminTxtRepairPlan>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/admins/repair-txt/plan`, {
@@ -1602,7 +2342,13 @@ export const sitesApi = {
     ),
 
   jobs: async () => parseResponse<Job[]>(await apiFetch(`${API_BASE_URL}/jobs`)),
-  rerunJob: async (jobId: string) => parseResponse<Job>(await apiFetch(`${API_BASE_URL}/jobs/${jobId}/rerun`, { method: "POST" })),
+  rerunJob: async (jobId: string, reason = "") =>
+    parseResponse<Job>(
+      await apiFetch(`${API_BASE_URL}/jobs/${jobId}/rerun`, {
+        method: "POST",
+        ...asJson(reason ? { reason } : {})
+      })
+    ),
   approveJob: async (jobId: string, reason = "") =>
     parseResponse<Job>(
       await apiFetch(`${API_BASE_URL}/jobs/${jobId}/approve`, {

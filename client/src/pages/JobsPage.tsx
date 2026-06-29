@@ -11,17 +11,20 @@ import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
 import { PageHeader } from "../components/PageHeader";
+import { ProtectedActionDialog } from "../components/ProtectedActionDialog";
 import { SectionCard } from "../components/SectionCard";
 import { StatusToken } from "../components/StatusToken";
 import { formatDateTime, formatNumber, jobStatusLabel, jobTypeLabel } from "../utils/format";
 
-const activeStatuses = new Set(["preflight", "running", "verifying"]);
+const activeStatuses = new Set(["preflight", "running", "verifying", "browser-in-progress"]);
 
 const jobStatusBadgeClass = (status: Job["status"]) => {
   if (status === "failed") return "badge-danger";
   if (status === "succeeded") return "badge-success";
   if (status === "awaiting-approval") return "badge-warning";
-  if (status === "preflight" || status === "running" || status === "verifying") return "badge-info";
+  if (status === "browser-required") return "badge-warning";
+  if (status === "blocked-service-auth-required") return "badge-danger";
+  if (status === "preflight" || status === "running" || status === "verifying" || status === "browser-in-progress") return "badge-info";
   if (status === "retrying") return "badge-warning";
   return "badge-neutral";
 };
@@ -40,6 +43,7 @@ const payloadCount = (value: unknown) => Array.isArray(value) ? value.length : v
 
 type ApprovalAction = "approve" | "reject";
 type ApprovalDialogState = { job: Job; action: ApprovalAction } | null;
+type RerunDialogState = { job: Job } | null;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -88,20 +92,47 @@ const jobErrorSummary = (job: Job) => {
   const exact = job.errorMessage || stringValue((job.result as any)?.error) || stringValue((job.evidence as any)?.error) || "";
   const code = exact.split(":")[0] || (job.status === "failed" ? "JOB_FAILED" : "");
   const sharePoint401 = exact.includes("sharepoint-digest-failed:401") || exact.includes("sharepoint") && exact.includes(":401");
+  const browserRequired = job.status === "browser-required" || job.executionMode === "browser-required";
   return {
     action: jobTypeLabel(job.type),
     site: job.siteId || "לא ידוע",
     operationType: job.type,
     status: jobStatusLabel(job.status),
     errorCode: sharePoint401 ? "SHAREPOINT_401" : code,
-    humanExplanation: sharePoint401
+    humanExplanation: browserRequired
+      ? "הפעולה ממתינה להרצה דרך הדפדפן המחובר ל־SharePoint."
+      : sharePoint401
       ? "הדפדפן מחובר ל־SharePoint, אבל השרת המקומי לא מחובר"
       : exact ? "הפעולה נכשלה בזמן הרצה. בדקו את השגיאה המדויקת ואת פרטי החיבור." : "לא נשמרה שגיאה מפורשת.",
-    suggestedFix: sharePoint401
-      ? "בדקו SharePoint auth cookie / bearer token / current-user mode / target site URL במסך בעיות וחיבורים."
+    suggestedFix: browserRequired
+      ? "פתחו את מסך הפעולה המתאים והריצו אותה דרך הדפדפן. ה־worker לא יריץ אותה מהשרת."
+      : sharePoint401
+      ? "השרת המקומי לא מחובר ל־SharePoint, אבל פעולות שמוגדרות לדפדפן יכולות להמשיך דרך חיבור הדפדפן."
       : "הריצו אבחון במסך בעיות וחיבורים ובדקו את הלוגים הטכניים.",
     exact
   };
+};
+
+const isWriteLikeJob = (job: Job) =>
+  ["deploy", "restore", "repair", "version-upgrade", "version-rollback", "site-provision", "permissions-setup", "site-bootstrap", "backup", "admin-sync"].includes(job.type);
+
+const rerunRisks = (job: Job) => {
+  const risks = [
+    `Job type: ${jobTypeLabel(job.type)}.`,
+    `Current status: ${jobStatusLabel(job.status)}.`,
+    job.siteId ? `Target site: ${job.siteId}.` : "Target site is not attached to this job.",
+    "Rerun resets execution timestamps/result/evidence and queues the operation again."
+  ];
+  if (job.requiresApproval) {
+    risks.push("This job requires approval; rerun will return it to the approval gate instead of running immediately.");
+  }
+  if (isWriteLikeJob(job)) {
+    risks.push("This operation may write to SharePoint or update Hub metadata. Review the original evidence before rerun.");
+  }
+  if (job.status === "failed" && job.errorMessage) {
+    risks.push(`Previous failure: ${job.errorMessage}`);
+  }
+  return risks;
 };
 
 function ApprovalReviewDialog({
@@ -261,7 +292,7 @@ function ApprovalReviewDialog({
         </div>
 
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t divider px-5 py-4" style={{ background: "var(--surface)" }}>
-          <div className="text-xs muted">הפעולה תשתמש ב־sitesApi.{isReject ? "rejectJob" : "approveJob"} עבור Job זה.</div>
+          <div className="text-xs muted">החלטה זו תישמר ב־Audit ותעדכן את סטטוס ה־Job.</div>
           <div className="flex gap-2">
             <button className="btn btn-secondary" onClick={onClose} type="button" disabled={busy}>ביטול</button>
             <button className={`btn ${isReject ? "btn-danger" : "btn-primary"}`} onClick={submit} type="button" disabled={!canSubmit}>
@@ -284,6 +315,7 @@ export function JobsPage() {
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [busyAction, setBusyAction] = useState("");
   const [approvalDialog, setApprovalDialog] = useState<ApprovalDialogState>(null);
+  const [rerunDialog, setRerunDialog] = useState<RerunDialogState>(null);
 
   const load = async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
@@ -320,19 +352,23 @@ export function JobsPage() {
   const counts = {
     awaiting: jobs.filter((job) => job.status === "awaiting-approval").length,
     queued: jobs.filter((job) => job.status === "queued").length,
+    browserRequired: jobs.filter((job) => job.status === "browser-required").length,
+    serviceAuthBlocked: jobs.filter((job) => job.status === "blocked-service-auth-required").length,
     active: jobs.filter((job) => activeStatuses.has(job.status)).length,
     succeeded: jobs.filter((job) => job.status === "succeeded").length,
     completed: jobs.filter((job) => job.status === "succeeded" || job.status === "cancelled").length,
     failed: jobs.filter((job) => job.status === "failed").length
   };
 
-  const rerun = async (job: Job) => {
+  const rerun = async (job: Job, reason: string) => {
     setBusyAction(job._id);
     setError("");
     setMessage("");
     try {
-      await sitesApi.rerunJob(job._id);
-      setMessage(`Job ${job._id} נשלח להרצה מחדש`);
+      const result = await sitesApi.rerunJob(job._id, reason);
+      const nextStatus = result.data.status === "awaiting-approval" ? "ממתין לאישור מתקדם" : "נשלח לתור";
+      setMessage(`Job ${job._id} ${nextStatus}`);
+      setRerunDialog(null);
       await load(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "שגיאה בהרצת Job מחדש");
@@ -344,6 +380,7 @@ export function JobsPage() {
   const queueTabs = [
     { key: "all", label: "הכל", count: jobs.length, token: "neutral" as const },
     { key: "awaiting-approval", label: "אישור מתקדם", count: counts.awaiting, token: "approval" as const },
+    { key: "browser-required", label: "דפדפן", count: counts.browserRequired, token: "approval" as const },
     { key: "active", label: "בתהליך", count: counts.active, token: "running" as const },
     { key: "failed", label: "נכשלו", count: counts.failed, token: "blocked" as const },
     { key: "completed", label: "הושלמו", count: counts.completed, token: "success" as const }
@@ -432,7 +469,15 @@ export function JobsPage() {
               <button className="btn btn-danger min-h-0 px-2 py-1 text-xs" disabled={busyAction === `reject-${job._id}`} onClick={() => setApprovalDialog({ job, action: "reject" })} type="button"><XCircle size={13} />סקור ודחה</button>
             </>
           ) : null}
-          <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === job._id || activeStatuses.has(job.status) || job.status === "awaiting-approval"} onClick={() => rerun(job)} type="button"><RotateCcw size={13} />Rerun</button>
+          <button
+            className="btn btn-secondary min-h-0 px-2 py-1 text-xs"
+            disabled={busyAction === job._id || activeStatuses.has(job.status) || job.status === "awaiting-approval"}
+            onClick={() => setRerunDialog({ job })}
+            type="button"
+            title={activeStatuses.has(job.status) || job.status === "awaiting-approval" ? "Rerun זמין רק לפעולה שאינה רצה ואינה ממתינה לאישור" : "פתח אישור Rerun"}
+          >
+            <RotateCcw size={13} />Rerun
+          </button>
         </div>
       )
     }
@@ -464,6 +509,14 @@ export function JobsPage() {
             <button className="btn btn-danger min-h-0 px-2 py-1 text-xs" disabled={busyAction === `reject-${job._id}`} onClick={() => setApprovalDialog({ job, action: "reject" })} type="button"><XCircle size={13} />דחה</button>
           </>
         ) : null}
+        <button
+          className="btn btn-secondary min-h-0 px-2 py-1 text-xs"
+          disabled={busyAction === job._id || activeStatuses.has(job.status) || job.status === "awaiting-approval"}
+          onClick={() => setRerunDialog({ job })}
+          type="button"
+        >
+          <RotateCcw size={13} />Rerun
+        </button>
       </div>
     </div>
   );
@@ -492,10 +545,15 @@ export function JobsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="תורים ו-Jobs"
-        subtitle="Operations console לפעולות health, deploy, backup, admin-sync, provisioning והרשאות."
+        title="תור פעולות"
+        subtitle="Operations Queue לפעולות פריסה, שחזור, גיבוי, הרשאות, health ו-provisioning. כל פעולה מסוכנת עוברת approval או confirmation לפני הרצה."
         helpKey="job"
-        actions={<MetadataOnlyBadge mode="metadata" />}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <StatusToken kind="running" label="Auto-refresh 5s" compact />
+            <MetadataOnlyBadge mode="metadata" />
+          </div>
+        }
       />
 
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}
@@ -506,14 +564,14 @@ export function JobsPage() {
         <>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard variant="inline" title="אישור מתקדם" value={formatNumber(counts.awaiting)} icon={<CheckCircle2 size={18} />} description="מופיע רק אם מצב אישורים מתקדם פעיל" tone={counts.awaiting ? "warning" : "neutral"} helpKey="job.approval" />
-            <KpiCard variant="inline" title="בתהליך" value={formatNumber(counts.active)} icon={<Workflow size={18} />} description={`${formatNumber(counts.queued)} בתור`} tone="info" helpKey="job.running" />
+            <KpiCard variant="inline" title="בתהליך" value={formatNumber(counts.active)} icon={<Workflow size={18} />} description={`${formatNumber(counts.queued)} בתור · ${formatNumber(counts.browserRequired)} ממתינים לדפדפן`} tone="info" helpKey="job.running" />
             <KpiCard variant="inline" title="הושלמו" value={formatNumber(counts.completed)} icon={<Workflow size={18} />} description="Succeeded או cancelled" tone="success" helpKey="job.completed" />
             <KpiCard variant="inline" title="נכשלו" value={formatNumber(counts.failed)} icon={<Workflow size={18} />} description="דורשים תחקור" tone={counts.failed ? "danger" : "success"} helpKey="job.failed" />
           </div>
 
           <SectionCard
-            title="רשימת Jobs"
-            subtitle="Auto-refresh כל 5 שניות. Rerun זמין לפי הרשאות backend."
+            title="Operations Queue"
+            subtitle="תור פעולות עם approval, retry מבוקר, evidence וסטטוס ריצה. Rerun דורש נימוק ואישור מוגן."
             helpKey="job"
             actions={<button className="btn btn-secondary" onClick={() => load()} type="button"><RefreshCcw size={15} />רענן עכשיו</button>}
           >
@@ -536,6 +594,9 @@ export function JobsPage() {
                 <select className="control" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                   <option value="all">כל הסטטוסים</option>
                   <option value="awaiting-approval">אישור מתקדם</option>
+                  <option value="browser-required">ממתין להרצה דרך הדפדפן</option>
+                  <option value="browser-in-progress">רץ דרך הדפדפן</option>
+                  <option value="blocked-service-auth-required">דורש הרשאת שרת</option>
                   <option value="active">בתהליך</option>
                   <option value="queued">בתור</option>
                   <option value="preflight">בדיקה מקדימה</option>
@@ -558,7 +619,12 @@ export function JobsPage() {
             </FilterBar>
 
             {filteredJobs.length === 0 ? (
-              <EmptyState title="אין Jobs להצגה" description="שנה סינון או המתן לפעולות חדשות." />
+              <EmptyState
+                title={jobs.length === 0 ? "אין פעולות בתור" : "אין פעולות בסינון הנוכחי"}
+                description={jobs.length === 0
+                  ? "אין כרגע deploy, backup, restore, admin repair או health job שממתין להרצה. המסך מתרענן אוטומטית כל 5 שניות."
+                  : "שנו סטטוס או סוג פעולה כדי לראות פעולות אחרות בתור."}
+              />
             ) : (
               <DataTable columns={jobColumns} rows={filteredJobs} rowKey={(job) => job._id} mobileCard={jobMobileCard} minWidth={1240} density="dense" />
             )}
@@ -692,6 +758,26 @@ export function JobsPage() {
         busy={Boolean(approvalDialog && busyAction === `${approvalDialog.action}-${approvalDialog.job._id}`)}
         onClose={() => setApprovalDialog(null)}
         onSubmit={decideApproval}
+      />
+      <ProtectedActionDialog
+        open={Boolean(rerunDialog)}
+        title="אישור Rerun"
+        description={rerunDialog
+          ? `הרצה מחדש של ${jobTypeLabel(rerunDialog.job.type)} (${rerunDialog.job._id}). הפעולה תאפס timestamps/result/evidence קודמים ותכניס את ה־Job שוב לתור או לשער אישור.`
+          : ""}
+        confirmWord="Rerun Job"
+        noteLabel="סיבת Rerun"
+        notePlaceholder="לדוגמה: תיקון הגדרת חיבור אחרי כשל SharePoint 401"
+        noteHint="נדרש נימוק של לפחות 3 תווים. הנימוק יישמר ב־Audit של פעולת ה־rerun."
+        confirmLabel="אשר Rerun"
+        busy={Boolean(rerunDialog && busyAction === rerunDialog.job._id)}
+        risks={rerunDialog ? rerunRisks(rerunDialog.job) : []}
+        onClose={() => {
+          if (!busyAction) setRerunDialog(null);
+        }}
+        onConfirm={(reason) => {
+          if (rerunDialog) void rerun(rerunDialog.job, reason);
+        }}
       />
     </div>
   );

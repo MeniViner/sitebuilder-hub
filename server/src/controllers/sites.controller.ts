@@ -18,6 +18,17 @@ import { buildSiteProvisionPlan } from "../services/siteProvisioning.service";
 import { getSharePointOperationCapabilities } from "../services/sharepointOperationClient";
 import { buildPermissionsSetupPlan } from "../services/permissionsSetup.service";
 import { buildSiteBootstrapPlan, normalizeSiteBootstrapOptions } from "../services/siteBootstrap.service";
+import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "../services/dangerousBackupBypass.service";
+import { shouldBlockBackendSharePointByDefault } from "../services/sharepointOperationPolicy.service";
+import { validateRuntimeConfig } from "../services/runtimeConfig.service";
+import { runBuilderMongoHealthCheck } from "../services/builderMongoHealth.service";
+import {
+  buildMongoRuntimeConfigContent,
+  buildMongoSiteCreationPlan,
+  buildMongoSiteCreationPlanFromInput,
+  executeMongoSiteCreation,
+  recordMongoCreateBrowserEvidence
+} from "../services/mongoSiteCreation.service";
 
 type ApprovalGatedJobInput = Parameters<typeof createJob>[0] & {
   requiresApproval: boolean;
@@ -219,6 +230,248 @@ export const browserSharePointHealthCheckEvidence = async (req: Request, res: Re
   }
 };
 
+export const runtimeConfigValidation = async (req: Request, res: Response) => {
+  try {
+    const result = await validateRuntimeConfig(req.params.id);
+
+    await writeAuditLog({
+      req,
+      action: "sites.runtime-config.validate",
+      entityType: "Site",
+      entityId: result.siteId,
+      metadata: {
+        siteCode: result.siteCode,
+        runtimeConfigPath: result.runtimeConfigPath,
+        readStatus: result.readStatus,
+        storageBackend: result.storageBackend,
+        backendApiUrlHost: result.backendApiUrlHost,
+        builderSiteId: result.builderSiteId,
+        apiKeyStatus: result.apiKeyStatus,
+        warnings: result.warnings
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
+export const builderMongoHealthCheck = async (req: Request, res: Response) => {
+  try {
+    const result = await runBuilderMongoHealthCheck(req.params.id);
+
+    await writeAuditLog({
+      req,
+      action: "sites.mongo-backend.health",
+      entityType: "Site",
+      entityId: result.siteId,
+      metadata: {
+        siteCode: result.siteCode,
+        storageBackend: result.storageBackend,
+        backendApiUrlHost: result.backendApiUrlHost,
+        builderSiteId: result.builderSiteId,
+        safeCollectionName: result.safeCollectionName,
+        backendReachable: result.backendReachable,
+        registryStatus: result.registryStatus,
+        collectionStatus: result.collectionStatus,
+        seedStatus: result.seedStatus,
+        missingDocs: result.missingDocs,
+        warnings: result.warnings
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
+export const planMongoSiteCreationFromPayload = async (req: Request, res: Response) => {
+  try {
+    const payload = createSiteSchema.parse({
+      ...req.body,
+      storageBackend: "mongo",
+      creationMode: "create-new"
+    });
+    const plan = await buildMongoSiteCreationPlanFromInput(payload);
+
+    await writeAuditLog({
+      req,
+      action: "sites.mongo-create.plan-payload",
+      entityType: "Site",
+      result: "success",
+      metadata: {
+        siteCode: plan.siteCode,
+        storageBackend: "mongo",
+        builderSiteId: plan.identity.builderSiteId,
+        backendApiUrlHost: plan.builderBackend.backendApiUrlHost,
+        runtimeConfigPath: plan.runtimeConfig.path,
+        blockers: plan.blockers,
+        warnings: plan.warnings
+      }
+    });
+
+    return ok(res, plan);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
+export const getMongoSiteCreationPlan = async (req: Request, res: Response) => {
+  try {
+    const plan = await buildMongoSiteCreationPlan(req.params.id);
+    return ok(res, plan);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
+export const executeMongoSiteCreationEndpoint = async (req: Request, res: Response) => {
+  try {
+    const result = await executeMongoSiteCreation(req.params.id);
+
+    await writeAuditLog({
+      req,
+      action: "sites.mongo-create.execute",
+      entityType: "Site",
+      entityId: result.siteId,
+      result: result.finalStatus === "failed" ? "failure" : "success",
+      metadata: {
+        siteCode: result.siteCode,
+        backendApiUrlHost: result.builderBackend.backendApiUrlHost,
+        builderSiteId: result.builderBackend.siteId,
+        safeCollectionName: result.registry.safeCollectionName,
+        registryStatus: result.registry.status,
+        seedStatus: result.seed.status,
+        writtenSeeds: result.seed.written,
+        skippedExistingSeeds: result.seed.skippedExisting,
+        failedSeeds: result.seed.failed,
+        backupCapabilityStatus: result.backupCapability.status,
+        warnings: result.warnings
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
+export const getMongoRuntimeConfigContent = async (req: Request, res: Response) => {
+  try {
+    const content = await buildMongoRuntimeConfigContent(req.params.id);
+    await writeAuditLog({
+      req,
+      action: "sites.mongo-create.runtime-config-content",
+      entityType: "Site",
+      entityId: content.siteId,
+      metadata: {
+        siteCode: content.siteCode,
+        runtimeConfigPath: content.runtimeConfigPath,
+        sizeBytes: content.sizeBytes,
+        sha256: content.sha256,
+        apiKey: "[redacted]"
+      }
+    });
+    return ok(res, content);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
+export const recordMongoCreateBrowserEvidenceEndpoint = async (req: Request, res: Response) => {
+  try {
+    const result = await recordMongoCreateBrowserEvidence(req.params.id, req.body || {});
+
+    await writeAuditLog({
+      req,
+      action: "sites.mongo-create.browser-evidence",
+      entityType: "Site",
+      entityId: result.siteId,
+      metadata: {
+        siteCode: result.siteCode,
+        connectorMode: "browser-sharepoint",
+        runtimeConfigVerified: result.runtimeConfigVerified,
+        ready: result.ready
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
+export const verifyMongoSiteCreationEndpoint = async (req: Request, res: Response) => {
+  try {
+    const site = await sitesService.getSiteById(req.params.id);
+    if (!site) return fail(res, "NOT_FOUND", "האתר לא נמצא", undefined, 404);
+    const hasBrowserRuntimeEvidence =
+      site.health?.runtimeConfigValid === true &&
+      (site.runtimeConfigStatus?.evidence as any)?.connectorMode === "browser-sharepoint";
+    const [runtimeConfig, mongoHealth] = await Promise.allSettled([
+      hasBrowserRuntimeEvidence ? Promise.resolve(site.runtimeConfigStatus) : validateRuntimeConfig(req.params.id),
+      runBuilderMongoHealthCheck(req.params.id)
+    ]);
+    const verifiedSite = await sitesService.getSiteById(req.params.id);
+    if (!verifiedSite) return fail(res, "NOT_FOUND", "האתר לא נמצא", undefined, 404);
+
+    const health = verifiedSite.health || {};
+    const ready = Boolean(
+      health.siteDbExists &&
+      health.usersDbExists &&
+      health.distExists &&
+      health.indexExists &&
+      health.runtimeConfigExists &&
+      health.runtimeConfigValid &&
+      health.dataBackendReachable &&
+      health.mongoRegistryOk &&
+      health.mongoCollectionOk &&
+      health.mongoSeedOk &&
+      health.adminsSyncOk &&
+      health.mongoBackupsOk
+    );
+
+    verifiedSite.lifecycleStatus = ready ? "ready" : "partially-created";
+    verifiedSite.provisioningStatus = ready ? "succeeded" : "partially-created";
+    verifiedSite.status = ready ? "active" : "draft";
+    verifiedSite.lastError = ready ? "" : "האתר עדיין לא מוכן לשימוש";
+    await verifiedSite.save();
+
+    const result = {
+      checkedAt: new Date().toISOString(),
+      siteId: verifiedSite._id.toString(),
+      siteCode: verifiedSite.siteCode,
+      ready,
+      status: ready ? "ready" : "partially-created",
+      message: ready ? "האתר מוכן" : "האתר עדיין לא מוכן לשימוש",
+      runtimeConfig: runtimeConfig.status === "fulfilled" ? runtimeConfig.value : { error: runtimeConfig.reason?.message || String(runtimeConfig.reason) },
+      mongoHealth: mongoHealth.status === "fulfilled" ? mongoHealth.value : { error: mongoHealth.reason?.message || String(mongoHealth.reason) },
+      health: verifiedSite.health
+    };
+
+    await writeAuditLog({
+      req,
+      action: "sites.mongo-create.verify",
+      entityType: "Site",
+      entityId: verifiedSite._id.toString(),
+      result: "success",
+      metadata: {
+        siteCode: verifiedSite.siteCode,
+        ready,
+        storageBackend: verifiedSite.storageBackend,
+        mongoSiteId: verifiedSite.mongoSiteId,
+        safeCollectionName: verifiedSite.safeCollectionName
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
 export const getSiteBootstrapPlan = async (req: Request, res: Response) => {
   try {
     const options = siteBootstrapSchema.parse(req.query || {});
@@ -231,6 +484,13 @@ export const getSiteBootstrapPlan = async (req: Request, res: Response) => {
 
 export const queueSiteBootstrap = async (req: Request, res: Response) => {
   try {
+    const rawOptions = siteBootstrapSchema.parse(req.body || {});
+    if (shouldBlockBackendSharePointByDefault("site-bootstrap", {
+      connectorMode: rawOptions.connectorMode,
+      confirmBackendSharePoint: rawOptions.confirmBackendSharePoint
+    })) {
+      throw new Error("backend-sharepoint-service-auth-required");
+    }
     const capabilities = getSharePointOperationCapabilities();
     if (!capabilities.writeAvailable) {
       return fail(res, "SHAREPOINT_WRITE_NOT_CONFIGURED", capabilities.reason || "SharePoint write is not configured", capabilities, 409);
@@ -239,10 +499,18 @@ export const queueSiteBootstrap = async (req: Request, res: Response) => {
     const site = await sitesService.getSiteById(req.params.id);
     if (!site) return fail(res, "NOT_FOUND", "האתר לא נמצא", undefined, 404);
 
-    const options = normalizeSiteBootstrapOptions(siteBootstrapSchema.parse(req.body || {}));
+    const options = normalizeSiteBootstrapOptions(rawOptions);
     const plan = await buildSiteBootstrapPlan(site._id.toString(), options);
-    if (!plan.summary.readyForBootstrapExecution) {
+    if (!plan.summary.readyForBootstrapExecution && !isDangerousValidationBypassEnabled("deploy-plan-blockers")) {
       return fail(res, "SITE_BOOTSTRAP_PLAN_NOT_READY", "SharePoint site bootstrap plan is not ready for execution", plan, 409);
+    }
+    if (!plan.summary.readyForBootstrapExecution) {
+      logger.warn("sites", "Site bootstrap plan readiness bypassed by dangerous env", {
+        siteId: site._id.toString(),
+        siteCode: site.siteCode,
+        envVar: getDangerousValidationBypassEnvVar("deploy-plan-blockers"),
+        blockers: plan.blockers
+      });
     }
 
     const createdBy = req.user?.name || "system";
@@ -371,6 +639,12 @@ export const getSiteProvisionPlan = async (req: Request, res: Response) => {
 
 export const queueSiteProvision = async (req: Request, res: Response) => {
   try {
+    if (shouldBlockBackendSharePointByDefault("site-provision", {
+      connectorMode: req.body?.connectorMode,
+      confirmBackendSharePoint: req.body?.confirmBackendSharePoint
+    })) {
+      throw new Error("browser-sharepoint-operation-not-implemented");
+    }
     const capabilities = getSharePointOperationCapabilities();
     if (!capabilities.writeAvailable) {
       return fail(res, "SHAREPOINT_WRITE_NOT_CONFIGURED", capabilities.reason || "SharePoint write is not configured", capabilities, 409);
@@ -491,6 +765,12 @@ export const getPermissionsSetupPlan = async (req: Request, res: Response) => {
 
 export const queuePermissionsSetup = async (req: Request, res: Response) => {
   try {
+    if (shouldBlockBackendSharePointByDefault("permissions-setup", {
+      connectorMode: req.body?.connectorMode,
+      confirmBackendSharePoint: req.body?.confirmBackendSharePoint
+    })) {
+      throw new Error("browser-sharepoint-operation-not-implemented");
+    }
     const capabilities = getSharePointOperationCapabilities();
     if (!capabilities.writeAvailable) {
       return fail(res, "SHAREPOINT_WRITE_NOT_CONFIGURED", capabilities.reason || "SharePoint write is not configured", capabilities, 409);
