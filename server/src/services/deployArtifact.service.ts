@@ -8,14 +8,7 @@ import { Site } from "../models/Site";
 import { SiteVersionDeployment } from "../models/SiteVersionDeployment";
 import { resolveSiteBuilderPaths, SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
 import { logger } from "../utils/logger";
-import {
-  getRequestDigest,
-  getSharePointOperationCapabilities,
-  listSharePointFiles,
-  listSharePointFolders,
-  readSharePointFileEvidence,
-  uploadSharePointFile
-} from "./sharepointOperationClient";
+import { getSharePointOperationCapabilities } from "./sharepointOperationClient";
 import {
   FinalAppUrlHealthEvidence,
   getFinalAppUrlHealthEvidence,
@@ -25,7 +18,7 @@ import {
 import { buildDeployPolicy, DeployMode, DeployPolicySnapshot } from "./deployPolicy.service";
 import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
 
-type DeployConnectorMode = "backend-sharepoint" | "browser-sharepoint";
+type DeployConnectorMode = "browser-sharepoint";
 export type ArtifactStorageCompatibility = "txt" | "mongo";
 export type ReleaseArtifactKind = "site-builder-frontend" | "legacy-txt-frontend" | "mongo-frontend" | "unknown";
 
@@ -671,84 +664,24 @@ async function readTargetDistInventory(
   artifactFiles: DeployPlanFile[]
 ): Promise<TargetDistInventory> {
   const checkedAt = new Date().toISOString();
-  const artifactRelativePaths = new Set(artifactFiles.map((file) => normalizeRelative(file.relativePath)));
-  const files: TargetDistInventoryFile[] = [];
-  const failedFolders: TargetDistInventory["failedFolders"] = [];
-  const queue = [resolvedPaths.finalDistRoot];
-  const visited = new Set<string>();
 
-  logger.info("releases", "Reading target dist inventory before deploy", {
+  logger.info("releases", "Skipping server SharePoint target dist inventory before deploy", {
     siteCode: resolvedPaths.siteCode,
     distRoot: resolvedPaths.finalDistRoot,
-    artifactFilesCount: artifactFiles.length
+    artifactFilesCount: artifactFiles.length,
+    reason: "browser-sharepoint-inventory-required"
   });
-
-  while (queue.length > 0 && files.length < MAX_TARGET_INVENTORY_FILES) {
-    const folder = queue.shift()!;
-    if (visited.has(folder)) continue;
-    visited.add(folder);
-
-    const [fileList, folderList] = await Promise.all([
-      listSharePointFiles(resolvedPaths, folder),
-      listSharePointFolders(resolvedPaths, folder)
-    ]);
-
-    if (!fileList.exists) {
-      failedFolders.push({
-        path: folder,
-        error: fileList.error,
-        status: fileList.status,
-        statusText: fileList.statusText,
-        authBlocked: fileList.authBlocked
-      });
-    } else {
-      for (const file of fileList.files) {
-        files.push({
-          relativePath: relativeFromTargetPath(resolvedPaths.finalDistRoot, file.serverRelativeUrl),
-          targetPath: file.serverRelativeUrl,
-          serverRelativeUrl: file.serverRelativeUrl,
-          sizeBytes: file.sizeBytes,
-          etag: file.etag,
-          lastModified: file.timeLastModified
-        });
-        if (files.length >= MAX_TARGET_INVENTORY_FILES) break;
-      }
-    }
-
-    if (!folderList.exists) {
-      failedFolders.push({
-        path: folder,
-        error: folderList.error,
-        status: folderList.status,
-        statusText: folderList.statusText,
-        authBlocked: folderList.authBlocked
-      });
-    } else {
-      for (const child of folderList.folders) {
-        if (child.serverRelativeUrl && !visited.has(child.serverRelativeUrl)) {
-          queue.push(child.serverRelativeUrl);
-        }
-      }
-    }
-  }
-
-  const staleFiles = files
-    .filter((file) => !artifactRelativePaths.has(file.relativePath))
-    .map((file) => ({
-      ...file,
-      reason: "absent-from-release-artifact" as const,
-      defaultAction: "keep" as const
-    }))
-    .sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-  const readOk = failedFolders.length === 0;
+  const files: TargetDistInventoryFile[] = [];
+  const staleFiles: TargetDistInventoryFile[] = [];
+  const failedFolders: TargetDistInventory["failedFolders"] = [{
+    path: resolvedPaths.finalDistRoot,
+    error: "browser-sharepoint-inventory-required"
+  }];
+  const readOk = false;
   const notes = [
-    readOk ? "" : "Target dist inventory was partially unavailable; stale file counts may be incomplete.",
-    staleFiles.length
-      ? "Stale target files are retained by default. This deploy does not mirror-delete files absent from the artifact."
-      : "No stale target files were detected in the readable target dist inventory.",
-    files.length >= MAX_TARGET_INVENTORY_FILES
-      ? `Target dist inventory stopped at ${MAX_TARGET_INVENTORY_FILES} files.`
-      : ""
+    "Target dist inventory was not read from the server because server-side SharePoint REST is disabled.",
+    "Browser deploy will upload and read back the files it writes, but stale target files are not enumerated by the server.",
+    "Stale target files are retained by default. This deploy does not mirror-delete files absent from the artifact."
   ].filter(Boolean);
 
   const inventory = {
@@ -773,14 +706,12 @@ async function readTargetDistInventory(
       defaultAction: "keep" as const,
       deleteEnabled: false as const,
       mode: "read-only" as const,
-      summary: staleFiles.length
-        ? `${staleFiles.length} stale target dist file${staleFiles.length === 1 ? "" : "s"} absent from the release artifact will be kept by default.`
-        : "No stale target dist files were detected; cleanup is not scheduled."
+      summary: "Stale target dist inventory requires Browser SharePoint; cleanup is not scheduled."
     },
     notes
   };
 
-  logger.info("releases", "Target dist inventory read completed", {
+  logger.info("releases", "Target dist inventory skipped", {
     siteCode: resolvedPaths.siteCode,
     distRoot: resolvedPaths.finalDistRoot,
     readOk,
@@ -1072,44 +1003,6 @@ export const contentTypeFor = (relativePath: string) => {
   if (ext === ".woff2") return "font/woff2";
   return "application/octet-stream";
 };
-
-const deployEvidenceFromRead = (
-  file: DeployPlanFile,
-  evidence: Awaited<ReturnType<typeof readSharePointFileEvidence>>
-): DeployVerificationEvidence => ({
-  relativePath: file.relativePath,
-  sourcePath: file.sourcePath,
-  targetPath: file.targetPath,
-  status: evidence.status,
-  checkedAt: new Date(evidence.checkedAt),
-  expectedSizeBytes: file.sizeBytes,
-  actualSizeBytes: evidence.sizeBytes || 0,
-  expectedSha256: file.sha256,
-  actualSha256: evidence.sha256 || "",
-  sizeMatches: Boolean(evidence.sizeMatches),
-  sha256Matches: Boolean(evidence.sha256Matches),
-  httpStatus: evidence.httpStatus,
-  httpStatusText: evidence.httpStatusText,
-  contentType: evidence.contentType,
-  etag: evidence.etag,
-  lastModified: evidence.lastModified,
-  error: evidence.error
-});
-
-const failedDeployEvidence = (file: DeployPlanFile, error: unknown): DeployVerificationEvidence => ({
-  relativePath: file.relativePath,
-  sourcePath: file.sourcePath,
-  targetPath: file.targetPath,
-  status: "failed",
-  checkedAt: new Date(),
-  expectedSizeBytes: file.sizeBytes,
-  actualSizeBytes: 0,
-  expectedSha256: file.sha256,
-  actualSha256: "",
-  sizeMatches: false,
-  sha256Matches: false,
-  error: error instanceof Error ? error.message : String(error)
-});
 
 const buildDeployVerification = (
   evidence: DeployVerificationEvidence[],
@@ -1439,7 +1332,7 @@ export async function buildSiteDeployPlan(
 ): Promise<SiteDeployPlan> {
   const { site, release, resolvedPaths } = await resolveSiteAndRelease(siteId, releaseId);
   const deployPolicy = buildDeployPolicy(options.deployMode);
-  const connectorMode: DeployConnectorMode = options.connectorMode === "browser-sharepoint" ? "browser-sharepoint" : "backend-sharepoint";
+  const connectorMode: DeployConnectorMode = "browser-sharepoint";
   const artifactValidationBypassEnvVar = getDangerousValidationBypassEnvVar("release-artifact-validation");
   const artifactValidationBypassed = Boolean(artifactValidationBypassEnvVar);
   const artifactValidation = await validateAndPersistReleaseArtifact(release, "deploy-plan");
@@ -1450,33 +1343,11 @@ export async function buildSiteDeployPlan(
   const { files, skippedRuntimeConfigFiles } = filterRuntimeConfigDeployFiles(mappedFiles, resolvedPaths, site);
   const targetInventory = await readTargetDistInventory(resolvedPaths, files);
   const staticCapabilities = getSharePointOperationCapabilities();
-  let digestWorks = false;
-  let digestError = "";
-  if (connectorMode === "backend-sharepoint" && staticCapabilities.writeAvailable && staticCapabilities.digest.canRequest) {
-    try {
-      await getRequestDigest(resolvedPaths);
-      digestWorks = true;
-    } catch (error) {
-      digestError = error instanceof Error ? error.message : String(error);
-    }
-  }
-  const capabilities = connectorMode === "browser-sharepoint"
-    ? {
-        ...staticCapabilities,
-        writeVerified: false,
-        reason: staticCapabilities.reason
-      }
-    : {
-        ...staticCapabilities,
-        writeAvailable: staticCapabilities.writeAvailable && digestWorks,
-        writeVerified: digestWorks,
-        digest: {
-          ...staticCapabilities.digest,
-          canRequest: staticCapabilities.digest.canRequest && digestWorks,
-          reason: digestWorks ? undefined : digestError || staticCapabilities.digest.reason
-        },
-        reason: digestWorks ? undefined : digestError || staticCapabilities.reason
-      };
+  const capabilities = {
+    ...staticCapabilities,
+    writeVerified: false,
+    reason: staticCapabilities.reason
+  };
   const readyForDeploy = artifactValidation.summary.readyForDeploy || artifactValidationBypassed;
   const mongoDeployBlockers = String((site as any).storageBackend || "unknown") === "mongo"
     ? [
@@ -1489,15 +1360,11 @@ export async function buildSiteDeployPlan(
       ].filter(Boolean)
     : [];
   const readyForDeployExecution =
-    connectorMode === "browser-sharepoint"
-      ? readyForDeploy && deployPolicy.blockers.length === 0 && mongoDeployBlockers.length === 0
-      : readyForDeploy && capabilities.writeAvailable && capabilities.digest.canRequest && deployPolicy.blockers.length === 0 && mongoDeployBlockers.length === 0;
+    readyForDeploy && deployPolicy.blockers.length === 0 && mongoDeployBlockers.length === 0;
   const blockers = [
     ...deployPolicy.blockers,
     ...mongoDeployBlockers,
-    ...(artifactValidationBypassed ? [] : artifactValidation.blockers),
-    connectorMode === "backend-sharepoint" && !capabilities.writeAvailable ? "sharepoint-write-not-configured" : "",
-    connectorMode === "backend-sharepoint" && !capabilities.digest.canRequest ? "sharepoint-request-digest-not-available" : ""
+    ...(artifactValidationBypassed ? [] : artifactValidation.blockers)
   ].filter(Boolean);
   const currentKnownVersion = site.currentVersion || site.version || "";
   const targetDistPath = resolvedPaths.finalDistRoot;
@@ -1505,12 +1372,6 @@ export async function buildSiteDeployPlan(
     !artifactValidationBypassed && !artifactValidation.artifactRef ? "Deploy cannot run because the release artifact is missing." : "",
     !artifactValidationBypassed && artifactValidation.artifactRef && !readyForDeploy
       ? `Deploy cannot run because the release artifact is invalid: ${artifactValidation.blockers.join(", ")}`
-      : "",
-    connectorMode === "backend-sharepoint" && !capabilities.writeAvailable ? "Deploy cannot run because SharePoint write is not configured." : "",
-    connectorMode === "backend-sharepoint" && staticCapabilities.writeEnabled && !capabilities.writeVerified
-      ? digestError === "sharepoint-digest-failed:401"
-        ? "כתיבה ל-SharePoint מוגדרת אבל ההתחברות נכשלה."
-        : "Deploy cannot run because SharePoint request digest is not available."
       : "",
     ...mongoDeployBlockers.map((blocker) => `Mongo deploy readiness blocker: ${blocker}`),
     ...deployPolicy.blockers
@@ -1604,10 +1465,8 @@ export async function buildSiteDeployPlan(
       "Deploy execution overwrites listed files in final dist but does not mirror-delete files that are absent from the artifact.",
       ...targetInventory.notes,
       "Deploy execution reads every uploaded file back from SharePoint and compares sha256/size before marking success.",
-      connectorMode === "backend-sharepoint" && digestError ? `SharePoint contextinfo/digest check failed: ${digestError}` : "",
-      connectorMode === "backend-sharepoint" ? "SharePoint writes require SHAREPOINT_WRITE_ENABLED plus auth material and a successful contextinfo/digest check." : "",
-      connectorMode === "browser-sharepoint" ? "Browser deploy uses the user's SharePoint browser session, per-site contextinfo Digest, Files/add upload, and browser read-back evidence." : "",
-      connectorMode === "browser-sharepoint" && staticCapabilities.reason ? `Backend SharePoint is separate and not required for browser deploy: ${staticCapabilities.reason}` : ""
+      "Browser deploy uses the user's SharePoint browser session, per-site contextinfo Digest, Files/add upload, and browser read-back evidence.",
+      staticCapabilities.reason ? `Server SharePoint is disabled and not required for browser deploy: ${staticCapabilities.reason}` : ""
     ]
       .filter(Boolean)
   };
@@ -1777,150 +1636,11 @@ export async function executeSharePointDeploy(input: {
   siteId: string;
   releaseId: string;
   deploymentId: string;
-}) {
-  logger.info("releases", "Executing SharePoint deploy", {
+}): Promise<never> {
+  logger.info("releases", "Server SharePoint deploy execution blocked", {
     siteId: input.siteId,
     releaseId: input.releaseId,
     deploymentId: input.deploymentId
   });
-  const { site, release, resolvedPaths } = await resolveSiteAndRelease(input.siteId, input.releaseId);
-  const deployment = await SiteVersionDeployment.findById(input.deploymentId);
-  if (!deployment) throw new Error("deployment-not-found");
-
-  const verificationEvidence: DeployVerificationEvidence[] = [];
-  let plan: SiteDeployPlan | null = null;
-  let finalAppUrlVerification: FinalAppUrlHealthEvidence | undefined;
-  let postHealth: DeployPostHealthSummary | undefined;
-
-  try {
-    plan = await buildSiteDeployPlan(input.siteId, input.releaseId);
-    if (!plan.summary.readyForDeploy) throw new Error("deploy-plan-not-ready");
-    if (!plan.summary.readyForDeployExecution) throw new Error("deploy-plan-execution-not-ready");
-    if (!plan.files.length) throw new Error("deploy-artifact-has-no-files");
-
-    deployment.status = "running";
-    deployment.startedAt = new Date();
-    deployment.logLines.push({ level: "info", message: `Deploying ${plan.summary.filesCount} files from ${plan.artifactRoot}`, at: new Date() } as any);
-    await deployment.save();
-
-    const digest = await getRequestDigest(resolvedPaths);
-
-    for (const file of plan.files) {
-      try {
-        const bytes = await fs.readFile(file.sourcePath);
-        await uploadSharePointFile(resolvedPaths, file.targetPath, bytes, contentTypeFor(file.relativePath), digest);
-        const readBackEvidence = await readSharePointFileEvidence(resolvedPaths, file.targetPath, {
-          sizeBytes: file.sizeBytes,
-          sha256: file.sha256
-        });
-        const fileEvidence = deployEvidenceFromRead(file, readBackEvidence);
-        verificationEvidence.push(fileEvidence);
-
-        logger.info("releases", "Deploy file uploaded and verified", {
-          deploymentId: deployment._id.toString(),
-          relativePath: file.relativePath,
-          targetPath: file.targetPath,
-          status: fileEvidence.status,
-          sizeMatches: fileEvidence.sizeMatches,
-          sha256Matches: fileEvidence.sha256Matches
-        });
-
-        if (fileEvidence.status !== "verified") {
-          throw new Error(`deploy-verification-failed:${file.relativePath}`);
-        }
-      } catch (error) {
-        if (!verificationEvidence.some((item) => item.relativePath === file.relativePath)) {
-          verificationEvidence.push(failedDeployEvidence(file, error));
-        }
-        throw error;
-      }
-    }
-
-    const postDeployHealth = await runReadOnlySharePointHealthCheck(site._id.toString());
-    finalAppUrlVerification = getFinalAppUrlHealthEvidence(postDeployHealth);
-    postHealth = buildPostDeployHealthSummary(postDeployHealth);
-    logger.info("releases", "Post-deploy SharePoint health evidence captured", {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      deploymentId: deployment._id.toString(),
-      finalAppUrl: finalAppUrlVerification?.url || resolvedPaths.finalAppUrl,
-      finalAppUrlOk: finalAppUrlVerification?.ok,
-      finalAppUrlStatus: finalAppUrlVerification?.status,
-      derivedHealthStatus: postHealth.derivedHealthStatus,
-      evidenceCount: postHealth.evidenceCount,
-      failedCount: postHealth.failedCount,
-      authBlockedCount: postHealth.authBlockedCount
-    });
-
-    if (!finalAppUrlVerification?.ok) {
-      logger.error("releases", "Deploy final app URL verification failed", {
-        siteId: site._id.toString(),
-        siteCode: site.siteCode,
-        deploymentId: deployment._id.toString(),
-        finalAppUrl: finalAppUrlVerification?.url || resolvedPaths.finalAppUrl,
-        status: finalAppUrlVerification?.status,
-        statusText: finalAppUrlVerification?.statusText,
-        authBlocked: finalAppUrlVerification?.authBlocked,
-        error: finalAppUrlVerification?.error
-      });
-      throw new Error(`deploy-final-app-url-verification-failed:${resolvedPaths.finalAppUrl}`);
-    }
-
-    site.currentVersion = release.version;
-    site.version = release.version;
-    site.latestKnownVersion = release.version;
-    site.versionStatus = "up_to_date";
-    site.lastUpgradeAt = new Date();
-    site.lastDeployAt = new Date();
-    site.lastVersionCheckAt = new Date();
-    site.sharePointStatus.deployStatus = "succeeded" as any;
-    site.filesCount = plan.summary.filesCount;
-    site.lastError = "";
-    await site.save();
-
-    deployment.status = "succeeded";
-    deployment.finishedAt = new Date();
-    deployment.verification = buildDeployVerification(verificationEvidence, plan.summary.totalSizeBytes, "verified", {
-      finalAppUrlVerification,
-      postHealth
-    }) as any;
-    deployment.logLines.push({ level: "info", message: `Deploy succeeded (${plan.summary.filesCount} files)`, at: new Date() } as any);
-    await deployment.save();
-
-    logger.info("releases", "SharePoint deploy succeeded with read-back verification", {
-      siteId: site._id.toString(),
-      releaseId: release._id.toString(),
-      deploymentId: deployment._id.toString(),
-      verifiedFilesCount: verificationEvidence.length,
-      totalSizeBytes: plan.summary.totalSizeBytes,
-      finalAppUrl: finalAppUrlVerification?.url,
-      finalAppUrlStatus: finalAppUrlVerification?.status
-    });
-
-    return { site, release, deployment, plan };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error("errors", "SharePoint deploy failed", {
-      siteId: site._id.toString(),
-      releaseId: release._id.toString(),
-      deploymentId: deployment._id.toString(),
-      error: message
-    });
-    site.versionStatus = "failed";
-    site.sharePointStatus.deployStatus = "failed" as any;
-    site.lastError = message;
-    await site.save();
-
-    deployment.status = "failed";
-    deployment.finishedAt = new Date();
-    deployment.error = message;
-    deployment.verification = buildDeployVerification(verificationEvidence, plan?.summary.totalSizeBytes || 0, "failed", {
-      finalAppUrlVerification,
-      postHealth
-    }) as any;
-    deployment.logLines.push({ level: "error", message, at: new Date() } as any);
-    await deployment.save();
-
-    throw error;
-  }
+  throw new Error("sharepoint-browser-execution-required");
 }

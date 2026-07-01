@@ -1,13 +1,9 @@
 import { Site } from "../models/Site";
 import { logger } from "../utils/logger";
 import { resolveSiteBuilderPaths, SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
-import { buildPermissionsSetupPlan, executePermissionsSetup } from "./permissionsSetup.service";
-import {
-  ensureSharePointSiteCollection,
-  getSharePointOperationCapabilities,
-  SharePointSiteCollectionCreateInput
-} from "./sharepointOperationClient";
-import { buildSiteProvisionPlan, executeSiteProvisioning } from "./siteProvisioning.service";
+import { buildPermissionsSetupPlan } from "./permissionsSetup.service";
+import { getSharePointOperationCapabilities } from "./sharepointOperationClient";
+import { buildSiteProvisionPlan } from "./siteProvisioning.service";
 
 export type SiteBootstrapOptions = {
   owner?: string;
@@ -163,8 +159,6 @@ export async function buildSiteBootstrapPlan(siteId: string, options: SiteBootst
     ...(permissionsPlan?.steps || []).map(stepFromPermissions)
   ];
   const blockers = [
-    !capabilities.writeAvailable ? "sharepoint-write-not-configured" : "",
-    !capabilities.digest.canRequest ? "sharepoint-request-digest-not-available" : "",
     !resolvedOptions.owner ? "sharepoint-site-owner-missing" : ""
   ].filter(Boolean);
 
@@ -202,8 +196,8 @@ export async function buildSiteBootstrapPlan(siteId: string, options: SiteBootst
         : ""
     ].filter(Boolean),
     notes: [
-      "This is the full Hub-driven new-site bootstrap flow: create/ensure SharePoint site, then bootstrap Site Builder structure.",
-      "Modern SharePoint site creation uses the SharePoint REST SPSiteManager endpoint and the existing Hub SharePoint auth material.",
+      "This is the browser-driven bootstrap flow: the connected browser performs SharePoint writes and the server records evidence only.",
+      "If the target site already exists, execution continues idempotent bootstrap steps through Browser SharePoint.",
       "If the target site already exists and SharePoint reports it as ready, execution reuses it and continues idempotent bootstrap steps."
     ]
   };
@@ -219,64 +213,8 @@ export async function buildSiteBootstrapPlan(siteId: string, options: SiteBootst
   return plan;
 }
 
-export async function executeSiteBootstrap(siteId: string, options: SiteBootstrapOptions = {}) {
+export async function executeSiteBootstrap(siteId: string, options: SiteBootstrapOptions = {}): Promise<any> {
   logger.info("sites", "SharePoint site bootstrap execution started", { siteId });
-  const { site, resolvedPaths } = await resolveSite(siteId);
-  const resolvedOptions = withSiteDefaults(site, options);
-  if (!resolvedOptions.owner) throw new Error("site-bootstrap-owner-missing");
-
-  const siteCreateInput: SharePointSiteCollectionCreateInput = {
-    title: site.displayName || site.siteCode,
-    description: site.description || "",
-    owner: resolvedOptions.owner,
-    lcid: Number(resolvedOptions.lcid || 1033),
-    webTemplate: resolvedOptions.webTemplate || "STS#3",
-    shareByEmailEnabled: resolvedOptions.shareByEmailEnabled,
-    classification: resolvedOptions.classification,
-    sensitivityLabel: resolvedOptions.sensitivityLabel,
-    siteDesignId: resolvedOptions.siteDesignId,
-    webTemplateExtensionId: resolvedOptions.webTemplateExtensionId
-  };
-  const siteCollection = await ensureSharePointSiteCollection(resolvedPaths, siteCreateInput);
-  const completedSteps: SiteBootstrapStep[] = siteCreateSteps(resolvedPaths).map((step) => ({ ...step, status: "succeeded" as const }));
-
-  const provisioning = resolvedOptions.runProvisioning !== false
-    ? await executeSiteProvisioning(siteId)
-    : undefined;
-  if (provisioning) {
-    completedSteps.push(...provisioning.completedSteps.map((step) => ({ ...stepFromProvision(step), status: "succeeded" as const })));
-  }
-
-  const permissions = resolvedOptions.runPermissionsSetup !== false
-    ? await executePermissionsSetup(siteId)
-    : undefined;
-  if (permissions) {
-    completedSteps.push(...permissions.completedSteps.map((step) => ({ ...stepFromPermissions(step), status: "succeeded" as const })));
-  }
-
-  const saved = await Site.findById(siteId);
-  if (saved) {
-    saved.status = saved.status === "draft" ? "active" : saved.status;
-    saved.lastError = "";
-    saved.lastHealthCheckAt = new Date();
-    saved.resolvedPaths = resolvedPaths as any;
-    await saved.save();
-  }
-
-  logger.info("sites", "SharePoint site bootstrap execution completed", {
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    action: siteCollection.action,
-    completedSteps: completedSteps.length
-  });
-
-  return {
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    resolvedPaths,
-    siteCollection,
-    provisioning,
-    permissions,
-    completedSteps
-  };
+  void options;
+  throw new Error("browser-sharepoint-required");
 }

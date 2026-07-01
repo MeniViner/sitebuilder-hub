@@ -40,6 +40,7 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { AdvancedDetails, GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { useBrowserAdminsLiveRead } from "../hooks/useBrowserAdminsLiveRead";
@@ -140,7 +141,7 @@ const executionModeLabel = (value?: string) => {
   if (value === "browser-sharepoint") return "Browser SharePoint";
   if (value === "mongo-backend") return "Mongo Backend";
   if (value === "server-local") return "server-local";
-  if (value === "backend-service-auth-required") return "נדרשת הרשאת שרת";
+  if (value === "backend-service-auth-required") return "היסטורי: שרת מושבת";
   if (value === "metadata-only") return "metadata-only";
   if (value === "manual") return "ידני";
   return "לא ידוע";
@@ -503,8 +504,7 @@ function UserProfileDrawer({ user, open, onClose }: { user: AccessDirectoryUser 
             </p>
           </section>
 
-          <details className="access-technical-details">
-            <summary>פרטים טכניים</summary>
+          <AdvancedDetails title="פרטים טכניים מתקדמים" description="Evidence, HTTP ו־source URL לאבחון ותיעוד">
             <div className="mt-3 space-y-3">
               {user.sites.map((site) => (
                 <div key={`${site.siteId}-${site.sourceType}-${site.effectiveAccess}`} className="soft-panel p-3">
@@ -520,7 +520,7 @@ function UserProfileDrawer({ user, open, onClose }: { user: AccessDirectoryUser 
                 </div>
               ))}
             </div>
-          </details>
+          </AdvancedDetails>
         </div>
       ) : null}
     </DetailsDrawer>
@@ -1004,7 +1004,7 @@ export function AdminsPage() {
           <div className="filter-grid mt-3">
             <label><span className="field-label">אתר</span><select className="control" value={filters.siteId} onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))}><option value="">כל האתרים</option>{directorySites.map((site) => <option key={site.siteId} value={site.siteId}>{site.displayName} ({site.siteCode})</option>)}</select></label>
             <label><span className="field-label">סביבה</span><select className="control" value={filters.environment} onChange={(event) => setFilters((current) => ({ ...current, environment: event.target.value }))}><option value="">כל הסביבות</option>{environments.map((env) => <option key={env} value={env}>{env}</option>)}</select></label>
-            <label><span className="field-label">Storage backend</span><select className="control" value={filters.storageBackend} onChange={(event) => setFilters((current) => ({ ...current, storageBackend: event.target.value }))}><option value="">הכל</option>{storageBackends.map((backend) => <option key={backend} value={backend}>{backend}</option>)}</select></label>
+            <label><span className="field-label">מקור נתונים</span><select className="control" value={filters.storageBackend} onChange={(event) => setFilters((current) => ({ ...current, storageBackend: event.target.value }))}><option value="">הכל</option>{storageBackends.map((backend) => <option key={backend} value={backend}>{backend}</option>)}</select></label>
             <label><span className="field-label">תפקיד / גישה</span><select className="control" value={filters.role} onChange={(event) => setFilters((current) => ({ ...current, role: event.target.value as AccessRoleType | "" }))}><option value="">כל התפקידים</option>{roleOptions.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}</select></label>
             <label><span className="field-label">מקור</span><select className="control" value={filters.source} onChange={(event) => setFilters((current) => ({ ...current, source: event.target.value as AccessSourceType | "" }))}><option value="">כל המקורות</option>{sourceOptions.map((source) => <option key={source.value} value={source.value}>{source.label}</option>)}</select></label>
             <label><span className="field-label">סטטוס</span><select className="control" value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value as AccessUserStatus | "" }))}><option value="">כל הסטטוסים</option>{statusOptions.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></label>
@@ -1048,7 +1048,7 @@ export function AdminsPage() {
           { header: "כמות" },
           { header: "קריאה אחרונה" },
           { header: "Connector" },
-          { header: "Error / Blocker" }
+          { header: "שגיאה / חסם" }
         ]} minWidth={980} density="dense">
           {sourceRowsForSelectedSite.map((source) => (
             <tr key={source.id}>
@@ -1140,9 +1140,51 @@ export function AdminsPage() {
     <div className="space-y-5">
       <PageHeader
         title="הרשאות וגישה"
-        subtitle="ניהול משתמשים, מנהלים ומקורות הרשאה בכל האתרים"
+        subtitle="מי יכול להיכנס, מי מנהל, ומה בטוח לשנות אחרי בדיקת מקורות"
         helpKey="site.admins"
         actions={<><MetadataOnlyBadge mode="readonly" /><span className="badge badge-info">{directory?.summary.connectorModeLabelHe || "טוען"}</span></>}
+      />
+
+      <OperationalSummary
+        title="ניהול הרשאות בלי לנחש"
+        purpose="המסך מאחד Mongo, metadata, TXT ו־SharePoint כדי להראות מי באמת מחזיק גישה. פעולת שינוי מתחילה כתוכנית עם נימוק, לא ככתיבה מיידית."
+        state={directory
+          ? `${formatNumber(directory.summary.totalUsers)} משתמשים · ${formatNumber(directory.summary.totalAppAdmins)} מנהלי אפליקציה · ${formatNumber(directory.summary.totalSiteOwners)} בעלי אתר`
+          : "טוען את מפת ההרשאות מכל המקורות הזמינים."}
+        attention={directory && (directory.summary.failedOrStaleSources || directory.summary.usersWithConflicts)
+          ? `${formatNumber(directory.summary.usersWithConflicts)} משתמשים עם פערים · ${formatNumber(directory.summary.failedOrStaleSources)} מקורות שנכשלו או התיישנו`
+          : "אין פער הרשאה דחוף במקורות שנקראו עכשיו."}
+        attentionTone={directory && (directory.summary.failedOrStaleSources || directory.summary.usersWithConflicts) ? "warning" : "success"}
+        nextAction={directory?.summary.failedOrStaleSources
+          ? "פתחו את מקורות הרשאה ורעננו קודם את המקור שנכשל."
+          : directory?.summary.usersWithConflicts
+            ? "פתחו פערים וסנכרון, בדקו את מקור האמת ואז בנו תוכנית."
+            : "חפשו משתמש או אתר, פתחו פרופיל, ובצעו שינוי רק דרך תוכנית."}
+        blocked={directory?.summary.failedOrStaleSources
+          ? "מקור הרשאה כושל או מיושן חוסם החלטה בטוחה. רעננו Hub או קראו מחדש דרך הדפדפן המחובר."
+          : undefined}
+        tone={directory?.summary.failedOrStaleSources ? "danger" : directory?.summary.usersWithConflicts ? "warning" : "success"}
+      />
+
+      <GuidedFlow
+        title="שינוי הרשאה בטוח"
+        subtitle="אותו מידע נשאר זמין, אבל סדר הפעולה מגן מפני שינוי חי בטעות."
+        steps={[
+          { title: "מצא משתמש או אתר", description: "התחילו בחיפוש, לא בכפתור שינוי.", status: directory ? "done" : "pending" },
+          { title: "בדוק מקור אמת", description: "ודאו אם המידע הגיע מ־Mongo, TXT, metadata או SharePoint.", status: directory?.summary.failedOrStaleSources ? "blocked" : "active" },
+          { title: "בנה תוכנית", description: "המערכת מסכמת את השינוי, הסיכון והסיבה לפני פעולה.", status: "pending" },
+          { title: "אשר רק אם ברור", description: "כתיבה חיה דורשת אישור מוגן ותיעוד Audit.", status: "pending" }
+        ]}
+      />
+
+      <ModeBoundary
+        title="מה קורא ומה כותב"
+        items={[
+          { label: "קריאת Hub", description: "קוראת metadata ומשתמשים מה־backend כדי לבנות תמונת מצב.", tone: "info" },
+          { label: "קריאת דפדפן SharePoint", description: "משתמשת בחיבור הדפדפן ומוכיחה מה SharePoint מחזיר עכשיו.", tone: "success" },
+          { label: "שינוי הרשאה", description: "לא נשלח בלחיצה רגילה. קודם נבנית תוכנית עם נימוק ואישור.", tone: "warning" },
+          { label: "Server SharePoint", description: "מושבת בכוונה. קריאה/כתיבה מול SharePoint צריכה evidence מהדפדפן.", tone: "neutral" }
+        ]}
       />
 
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}

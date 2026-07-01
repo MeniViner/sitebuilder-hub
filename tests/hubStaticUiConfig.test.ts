@@ -34,11 +34,27 @@ describe("Hub SharePoint-hosted UI config", () => {
     const styles = read("client/src/styles/index.css");
 
     expect(diagnostics).toContain("בעיות וחיבורים");
-    expect(diagnostics).toContain("הדפדפן מחובר ל־SharePoint, אבל השרת המקומי לא מחובר");
+    expect(diagnostics).toContain("אין SharePoint בשרת");
+    expect(diagnostics).toContain("השרת אינו מסלול SharePoint");
     expect(releases).toContain("Release & Deployment Control Center");
     expect(releases).toContain("Target mode");
     expect(releases).toContain("Rollback נשאר חסום");
     expect(styles).toContain("direction: rtl");
+  });
+
+  it("lets operators edit release identity and deployment metadata without recreating releases", () => {
+    const releases = read("client/src/pages/ReleasesPage.tsx");
+    const api = read("client/src/api/sitesApi.ts");
+    const routes = read("server/src/routes/releases.routes.ts");
+
+    expect(releases).toContain("עריכת Release");
+    expect(releases).toContain("Artifact השתנה - צריך Validate מחדש");
+    expect(releases).toContain("שם חסר - אפשר לתקן");
+    expect(releases).toContain("sitesApi.updateRelease");
+    expect(api).toContain("updateRelease: async");
+    expect(api).toContain("updateReleaseName");
+    expect(routes).toContain("router.patch(\"/:id\",");
+    expect(routes).toContain("router.patch(\"/:id/name\"");
   });
 
   it("exposes the analytics charts dashboard route and navigation item", () => {
@@ -144,7 +160,9 @@ describe("Hub SharePoint-hosted UI config", () => {
     const settings = read("client/src/pages/SettingsPage.tsx");
 
     expect(dashboard).toContain("Storage backends");
-    expect(sitesTable).toContain("Seed:");
+    expect(sitesTable).toContain("נתוני התחלה");
+    expect(sitesTable).not.toContain("Runtime:");
+    expect(sitesTable).not.toContain("Data:");
     expect(siteDetails).toContain("בדוק runtime config");
     expect(siteDetails).toContain("בדוק Mongo backend");
     expect(health).toContain("TXT / Seed");
@@ -170,5 +188,19 @@ describe("Hub SharePoint-hosted UI config", () => {
     expect(routes).toContain("/mongo-create/plan");
     expect(routes).toContain("/mongo-create/execute");
     expect(routes).toContain("/mongo-create/browser-evidence");
+  });
+
+  it("surfaces TXT to Mongo migration from site details and API routes", () => {
+    const siteDetails = read("client/src/pages/SiteDetailsPage.tsx");
+    const browserOps = read("client/src/utils/sharepointBrowserSiteOperations.ts");
+    const api = read("client/src/api/sitesApi.ts");
+    const routes = read("server/src/routes/sites.routes.ts");
+
+    expect(siteDetails).toContain("מיגרציית TXT ל־Mongo");
+    expect(siteDetails).toContain("runTxtToMongoMigrationInBrowser");
+    expect(browserOps).toContain("readBrowserTxtSnapshotForMongoMigration");
+    expect(browserOps).toContain("runBrowserMongoRuntimeConfigUpload");
+    expect(api).toContain("migrateTxtToMongo");
+    expect(routes).toContain("/mongo-migration/txt-to-mongo");
   });
 });

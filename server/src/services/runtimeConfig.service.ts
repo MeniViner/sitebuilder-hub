@@ -1,9 +1,8 @@
 import { Site } from "../models/Site";
 import { resolveSiteBuilderPaths, SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
 import { logger } from "../utils/logger";
-import { readSharePointTextFile } from "./sharepointOperationClient";
 
-type RuntimeConfigReadStatus = "unknown" | "configured" | "missing" | "invalid" | "mismatch" | "auth-blocked" | "error";
+type RuntimeConfigReadStatus = "unknown" | "configured" | "missing" | "invalid" | "mismatch" | "auth-blocked" | "error" | "browser-required";
 type RuntimeConfigApiKeyStatus = "unknown" | "configured" | "missing" | "invalid";
 
 export type RuntimeConfigValidationResult = {
@@ -23,6 +22,7 @@ export type RuntimeConfigValidationResult = {
   evidence: {
     attemptedPaths: string[];
     selectedPath: string;
+    connectorMode?: "browser-sharepoint";
     sizeBytes?: number;
     httpStatus?: number;
     error?: string;
@@ -102,6 +102,38 @@ const resultFromError = (
   };
 };
 
+const resultFromStoredRuntimeConfig = (
+  site: any,
+  paths: SiteBuilderResolvedPaths,
+  attemptedPaths: string[],
+  selectedPath: string
+): RuntimeConfigValidationResult | null => {
+  const stored = site.runtimeConfigStatus;
+  if (!stored || stored.evidence?.connectorMode !== "browser-sharepoint") return null;
+
+  return {
+    checkedAt: stored.checkedAt ? new Date(stored.checkedAt).toISOString() : new Date().toISOString(),
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    runtimeConfigPath: stored.path || selectedPath,
+    runtimeConfigUrl: stored.url || runtimeConfigUrl(paths, stored.path || selectedPath),
+    readStatus: stored.readStatus || "unknown",
+    storageBackend: stored.storageBackend || "",
+    backendApiUrl: stored.backendApiUrl || "",
+    backendApiUrlHost: stored.backendApiUrlHost || "",
+    builderSiteId: stored.builderSiteId || "",
+    apiKeyStatus: stored.apiKeyStatus || "unknown",
+    belongsToSite: Boolean(stored.belongsToSite),
+    warnings: stored.warnings || [],
+    evidence: {
+      attemptedPaths,
+      selectedPath: stored.path || selectedPath,
+      ...(stored.evidence || {}),
+      connectorMode: "browser-sharepoint"
+    }
+  };
+};
+
 export async function validateRuntimeConfig(siteId: string): Promise<RuntimeConfigValidationResult> {
   logger.info("sites", "Runtime config validation started", { siteId });
   const site = await Site.findById(siteId);
@@ -121,82 +153,30 @@ export async function validateRuntimeConfig(siteId: string): Promise<RuntimeConf
 
   const attemptedPaths = candidatePaths(site, paths);
   const selectedPath = attemptedPaths[0] || paths.runtimeConfigPath;
-  let result: RuntimeConfigValidationResult;
+  const storedResult = resultFromStoredRuntimeConfig(site, paths, attemptedPaths, selectedPath);
+  if (storedResult) return storedResult;
 
-  try {
-    const file = await readSharePointTextFile(paths, selectedPath);
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(file.text || "{}");
-    } catch (error) {
-      result = {
-        checkedAt: new Date().toISOString(),
-        siteId: site._id.toString(),
-        siteCode: site.siteCode,
-        runtimeConfigPath: selectedPath,
-        runtimeConfigUrl: runtimeConfigUrl(paths, selectedPath),
-        readStatus: "invalid",
-        storageBackend: "",
-        backendApiUrl: "",
-        backendApiUrlHost: "",
-        builderSiteId: "",
-        apiKeyStatus: "invalid",
-        belongsToSite: false,
-        warnings: ["קובץ runtime config נמצא אבל אינו JSON תקין."],
-        evidence: {
-          attemptedPaths,
-          selectedPath,
-          sizeBytes: file.sizeBytes,
-          error: error instanceof Error ? error.message : String(error)
-        }
-      };
-      await persistRuntimeConfigResult(site, paths, result);
-      return result;
+  const result: RuntimeConfigValidationResult = {
+    checkedAt: new Date().toISOString(),
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    runtimeConfigPath: selectedPath,
+    runtimeConfigUrl: runtimeConfigUrl(paths, selectedPath),
+    readStatus: "browser-required",
+    storageBackend: "",
+    backendApiUrl: "",
+    backendApiUrlHost: "",
+    builderSiteId: "",
+    apiKeyStatus: "unknown",
+    belongsToSite: false,
+    warnings: ["בדיקת runtime config מתבצעת דרך הדפדפן בלבד; השרת לא קורא SharePoint."],
+    evidence: {
+      attemptedPaths,
+      selectedPath,
+      connectorMode: "browser-sharepoint",
+      error: "browser-sharepoint-runtime-config-required"
     }
-
-    const storageBackend = normalizeBackend(parsed.storageBackend);
-    const backendApiUrl = redactBackendApiUrl(parsed.backendApiUrl);
-    const builderSiteId = String(parsed.siteId || parsed.site || parsed.siteCode || "").trim();
-    const expectedBuilderSiteId = String(site.builderSiteId || site.mongoSiteId || site.siteCode || "").trim();
-    const apiKeyStatus: RuntimeConfigApiKeyStatus = hasConfiguredApiKey(parsed)
-      ? "configured"
-      : String(site.builderApiKeyRef || "").trim()
-        ? "configured"
-        : "missing";
-    const warnings = [
-      site.storageBackend === "mongo" && storageBackend !== "mongo" ? "אתר מוגדר ב־HUB כ־Mongo אבל runtime config לא מצביע על Mongo." : "",
-      site.storageBackend === "mongo" && !backendApiUrl ? "חסר backendApiUrl בקובץ runtime config." : "",
-      site.storageBackend === "mongo" && !builderSiteId ? "חסר siteId בקובץ runtime config." : "",
-      site.storageBackend === "mongo" && apiKeyStatus === "missing" ? "חסר API key או credential reference ל־Builder backend." : "",
-      expectedBuilderSiteId && builderSiteId && expectedBuilderSiteId !== builderSiteId
-        ? `runtime config מצביע על siteId אחר (${builderSiteId}) ולא על האתר שמנוהל ב־HUB (${expectedBuilderSiteId}).`
-        : ""
-    ].filter(Boolean);
-    const belongsToSite = !expectedBuilderSiteId || !builderSiteId || expectedBuilderSiteId === builderSiteId;
-
-    result = {
-      checkedAt: new Date().toISOString(),
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      runtimeConfigPath: selectedPath,
-      runtimeConfigUrl: runtimeConfigUrl(paths, selectedPath),
-      readStatus: warnings.length || !belongsToSite ? "mismatch" : "configured",
-      storageBackend,
-      backendApiUrl,
-      backendApiUrlHost: backendApiUrl,
-      builderSiteId,
-      apiKeyStatus,
-      belongsToSite,
-      warnings,
-      evidence: {
-        attemptedPaths,
-        selectedPath,
-        sizeBytes: file.sizeBytes
-      }
-    };
-  } catch (error) {
-    result = resultFromError(site, paths, selectedPath, attemptedPaths, error);
-  }
+  };
 
   await persistRuntimeConfigResult(site, paths, result);
   logger.info("sites", "Runtime config validation completed", {

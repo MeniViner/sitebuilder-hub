@@ -113,3 +113,6 @@ Classified SharePoint smoke was not run in this workspace.
 - Browser permissions setup/provisioning are not implemented yet.
 - Scheduled unattended SharePoint operations need real backend service auth.
 - Site collection creation/bootstrap remains backend-service-auth-only.
+# Legacy Historical Report
+
+This document captures an older connector audit from before the browser-only migration was completed. The current source of truth is `docs/sharepoint-browser-only-status-report.md`: SharePoint is not executed from the server.

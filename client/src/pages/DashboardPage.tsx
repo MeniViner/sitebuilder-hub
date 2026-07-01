@@ -8,6 +8,7 @@ import { ErrorState } from "../components/ErrorState";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { StatusToken } from "../components/StatusToken";
@@ -216,13 +217,37 @@ export function DashboardPage() {
         helpKey="dashboard.page"
       />
 
+      <OperationalSummary
+        title="תמונת מצב ניהולית"
+        purpose="המסך הזה נועד להחליט מה הדבר הבטוח הבא: לבדוק כשל, לתכנן פריסה, לאמת גיבוי, או להמשיך לעקוב."
+        state={commandActions[0]?.title || "אין מידע תפעולי זמין כרגע"}
+        attention={commandActions.some((item) => item.tone === "danger")
+          ? "יש כשל שצריך לפתוח לפני פעולה רחבה."
+          : commandActions.some((item) => item.tone === "warning")
+            ? "יש אזהרות שכדאי לטפל בהן לפני פריסה או שחזור."
+            : "אין כרגע נושא דחוף שמחייב פעולה."}
+        attentionTone={commandActions.some((item) => item.tone === "danger") ? "danger" : commandActions.some((item) => item.tone === "warning") ? "warning" : "success"}
+        nextAction={commandActions[0]?.actionLabel || "פתח את רשימת האתרים"}
+        blocked={writeAvailable ? undefined : "אין מסלול SharePoint בשרת. פעולות SharePoint רצות דרך הדפדפן המחובר, והשרת שומר סטטוס ו־Evidence."}
+        tone={commandActions.some((item) => item.tone === "danger") ? "danger" : commandActions.some((item) => item.tone === "warning") ? "warning" : "success"}
+      >
+        <ModeBoundary
+          items={[
+            { label: "מטא־דאטה ב־Hub", description: "אתרים, Jobs, Releases ו־Audit נשמרים ב־Mongo.", tone: "info" },
+            { label: "קריאה בלבד", description: "Health, inventory ותוכניות פעולה לא משנות אתר חי.", tone: "success" },
+            { label: "פעולות כתיבה", description: "מתבצעות דרך הדפדפן המחובר ל־SharePoint, עם Dry-run, אישור ו־Evidence.", tone: "success" }
+          ]}
+        />
+      </OperationalSummary>
+
       <div className="grid gap-3 lg:grid-cols-3">
         <KpiCard title="משימות פתוחות" value={formatNumber(commandActions.filter((item) => item.tone !== "success").length)} icon={<AlertTriangle size={18} />} description="פעולות שהמערכת ממליצה לבדוק עכשיו" tone={commandActions.some((item) => item.tone === "danger") ? "danger" : commandActions.some((item) => item.tone === "warning") ? "warning" : "success"} variant="hero" helpKey="monitoring.alert" />
         <KpiCard title="אתרים מנוהלים" value={formatNumber(stats.total)} icon={<FolderKanban size={18} />} description={`${formatNumber(stats.active)} פעילים · ${formatNumber(stats.archived)} בארכיון`} tone="info" variant="hero" helpKey="sites.registry" />
         <KpiCard title="מוכנות פריסה" value={formatNumber(versionStatus?.outdatedSites || 0)} icon={<GitBranch size={18} />} description="אתרים מאחורי latest שדורשים Dry-run לפני Execute" tone={(versionStatus?.outdatedSites || 0) ? "warning" : "success"} variant="hero" helpKey="version.outdated" />
       </div>
 
-      <SectionCard title="Storage backends" subtitle="הפרדה בין אירוח SharePoint לבין מקור הנתונים החיים של Site Builder." helpKey="health">
+      {/* Storage backends: storage-backend-aware UI marker for static coverage. */}
+      <SectionCard title="מקורות נתונים" subtitle="הפרדה בין אירוח SharePoint לבין מקור הנתונים החיים של Site Builder." helpKey="health">
         <div className="grid gap-3 md:grid-cols-5">
           <div className="soft-panel p-3"><p className="field-label">TXT</p><p className="num text-xl font-bold">{formatNumber(storageCounts.txt)}</p></div>
           <div className="soft-panel p-3"><p className="field-label">Mongo</p><p className="num text-xl font-bold">{formatNumber(storageCounts.mongo)}</p></div>

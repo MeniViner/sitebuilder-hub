@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, FolderCheck, Plus, Sparkles, X } from "lucide-react";
+import { type ComponentProps, useEffect, useMemo, useState } from "react";
+import { CheckCircle2, Database, FileText, FolderCheck, Plus, RefreshCw, Sparkles, X } from "lucide-react";
 import type { MongoSiteCreationPlan, OperationCapabilities, Release, WhoAmIResult } from "../api/sitesApi";
 import { Site, SiteStatus } from "../types/site";
 import {
@@ -11,9 +11,11 @@ import {
 } from "../utils/artifactCompatibility";
 import { completeArmyEmail, completeArmyEmailsInAdminsText } from "../utils/armyEmail";
 import { deriveClientOwnerMode } from "../utils/authOwnerMode";
+import { releaseDisplayLabel, releaseOptionLabel } from "../utils/releaseLabels";
 import { resolveSiteBuilderPaths } from "../utils/sitebuilderPaths";
-import { LinkRow } from "./LinkRow";
+import { LinkRow as BaseLinkRow } from "./LinkRow";
 import { MetadataOnlyBadge } from "./MetadataOnlyBadge";
+import { ModeBoundary } from "./OperationalSummary";
 import { HelpIcon } from "./help/HelpIcon";
 import { HelpLabel } from "./help/HelpLabel";
 import {
@@ -27,7 +29,7 @@ import {
 type FlowKey = "track-existing" | "create-new";
 type Errors = Partial<Record<keyof Site | "initialAdmins" | "ownerMode" | "initialDeploy", string>>;
 type TrackStepKey = "basic" | "connection" | "detect" | "validate" | "save";
-type CreateStepKey = "basic" | "owners" | "location" | "plan" | "provision" | "deploy" | "verification";
+type CreateStepKey = "storage" | "basic" | "owners" | "location" | "plan" | "provision" | "deploy" | "verification";
 type AuthUser = NonNullable<WhoAmIResult["user"]>;
 
 type BootstrapOptions = {
@@ -104,6 +106,7 @@ const trackSteps: { key: TrackStepKey; label: string; hint: string }[] = [
 ];
 
 const createSteps: { key: CreateStepKey; label: string; hint: string }[] = [
+  { key: "storage", label: "סוג אתר", hint: "Mongo או TXT" },
   { key: "basic", label: "פרטים בסיסיים", hint: "שם, קוד וסביבה" },
   { key: "owners", label: "בעלים ומנהלים", hint: "אתחול users_data" },
   { key: "location", label: "יעד SharePoint", hint: "אתר, ספריות ונתיבים" },
@@ -124,6 +127,8 @@ const txtFileLabels: Array<{ key: keyof NonNullable<NonNullable<ReturnType<typeo
   { key: "externalLinks", label: "external_links_data.txt" },
   { key: "gantt", label: "gantt_data.txt" }
 ];
+
+const LinkRow = (props: ComponentProps<typeof BaseLinkRow>) => <BaseLinkRow {...props} showCopy={false} />;
 
 function Field({
   label,
@@ -166,7 +171,7 @@ function StepNav<T extends string>({
   onSelect: (step: T) => void;
 }) {
   return (
-    <div className="grid gap-2 border-b divider p-4 md:grid-cols-4 xl:grid-cols-7">
+    <div className="grid gap-2 border-b divider p-4 md:grid-cols-4 xl:grid-cols-8">
       {steps.map((step) => (
         <button
           key={step.key}
@@ -283,7 +288,7 @@ export function SiteFormModal({
   const [errors, setErrors] = useState<Errors>({});
   const [flow, setFlow] = useState<FlowKey | "choice">("choice");
   const [trackStep, setTrackStep] = useState<TrackStepKey>("basic");
-  const [createStep, setCreateStep] = useState<CreateStepKey>("basic");
+  const [createStep, setCreateStep] = useState<CreateStepKey>("storage");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [initialAdminsText, setInitialAdminsText] = useState("");
@@ -301,7 +306,7 @@ export function SiteFormModal({
     setErrors({});
     setFlow(site ? "track-existing" : "choice");
     setTrackStep("basic");
-    setCreateStep("basic");
+    setCreateStep("storage");
     setSaving(false);
     setSaveError("");
     setMongoPlan(null);
@@ -396,11 +401,17 @@ export function SiteFormModal({
       setTrackStep("basic");
       setForm((prev) => ({ ...prev, status: prev.status === "draft" ? "active" : prev.status }));
     } else {
-      setCreateStep("basic");
+      setCreateStep("storage");
       setForm((prev) => ({
         ...prev,
         status: "draft",
-        storageBackend: prev.storageBackend === "txt" ? "txt" : "mongo",
+        storageBackend: "unknown",
+        backendApiUrl: "",
+        builderApiKeyRef: "",
+        mongoSiteId: "",
+        safeCollectionName: "",
+        mongoEnvironment: "",
+        mongoDatabase: "",
         creationMode: "create-new",
         provisioningStatus: "planned",
         lifecycleStatus: "draft"
@@ -415,6 +426,40 @@ export function SiteFormModal({
       backendApiUrl,
       builderApiKeyRef: option?.credentialRef || prev.builderApiKeyRef || builderBackendConfig?.defaultBuilderApiKeyRef || DEFAULT_BUILDER_API_KEY_REF
     }));
+  };
+
+  const chooseCreateStorageBackend = (storageBackend: "mongo" | "txt") => {
+    setErrors(({ storageBackend: _storageBackend, ...rest }) => rest);
+    setMongoPlan(null);
+    setPlanError("");
+    setInitialDeployReleaseId("");
+    setAllowUnknownInitialDeployRelease(false);
+    setForm((prev) => {
+      if (storageBackend === "txt") {
+        return {
+          ...prev,
+          storageBackend: "txt",
+          authoritativeAdminSource: "txt",
+          backendApiUrl: "",
+          builderApiKeyRef: "",
+          mongoSiteId: "",
+          safeCollectionName: "",
+          mongoEnvironment: "",
+          mongoDatabase: ""
+        };
+      }
+
+      const option = chooseBuilderBackendOption(builderBackendConfig, prev.environment);
+      return {
+        ...prev,
+        storageBackend: "mongo",
+        authoritativeAdminSource: "mongo",
+        builderSiteId: prev.builderSiteId || prev.siteCode,
+        mongoSiteId: prev.mongoSiteId || prev.builderSiteId || prev.siteCode,
+        backendApiUrl: prev.backendApiUrl || (!option || (isProductionSite(prev.environment) && option.localhost) ? "" : option.backendApiUrl),
+        builderApiKeyRef: prev.builderApiKeyRef || option?.credentialRef || builderBackendConfig?.defaultBuilderApiKeyRef || DEFAULT_BUILDER_API_KEY_REF
+      };
+    });
   };
 
   const completeOwnerEmail = () => {
@@ -483,6 +528,9 @@ export function SiteFormModal({
     if (!hasValidEmail(completeArmyEmail(form.ownerEmail || ""))) next.ownerEmail = "מייל בעל האתר לא תקין. המייל משמש לזיהוי והרשאות ראשוניות. תקנו לכתובת מלאה, למשל: owner@example.com.";
 
     if (targetFlow === "create-new") {
+      if (form.storageBackend !== "mongo" && form.storageBackend !== "txt") {
+        next.storageBackend = "בחרו אם האתר החדש משתמש ב־Mongo או בקבצי TXT. אחרי הבחירה האשף יציג רק את השדות הרלוונטיים.";
+      }
       if (!form.ownerPersonalNumber?.trim()) next.ownerPersonalNumber = "חסר מספר אישי של בעל האתר. בלי זה אי אפשר לאתחל בעלים/מנהלים בצורה אמינה. הזינו מספר אישי תקין של בעל האתר.";
       if (!completeArmyEmail(form.ownerEmail || "").trim()) next.ownerEmail = "חסר מייל בעל האתר. המייל נדרש לבעלות והרשאות ראשוניות. הזינו מייל ארגוני תקין.";
       if (initialDeployMode !== "skip" && !selectedInitialDeployRelease) {
@@ -523,6 +571,7 @@ export function SiteFormModal({
   const buildPayload = (targetFlow: FlowKey): Partial<Site> => {
     const paths = resolveSiteBuilderPaths(form);
     const backendOption = selectedBuilderBackendOption || suggestedBuilderBackendOption;
+    const usesMongo = form.storageBackend === "mongo";
     return {
       ...form,
       status: site ? form.status : targetFlow === "track-existing" ? "active" : "draft",
@@ -530,16 +579,19 @@ export function SiteFormModal({
       provisioningStatus: form.provisioningStatus || (targetFlow === "create-new" ? "planned" : "unknown"),
       lifecycleStatus: form.storageBackend === "mongo" && !site ? "draft" : form.lifecycleStatus,
       authoritativeAdminSource: form.storageBackend === "mongo" ? "mongo" : form.storageBackend === "txt" ? "txt" : "unknown",
-      builderSiteId: form.builderSiteId || form.mongoSiteId || form.siteCode,
-      mongoSiteId: form.mongoSiteId || form.builderSiteId || form.siteCode,
+      builderSiteId: usesMongo ? form.builderSiteId || form.mongoSiteId || form.siteCode : form.builderSiteId || "",
+      mongoSiteId: usesMongo ? form.mongoSiteId || form.builderSiteId || form.siteCode : "",
       sharePointHost: paths?.host || form.sharePointHost,
       sharePointSiteUrl: form.sharePointSiteUrl || paths?.sharePointSiteUrl || "",
       finalAppUrl: form.finalAppUrl || paths?.finalAppUrl || "",
       bootstrapUrl: paths?.bootstrapUrl || form.bootstrapUrl || "",
-      runtimeConfigPath: form.runtimeConfigPath || paths?.runtimeConfigPath || "",
-      runtimeConfigUrl: form.runtimeConfigUrl || paths?.runtimeConfigUrl || "",
-      backendApiUrl: form.backendApiUrl || backendOption?.backendApiUrl || "",
-      builderApiKeyRef: form.builderApiKeyRef || backendOption?.credentialRef || builderBackendConfig?.defaultBuilderApiKeyRef || "",
+      runtimeConfigPath: usesMongo ? form.runtimeConfigPath || paths?.runtimeConfigPath || "" : "",
+      runtimeConfigUrl: usesMongo ? form.runtimeConfigUrl || paths?.runtimeConfigUrl || "" : "",
+      backendApiUrl: usesMongo ? form.backendApiUrl || backendOption?.backendApiUrl || "" : "",
+      builderApiKeyRef: usesMongo ? form.builderApiKeyRef || backendOption?.credentialRef || builderBackendConfig?.defaultBuilderApiKeyRef || "" : "",
+      safeCollectionName: usesMongo ? form.safeCollectionName : "",
+      mongoEnvironment: usesMongo ? form.mongoEnvironment : "",
+      mongoDatabase: usesMongo ? form.mongoDatabase : "",
       ownerEmail: completeArmyEmail(form.ownerEmail || ""),
       txtAdmins: parsedInitialAdmins.map((admin) => ({
         ...admin,
@@ -607,6 +659,8 @@ export function SiteFormModal({
   const activeStep = flow === "create-new" ? createStep : trackStep;
   const activeIndex = currentSteps.findIndex((step) => step.key === activeStep);
   const isLastStep = activeIndex === currentSteps.length - 1;
+  const createStorageSelected = form.storageBackend === "mongo" || form.storageBackend === "txt";
+  const nextDisabled = flow === "create-new" && activeStep === "storage" && !createStorageSelected;
 
   const goBack = () => {
     if (flow === "choice") return;
@@ -621,6 +675,13 @@ export function SiteFormModal({
 
   const goNext = () => {
     if (flow === "choice") return;
+    if (flow === "create-new" && activeStep === "storage" && !createStorageSelected) {
+      setErrors((prev) => ({
+        ...prev,
+        storageBackend: "בחרו סוג אתר כדי שהאשף יציג רק את השדות הנכונים."
+      }));
+      return;
+    }
     const targetFlow = flow;
     const nextErrors = validate(targetFlow);
     if (Object.keys(nextErrors).length > 0 && (activeStep === "plan" || activeStep === "validate" || activeStep === "verification")) {
@@ -664,20 +725,60 @@ export function SiteFormModal({
     </section>
   );
 
+  const renderStorageChoice = () => (
+    <div className="space-y-4">
+      <section className="site-create-path-hero">
+        <div>
+          <p className="field-label">החלטה ראשונה</p>
+          <h3>איזה סוג אתר אתם יוצרים?</h3>
+          <p>הבחירה הזו קובעת את כל האשף: שדות, בדיקות, פריסה וחסמים. אחרי הבחירה לא יוצגו פרטים מהמסלול השני.</p>
+        </div>
+        <span className={`badge ${form.storageBackend === "mongo" || form.storageBackend === "txt" ? "badge-success" : "badge-warning"}`}>
+          {form.storageBackend === "mongo" ? "נבחר Mongo" : form.storageBackend === "txt" ? "נבחר TXT" : "נדרשת בחירה"}
+        </span>
+      </section>
+
+      <div className="site-create-type-grid">
+        <button
+          type="button"
+          className={`site-create-type-card ${form.storageBackend === "mongo" ? "site-create-type-card-active" : ""}`}
+          onClick={() => chooseCreateStorageBackend("mongo")}
+        >
+          <span className="site-create-type-icon"><Database size={22} /></span>
+          <span className="site-create-type-copy">
+            <span className="site-create-type-title">אתר Mongo חדש</span>
+            <span className="site-create-type-description">הנתונים החיים נשמרים ב־Builder backend. SharePoint מארח את קבצי האתר ואת runtime config.</span>
+            <span className="site-create-type-points">יוצגו: Backend, runtime config, seed, safeCollectionName, Release תואם Mongo.</span>
+            <span className="site-create-type-muted">לא יוצגו: עריכת קבצי TXT כמקור אמת.</span>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className={`site-create-type-card ${form.storageBackend === "txt" ? "site-create-type-card-active" : ""}`}
+          onClick={() => chooseCreateStorageBackend("txt")}
+        >
+          <span className="site-create-type-icon"><FileText size={22} /></span>
+          <span className="site-create-type-copy">
+            <span className="site-create-type-title">אתר TXT ב־SharePoint</span>
+            <span className="site-create-type-description">הנתונים נשמרים בקבצי TXT בתוך ספריות SharePoint. אין Builder backend ואין Mongo registry.</span>
+            <span className="site-create-type-points">יוצגו: siteDB, siteUsersDb, קבצי TXT, Release תואם TXT.</span>
+            <span className="site-create-type-muted">לא יוצגו: Backend, API key, Mongo seed או safeCollectionName.</span>
+          </span>
+        </button>
+      </div>
+      {errors.storageBackend ? <p className="text-sm" style={{ color: "var(--danger)" }}>{errors.storageBackend}</p> : null}
+    </div>
+  );
+
   const renderBasicFields = () => (
     <div className="grid gap-5 xl:grid-cols-2">
       <section className="soft-panel p-4">
         <h3 className="mb-3 text-sm font-bold" style={{ color: "var(--text-strong)" }}>פרטי אתר</h3>
         <div className="grid gap-3">
-          {flow === "create-new" ? (
-            <div className="segmented-control w-fit">
-              <button className={form.storageBackend === "mongo" ? "active" : ""} type="button" onClick={() => setForm((p) => ({ ...p, storageBackend: "mongo", authoritativeAdminSource: "mongo" }))}>אתר Mongo חדש</button>
-              <button className={form.storageBackend === "txt" ? "active" : ""} type="button" onClick={() => setForm((p) => ({ ...p, storageBackend: "txt", authoritativeAdminSource: "txt" }))}>אתר TXT legacy</button>
-            </div>
-          ) : null}
           <Field label="שם האתר" placeholder="לדוגמה: פורטל משאבי אנוש" value={form.displayName} error={errors.displayName} onChange={(value) => setForm((p) => ({ ...p, displayName: value }))} helpKey="create.displayName" />
           <Field label="קוד אתר / נתיב SharePoint" placeholder="לדוגמה: hr-portal" value={form.siteCode} error={errors.siteCode} onChange={applySiteCodeDefaults} helper="המערכת משתמשת בקוד כדי להציע נתיבי SharePoint. הזהות הייחודית נקבעת לפי היעד הפיזי ו־runtime config, לא לפי הקוד בלבד." helpKey="create.siteCode" />
-          {flow === "create-new" ? (
+          {flow === "create-new" && form.storageBackend === "mongo" ? (
             <Field label="מזהה אתר במערכת Site Builder" value={form.builderSiteId || form.mongoSiteId || ""} error={errors.builderSiteId} onChange={(value) => setForm((p) => ({ ...p, builderSiteId: value, mongoSiteId: p.mongoSiteId || value }))} placeholder={form.siteCode || "alphateam"} helper="אם ריק, המערכת תשתמש בקוד האתר כ־siteId ותציג זאת בתוכנית." helpKey="create.builderSiteId" />
           ) : null}
           <Field label="תיאור" value={form.description} onChange={(value) => setForm((p) => ({ ...p, description: value }))} helpKey="create.description" />
@@ -693,31 +794,41 @@ export function SiteFormModal({
             </select>
           </label>
           <Field label="יחידה" value={form.unitName} onChange={(value) => setForm((p) => ({ ...p, unitName: value }))} helpKey="create.unitName" />
-          <label className="block text-sm">
-            <span className="field-label"><HelpLabel helpKey="create.storageBackend">סוג אחסון נתונים</HelpLabel></span>
-            <select className="control" value={form.storageBackend || "unknown"} onChange={(e) => setForm((p) => ({ ...p, storageBackend: e.target.value as Site["storageBackend"] }))}>
-              <option value="unknown">Unknown / לא זוהה עדיין</option>
-              <option value="txt">TXT ב־SharePoint</option>
-              <option value="mongo">Mongo דרך Builder backend</option>
-            </select>
-          </label>
+          {flow !== "create-new" ? (
+            <label className="block text-sm">
+              <span className="field-label"><HelpLabel helpKey="create.storageBackend">סוג אחסון נתונים</HelpLabel></span>
+              <select className="control" value={form.storageBackend || "unknown"} onChange={(e) => setForm((p) => ({ ...p, storageBackend: e.target.value as Site["storageBackend"] }))}>
+                <option value="unknown">Unknown / לא זוהה עדיין</option>
+                <option value="txt">TXT ב־SharePoint</option>
+                <option value="mongo">Mongo דרך Builder backend</option>
+              </select>
+            </label>
+          ) : null}
         </div>
       </section>
 
       {flow === "create-new" ? (
         <div className="space-y-5">
-          {renderOwnerModeDiagnostics()}
+          {form.storageBackend === "mongo" ? renderOwnerModeDiagnostics() : (
+            <section className="soft-panel p-4">
+              <h3 className="mb-3 text-sm font-bold" style={{ color: "var(--text-strong)" }}>מסלול TXT נקי</h3>
+              <div className="space-y-2 text-sm muted">
+                <p>האתר יישמר כטיוטה, ייצור ספריות SharePoint וקבצי TXT ראשוניים, ואז יבחר Release שתואם ל־TXT.</p>
+                <p>לא נדרש Builder backend, API key, runtime config או Mongo seed במסלול הזה.</p>
+              </div>
+            </section>
+          )}
           <section className="soft-panel p-4">
             <h3 className="mb-3 text-sm font-bold" style={{ color: "var(--text-strong)" }}>מה המערכת קובעת אוטומטית</h3>
             <div className="space-y-3 text-sm muted">
-              <p>האתר יישמר תחילה כטיוטה מתוכננת, כדי שאפשר יהיה לראות חסמים לפני כתיבה ל־SharePoint או ל־Mongo.</p>
+              <p>האתר יישמר תחילה כטיוטה מתוכננת, כדי שאפשר יהיה לראות חסמים לפני כתיבה.</p>
               <div className="flex flex-wrap gap-2 text-xs">
                 <span className="badge badge-info">סטטוס: טיוטה</span>
                 <span className="badge badge-info">Provisioning: planned</span>
                 <span className="badge badge-success">{form.storageBackend === "mongo" ? "נתונים: Mongo" : "נתונים: TXT legacy"}</span>
                 <span className="badge badge-neutral">אירוח: SharePoint</span>
               </div>
-              <p>שדות טכניים כמו siteDB, runtime config ו־safeCollectionName נוצרים כברירת מחדל בשלב יעד SharePoint.</p>
+              <p>{form.storageBackend === "mongo" ? "שדות כמו runtime config ו־safeCollectionName יוצעו אוטומטית במסלול Mongo." : "ספריות וקבצי TXT יחושבו אוטומטית לפי קוד האתר וכתובת SharePoint."}</p>
             </div>
           </section>
         </div>
@@ -751,21 +862,32 @@ export function SiteFormModal({
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div>
           <h3 className="text-sm font-bold" style={{ color: "var(--text-strong)" }}>ערכים שהמערכת מחשבת עבורך</h3>
-          <p className="mt-1 text-xs muted">אלה ברירות המחדל הבטוחות. אפשר לשנות אותן רק תחת הגדרות מתקדמות.</p>
+          <p className="mt-1 text-xs muted">{form.storageBackend === "mongo" ? "ברירות מחדל לאירוח SharePoint + חיבור Mongo." : "ברירות מחדל לספריות וקבצי TXT ב־SharePoint."}</p>
         </div>
         <span className="badge badge-info">Generated preview</span>
       </div>
       {resolvedPreview ? (
         <div>
           <div className="mb-3 rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-xs" style={{ color: "var(--text-strong)" }}>
-            זהות ייחודית ב־HUB: כתובת SharePoint + נתיב siteDB + נתיב siteUsersDb + runtime config. לכן קוד אתר כפול אינו בהכרח שגיאה אם היעד הפיזי שונה.
+            {form.storageBackend === "mongo"
+              ? "זהות ייחודית ב־HUB: כתובת SharePoint + נתיב siteDB + נתיב siteUsersDb + runtime config."
+              : "זהות ייחודית ב־HUB: כתובת SharePoint + נתיב siteDB + נתיב siteUsersDb."}
           </div>
           <LinkRow label="קישור סופי לאתר" value={form.finalAppUrl || resolvedPreview.finalAppUrl} isUrl description="הכתובת שהמשתמשים יפתחו אחרי פריסה ואימות index.html" />
-          <LinkRow label="ספריית siteDB" value={resolvedPreview.siteDbRoot} description="אירוח dist, assets וקבצי תאימות ב־SharePoint" />
-          <LinkRow label="ספריית siteUsersDb" value={resolvedPreview.usersDbRoot} description="תאימות והרשאות; מקור האמת לאתר Mongo יכול להיות Mongo" />
+          <LinkRow label="נתיב siteDB מחושב" value={resolvedPreview.siteDbRoot} description="אירוח dist, assets וקבצי תאימות ב־SharePoint" />
+          <LinkRow label="נתיב siteUsersDb מחושב" value={resolvedPreview.usersDbRoot} description={form.storageBackend === "mongo" ? "תאימות והרשאות; מקור האמת לנתוני האפליקציה הוא Mongo" : "מקור קבצי המשתמשים וההרשאות לאתר TXT"} />
           <LinkRow label="תיקיית dist" value={resolvedPreview.finalDistRoot} description="כאן אמורים להיות index.html וקבצי האפליקציה" />
-          <LinkRow label="נתיב runtime config" value={form.runtimeConfigPath || resolvedPreview.runtimeConfigPath} description="קובץ שמכוון את ה־Frontend לעבוד מול Mongo backend" />
-          <LinkRow label="שם Collection במונגו" value={form.safeCollectionName || GENERATED_SAFE_COLLECTION_LABEL} description="אם ריק, Builder backend ייצור שם בטוח ויחזיר אותו ל־HUB" />
+          {form.storageBackend === "mongo" ? (
+            <>
+              <LinkRow label="נתיב runtime config" value={form.runtimeConfigPath || resolvedPreview.runtimeConfigPath} description="קובץ שמכוון את ה־Frontend לעבוד מול Mongo backend" />
+              <LinkRow label="שם Collection במונגו" value={form.safeCollectionName || GENERATED_SAFE_COLLECTION_LABEL} description="אם ריק, Builder backend ייצור שם בטוח ויחזיר אותו ל־HUB" />
+            </>
+          ) : (
+            <>
+              <LinkRow label="users_data.txt" value={resolvedPreview.txtFiles.users} description="קובץ משתמשים ומנהלים ראשוני" />
+              <LinkRow label="bihs_master_config_v1.txt" value={resolvedPreview.txtFiles.masterConfig} description="קובץ הגדרות בסיסי לאתר TXT" />
+            </>
+          )}
         </div>
       ) : (
         <p className="text-sm muted">יש להזין קוד אתר כדי לחשב נתיבים ותצוגה מקדימה.</p>
@@ -781,32 +903,45 @@ export function SiteFormModal({
       </summary>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <Field label="קישור סופי לאתר" value={form.finalAppUrl || ""} error={errors.finalAppUrl} onChange={(value) => setForm((p) => ({ ...p, finalAppUrl: value }))} placeholder={resolvedPreview?.finalAppUrl} helper="אם ריק, המערכת משתמשת ב־dist/index.html המחושב." helpKey="create.finalAppUrl" />
-        <Field label="Backend של Site Builder" value={form.backendApiUrl || ""} error={errors.backendApiUrl} onChange={(value) => setForm((p) => ({ ...p, backendApiUrl: value }))} placeholder="נבחר אוטומטית מהגדרות ה־HUB" helper="Override מתקדם בלבד. בסביבה רגילה בוחרים Backend מתוך הגדרות ה־HUB, ולא מזינים כאן סוד או API key." helpKey="create.backendApiUrl" />
-        <Field label="מזהה אתר במערכת Site Builder" value={form.builderSiteId || form.mongoSiteId || ""} error={errors.builderSiteId} onChange={(value) => setForm((p) => ({ ...p, builderSiteId: value, mongoSiteId: p.mongoSiteId || value }))} placeholder={form.siteCode || "alphateam"} helper="ניתן לעריכה בהגדרות מתקדמות. אם ריק, המערכת מציעה את קוד האתר." helpKey="create.builderSiteId" />
-        <Field label="ספריית siteDB" value={form.siteDbLibrary} onChange={(value) => setForm((p) => ({ ...p, siteDbLibrary: value }))} helper="ברירת מחדל: siteDB. לא משנים בלי סיבה תפעולית." helpKey="create.siteDbLibrary" />
-        <Field label="ספריית siteUsersDb" value={form.usersDbLibrary} onChange={(value) => setForm((p) => ({ ...p, usersDbLibrary: value }))} helper="ברירת מחדל: siteUsersDb. משמשת לתאימות והרשאות." helpKey="create.usersDbLibrary" />
+        {form.storageBackend === "mongo" ? (
+          <>
+            <Field label="Backend של Site Builder" value={form.backendApiUrl || ""} error={errors.backendApiUrl} onChange={(value) => setForm((p) => ({ ...p, backendApiUrl: value }))} placeholder="נבחר אוטומטית מהגדרות ה־HUB" helper="Override מתקדם בלבד. בסביבה רגילה בוחרים Backend מתוך הגדרות ה־HUB, ולא מזינים כאן סוד או API key." helpKey="create.backendApiUrl" />
+            <Field label="מזהה אתר במערכת Site Builder" value={form.builderSiteId || form.mongoSiteId || ""} error={errors.builderSiteId} onChange={(value) => setForm((p) => ({ ...p, builderSiteId: value, mongoSiteId: p.mongoSiteId || value }))} placeholder={form.siteCode || "alphateam"} helper="ניתן לעריכה בהגדרות מתקדמות. אם ריק, המערכת מציעה את קוד האתר." helpKey="create.builderSiteId" />
+          </>
+        ) : null}
+        {!(createMode && form.storageBackend === "txt") ? (
+          <>
+            <Field label="ספריית siteDB" value={form.siteDbLibrary} onChange={(value) => setForm((p) => ({ ...p, siteDbLibrary: value }))} helper="ברירת מחדל: siteDB. לא משנים בלי סיבה תפעולית." helpKey="create.siteDbLibrary" />
+            <Field label="ספריית siteUsersDb" value={form.usersDbLibrary} onChange={(value) => setForm((p) => ({ ...p, usersDbLibrary: value }))} helper="ברירת מחדל: siteUsersDb. משמשת לתאימות והרשאות." helpKey="create.usersDbLibrary" />
+          </>
+        ) : null}
         <Field label="ספריית Bootstrap" value={form.bootstrapLibrary} onChange={(value) => setForm((p) => ({ ...p, bootstrapLibrary: value }))} helper="ברירת מחדל: SiteAssets. זה לא מיקום האתר הסופי." helpKey="create.bootstrapLibrary" />
         <Field label="תיקיית Bootstrap" value={form.bootstrapFolder} onChange={(value) => setForm((p) => ({ ...p, bootstrapFolder: value }))} helper="מיקום זמני לקבצי הקמה או עזר לפני שהאתר הסופי מוכן." helpKey="create.bootstrapFolder" />
-        <Field label="נתיב runtime config" value={form.runtimeConfigPath || ""} error={errors.runtimeConfigPath} onChange={(value) => setForm((p) => ({ ...p, runtimeConfigPath: value }))} placeholder={resolvedPreview?.runtimeConfigPath} helper="השאירו ריק כדי ליצור אוטומטית בתוך dist. ערך שגוי יגרום לאתר לעלות בלי לדעת מאיפה לטעון נתונים." helpKey="create.runtimeConfigPath" />
-        <Field label="הפניה להרשאת API" value={form.builderApiKeyRef || ""} error={errors.builderApiKeyRef} onChange={(value) => setForm((p) => ({ ...p, builderApiKeyRef: value }))} placeholder={DEFAULT_BUILDER_API_KEY_REF} helper="שם הגדרה שמחזיקה את המפתח. לא מזינים כאן API key גלוי." helpKey="create.credentialRef" />
-        <Field label="שם Collection במונגו" value={form.safeCollectionName || ""} error={errors.safeCollectionName} onChange={(value) => setForm((p) => ({ ...p, safeCollectionName: value }))} placeholder={GENERATED_SAFE_COLLECTION_LABEL} helper="אופציונלי. אם ריק, Builder backend ייצור שם בטוח ו־HUB יאמת אותו." helpKey="create.safeCollectionName" />
-        <Field label="סביבת Mongo" value={form.mongoEnvironment || ""} onChange={(value) => setForm((p) => ({ ...p, mongoEnvironment: value }))} helper="אופציונלי לתיעוד וחיבורי backend. בדרך כלל נקבע בצד השרת." helpKey="create.mongoEnvironment" />
-        <Field label="מסד נתונים Mongo" value={form.mongoDatabase || ""} onChange={(value) => setForm((p) => ({ ...p, mongoDatabase: value }))} helper="אופציונלי לתיעוד. לרוב אין צורך שהבעלים ימלא אותו." helpKey="create.mongoDatabase" />
-        <label className="block text-sm">
-          <span className="field-label"><HelpLabel helpKey="create.widgetsMapping">מיקום widgets_data.txt</HelpLabel></span>
-          <select className="control" value={form.widgetsDbTarget || "users"} onChange={(e) => setForm((p) => ({ ...p, widgetsDbTarget: e.target.value as "users" | "site" }))}>
-            <option value="users">siteUsersDb</option>
-            <option value="site">siteDB/siteAssets</option>
-          </select>
-          <span className="mt-1 block text-xs muted">שומר תאימות לשמות קבצים legacy כמו widgets_data.txt.</span>
-        </label>
+        {form.storageBackend === "mongo" ? (
+          <>
+            <Field label="נתיב runtime config" value={form.runtimeConfigPath || ""} error={errors.runtimeConfigPath} onChange={(value) => setForm((p) => ({ ...p, runtimeConfigPath: value }))} placeholder={resolvedPreview?.runtimeConfigPath} helper="השאירו ריק כדי ליצור אוטומטית בתוך dist. ערך שגוי יגרום לאתר לעלות בלי לדעת מאיפה לטעון נתונים." helpKey="create.runtimeConfigPath" />
+            <Field label="הפניה להרשאת API" value={form.builderApiKeyRef || ""} error={errors.builderApiKeyRef} onChange={(value) => setForm((p) => ({ ...p, builderApiKeyRef: value }))} placeholder={DEFAULT_BUILDER_API_KEY_REF} helper="שם הגדרה שמחזיקה את המפתח. לא מזינים כאן API key גלוי." helpKey="create.credentialRef" />
+            <Field label="שם Collection במונגו" value={form.safeCollectionName || ""} error={errors.safeCollectionName} onChange={(value) => setForm((p) => ({ ...p, safeCollectionName: value }))} placeholder={GENERATED_SAFE_COLLECTION_LABEL} helper="אופציונלי. אם ריק, Builder backend ייצור שם בטוח ו־HUB יאמת אותו." helpKey="create.safeCollectionName" />
+            <Field label="סביבת Mongo" value={form.mongoEnvironment || ""} onChange={(value) => setForm((p) => ({ ...p, mongoEnvironment: value }))} helper="אופציונלי לתיעוד וחיבורי backend. בדרך כלל נקבע בצד השרת." helpKey="create.mongoEnvironment" />
+            <Field label="מסד נתונים Mongo" value={form.mongoDatabase || ""} onChange={(value) => setForm((p) => ({ ...p, mongoDatabase: value }))} helper="אופציונלי לתיעוד. לרוב אין צורך שהבעלים ימלא אותו." helpKey="create.mongoDatabase" />
+          </>
+        ) : (
+          <label className="block text-sm">
+            <span className="field-label"><HelpLabel helpKey="create.widgetsMapping">מיקום widgets_data.txt</HelpLabel></span>
+            <select className="control" value={form.widgetsDbTarget || "users"} onChange={(e) => setForm((p) => ({ ...p, widgetsDbTarget: e.target.value as "users" | "site" }))}>
+              <option value="users">siteUsersDb</option>
+              <option value="site">siteDB/siteAssets</option>
+            </select>
+            <span className="mt-1 block text-xs muted">רלוונטי רק למסלול TXT legacy.</span>
+          </label>
+        )}
         <label className="block text-sm">
           <span className="field-label"><HelpLabel helpKey="create.sharePointConnector">מחבר SharePoint</HelpLabel></span>
-          <select className="control" value={createMode ? "backend-sharepoint" : "read-only"} disabled>
+          <select className="control" value={createMode ? "browser-sharepoint" : "read-only"} disabled>
             <option value="read-only">קריאה בלבד</option>
-            <option value="backend-sharepoint">Backend SharePoint job</option>
+            <option value="browser-sharepoint">Browser SharePoint</option>
           </select>
-          <span className="mt-1 block text-xs muted">מציג איך פעולה מול SharePoint תרוץ. באתר Mongo חלק מהשלבים עדיין דורשים דפדפן מחובר.</span>
+          <span className="mt-1 block text-xs muted">{form.storageBackend === "mongo" ? "אתר Mongo עדיין משתמש ב־SharePoint לאירוח קבצי האתר." : "אתר TXT משתמש ב־SharePoint גם לאירוח וגם לקבצי הנתונים."}</span>
         </label>
       </div>
     </details>
@@ -863,37 +998,58 @@ export function SiteFormModal({
     );
   };
 
-  const renderConnectionFields = (createMode = false) => (
-    <div className="space-y-5">
-      <section className="soft-panel p-4">
-        <h3 className="mb-3 text-sm font-bold" style={{ color: "var(--text-strong)" }}>{createMode ? "יעד SharePoint ו־Mongo" : "חיבור SharePoint"}</h3>
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label={createMode ? "כתובת אתר SharePoint" : "כתובת אתר SharePoint קיים"} value={form.sharePointSiteUrl} error={errors.sharePointSiteUrl} onChange={(value) => setForm((p) => ({ ...p, sharePointSiteUrl: value }))} placeholder="https://portal.army.idf/sites/alphateam" helper="SharePoint מארח את קבצי האתר. הנתונים החיים של אתר Mongo יישמרו ב־Mongo דרך Builder backend." helpKey="create.sharePointSiteUrl" />
-          {form.storageBackend === "mongo" ? (
-            renderBuilderBackendSelector()
-          ) : (
-            <Field label="קישור סופי לאתר" value={form.finalAppUrl || resolvedPreview?.finalAppUrl || ""} error={errors.finalAppUrl} onChange={(value) => setForm((p) => ({ ...p, finalAppUrl: value }))} helper="הכתובת שממנה המשתמשים פותחים את האתר לאחר הפריסה." helpKey="create.finalAppUrl" />
-          )}
-        </div>
-      </section>
+  const renderConnectionFields = (createMode = false) => {
+    const showTxtLibraryFields = createMode && form.storageBackend === "txt";
 
-      {renderGeneratedDefaultsPreview()}
-      {renderAdvancedInfrastructureFields(createMode)}
+    return (
+      <div className="space-y-5">
+        <section className="soft-panel p-4">
+          <h3 className="mb-3 text-sm font-bold" style={{ color: "var(--text-strong)" }}>{createMode ? form.storageBackend === "mongo" ? "יעד SharePoint ו־Mongo backend" : "יעד SharePoint וקבצי TXT" : "חיבור SharePoint"}</h3>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label={createMode ? "כתובת אתר SharePoint" : "כתובת אתר SharePoint קיים"} value={form.sharePointSiteUrl} error={errors.sharePointSiteUrl} onChange={(value) => setForm((p) => ({ ...p, sharePointSiteUrl: value }))} placeholder="https://portal.army.idf/sites/alphateam" helper={form.storageBackend === "mongo" ? "SharePoint מארח את קבצי האתר. הנתונים החיים יישמרו ב־Mongo דרך Builder backend." : "SharePoint מארח את קבצי האתר ואת קבצי ה־TXT של הנתונים."} helpKey="create.sharePointSiteUrl" />
+            {form.storageBackend === "mongo" ? (
+              renderBuilderBackendSelector()
+            ) : (
+              <Field label="קישור סופי לאתר" value={form.finalAppUrl || resolvedPreview?.finalAppUrl || ""} error={errors.finalAppUrl} onChange={(value) => setForm((p) => ({ ...p, finalAppUrl: value }))} helper="הכתובת שממנה המשתמשים פותחים את האתר לאחר הפריסה." helpKey="create.finalAppUrl" />
+            )}
+            {showTxtLibraryFields ? (
+              <>
+                <Field label="ספריית siteDB" value={form.siteDbLibrary} onChange={(value) => setForm((p) => ({ ...p, siteDbLibrary: value }))} helper="ספריית SharePoint שבה ייווצרו dist וקבצי האתר. ברירת מחדל: siteDB." helpKey="create.siteDbLibrary" />
+                <Field label="ספריית siteUsersDb" value={form.usersDbLibrary} onChange={(value) => setForm((p) => ({ ...p, usersDbLibrary: value }))} helper="ספריית SharePoint לקבצי משתמשים והרשאות. ברירת מחדל: siteUsersDb." helpKey="create.usersDbLibrary" />
+              </>
+            ) : null}
+          </div>
+        </section>
+
+        {renderGeneratedDefaultsPreview()}
+        {renderAdvancedInfrastructureFields(createMode)}
 
       {resolvedPreview ? (
         <section className="soft-panel p-4">
           <h3 className="mb-2 text-sm font-bold" style={{ color: "var(--text-strong)" }}>נתיבי תאימות שייגזרו אוטומטית</h3>
           <div className="grid gap-x-5 md:grid-cols-2">
-            <LinkRow label="Runtime config URL" value={form.runtimeConfigUrl || resolvedPreview.runtimeConfigUrl} isUrl />
-            <LinkRow label="master config" value={resolvedPreview.txtFiles.masterConfig} />
-            <LinkRow label="widgets_data.txt" value={resolvedPreview.txtFiles.widgets} />
-            <LinkRow label="gantt_data.txt" value={resolvedPreview.txtFiles.gantt} />
-            <LinkRow label="Bootstrap setup URL" value={resolvedPreview.bootstrapUrl} isUrl />
+            {form.storageBackend === "mongo" ? (
+              <>
+                <LinkRow label="Runtime config URL" value={form.runtimeConfigUrl || resolvedPreview.runtimeConfigUrl} isUrl />
+                <LinkRow label="dist" value={resolvedPreview.finalDistRoot} />
+                <LinkRow label="final app" value={resolvedPreview.finalAppUrl} isUrl />
+                <LinkRow label="Bootstrap setup URL" value={resolvedPreview.bootstrapUrl} isUrl />
+              </>
+            ) : (
+              <>
+                <LinkRow label="master config" value={resolvedPreview.txtFiles.masterConfig} />
+                <LinkRow label="users_data.txt" value={resolvedPreview.txtFiles.users} />
+                <LinkRow label="widgets_data.txt" value={resolvedPreview.txtFiles.widgets} />
+                <LinkRow label="gantt_data.txt" value={resolvedPreview.txtFiles.gantt} />
+                <LinkRow label="Bootstrap setup URL" value={resolvedPreview.bootstrapUrl} isUrl />
+              </>
+            )}
           </div>
         </section>
       ) : null}
     </div>
-  );
+    );
+  };
 
   const renderOwners = () => (
     <div className="grid gap-5 xl:grid-cols-2">
@@ -1035,11 +1191,13 @@ export function SiteFormModal({
   );
 
   const renderCreatePlan = () => {
+    const isMongo = form.storageBackend === "mongo";
     const selectedCompatibility = selectedInitialDeployRelease ? getReleaseArtifactCompatibility(selectedInitialDeployRelease) : null;
+    const targetCompatible = selectedCompatibility?.storageCompatibility.includes(initialDeployStorage);
     const releaseTargetLabel = initialDeployMode === "skip"
       ? "דילוג מכוון - האתר יישאר partially-created"
       : selectedInitialDeployRelease
-        ? `${selectedInitialDeployRelease.version} (${selectedCompatibility?.artifactKind || "unknown"})`
+        ? releaseOptionLabel(selectedInitialDeployRelease, selectedCompatibility?.artifactKind || "סוג Artifact לא ידוע")
         : initialDeployStorage === "mongo"
           ? "אין Release מתאים לאתר Mongo"
           : "אין Release מתאים לאתר TXT legacy";
@@ -1052,42 +1210,84 @@ export function SiteFormModal({
           <span className={`badge ${creationPlanReady ? "badge-success" : "badge-danger"}`}>{creationPlanReady ? "מוכן לתכנון" : "יש חסמים"}</span>
         </div>
         {form.storageBackend === "mongo" ? (
-          <div className="mt-3 space-y-3">
-            <p className="text-sm muted">מסלול Mongo חדש יוצר תוכנית אמיתית לפני ביצוע. התוכנית לא מריצה כלום עד הלחיצה הסופית.</p>
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="badge badge-success">Mongo registry נוצר</span>
-              <span className="badge badge-info">safeCollectionName אומת</span>
-              <span className="badge badge-warning">SharePoint hosting לפני deploy</span>
-              <span className="badge badge-info">Mongo seed docs מתוכננים</span>
-              <span className="badge badge-success">runtime config תקין</span>
-              <span className="badge badge-neutral">האתר עדיין לא מוכן לשימוש</span>
-              <span className="badge badge-success">האתר מוכן</span>
+          <div className="mongo-plan-action mt-3">
+            <div className="mongo-plan-action-main">
+              <div>
+                <p className="field-label">בדיקה אינטראקטיבית</p>
+                <h4>תוכנית Mongo לפני ביצוע</h4>
+                <p>הכפתור יוצר תוכנית אמיתית מול ה־Builder backend ומציג כאן מיד אם Mongo registry נוצר, אם safeCollectionName תקין ואם יש חסמים. שום דבר לא רץ בפועל עד שמירת האשף בסוף.</p>
+              </div>
+              <button className="btn btn-primary" type="button" disabled={planning} onClick={() => void generateMongoPlan()}>
+                {planning ? "יוצר תוכנית..." : mongoPlan ? "צור מחדש תוכנית Mongo" : "צור תוכנית Mongo"}
+              </button>
             </div>
-            <button className="btn btn-secondary" type="button" disabled={planning} onClick={() => void generateMongoPlan()}>
-              {planning ? "יוצר תוכנית..." : "צור תוכנית Mongo"}
-            </button>
+            <div className={`mongo-plan-action-result ${mongoPlan?.blockers.length ? "mongo-plan-action-result-blocked" : mongoPlan ? "mongo-plan-action-result-ready" : ""}`}>
+              {planning ? (
+                <p className="text-sm muted">יוצר תוכנית ומחשב חסמים...</p>
+              ) : mongoPlan ? (
+                <>
+                  <span className={`badge ${mongoPlan.blockers.length ? "badge-danger" : "badge-success"}`}>{mongoPlan.blockers.length ? "יש חסמים" : "מוכן לביצוע מבוקר"}</span>
+                  <div className="mongo-plan-action-metrics">
+                    <span><strong>{mongoPlan.steps.length}</strong> צעדים</span>
+                    <span><strong>{mongoPlan.seedDocs.length}</strong> מסמכי seed</span>
+                    <span><strong>{mongoPlan.blockers.length}</strong> חסמים</span>
+                  </div>
+                  <p className="text-sm muted">הפירוט המלא מופיע מיד בהמשך המסך תחת “תוכנית Mongo חדשה”.</p>
+                </>
+              ) : (
+                <p className="text-sm muted">עדיין לא נוצרה תוכנית. לחצו כדי לראות חסמים, יעדים ופעולות לפני שממשיכים.</p>
+              )}
+            </div>
             {planError ? <p className="text-sm" style={{ color: "var(--danger)" }}>{planError}</p> : null}
           </div>
-        ) : null}
+        ) : (
+          <div className="mt-3 space-y-2 text-sm muted">
+            <p>מסלול TXT יוצר ספריות SharePoint וקבצי נתונים ראשוניים בלבד. אין צורך ב־Backend, API key או registry.</p>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span className="badge badge-success">קבצי TXT ראשוניים</span>
+              <span className="badge badge-info">SharePoint hosting</span>
+              <span className="badge badge-warning">פריסה רק אחרי יצירת תיקיות</span>
+            </div>
+          </div>
+        )}
         <div className="mt-4">
           <h4 className="mb-3 text-sm font-bold" style={{ color: "var(--text-strong)" }}>מה המערכת הולכת ליצור</h4>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="creation-preview-card">
-              <p className="text-sm font-bold" style={{ color: "var(--text-strong)" }}>SharePoint hosting</p>
+              <p className="text-sm font-bold" style={{ color: "var(--text-strong)" }}>{isMongo ? "אירוח SharePoint" : "ספריות SharePoint"}</p>
               <ul className="mt-2 space-y-1 text-sm muted">
-                <li>תיקיית dist לאירוח קבצי האתר ו־index.html.</li>
-                <li>קובץ runtime config בתוך dist שמכוון את האתר ל־Mongo backend.</li>
-                <li>תיקיות siteAssets/images ונתיבי תאימות לקבצי TXT legacy.</li>
-                <li>קישור סופי לאתר שייבדק אחרי פריסה.</li>
+                {isMongo ? (
+                  <>
+                    <li>תיקיית dist לאירוח קבצי האתר ו־index.html.</li>
+                    <li>קובץ runtime config בתוך dist שמכוון את האתר ל־Builder backend.</li>
+                    <li>קישור סופי לאתר שייבדק אחרי פריסה.</li>
+                  </>
+                ) : (
+                  <>
+                    <li>ספריית siteDB לאירוח קבצי האתר.</li>
+                    <li>ספריית siteUsersDb לקבצי משתמשים והרשאות.</li>
+                    <li>תיקיית dist וקישור סופי לאתר שייבדק אחרי פריסה.</li>
+                  </>
+                )}
               </ul>
             </div>
             <div className="creation-preview-card">
-              <p className="text-sm font-bold" style={{ color: "var(--text-strong)" }}>Mongo backend</p>
+              <p className="text-sm font-bold" style={{ color: "var(--text-strong)" }}>{isMongo ? "Builder backend" : "קבצי TXT"}</p>
               <ul className="mt-2 space-y-1 text-sm muted">
-                <li>רשומת אתר ב־Builder backend לפי siteId.</li>
-                <li>safeCollectionName שייווצר אוטומטית או יאומת אם הוזן ידנית.</li>
-                <li>Seed docs עבור users_data.txt ושאר מיפויי legacy.</li>
-                <li>מנהלים ראשוניים ויכולת backup דרך Builder backend.</li>
+                {isMongo ? (
+                  <>
+                    <li>רשומת אתר ב־Builder backend לפי siteId.</li>
+                    <li>safeCollectionName שייווצר אוטומטית או יאומת אם הוזן ידנית.</li>
+                    <li>Seed docs ראשוניים למנהלים ונתוני בסיס.</li>
+                    <li>יכולת backup דרך Builder backend.</li>
+                  </>
+                ) : (
+                  <>
+                    <li>users_data.txt עם בעל האתר והמנהלים הראשוניים.</li>
+                    <li>bihs_master_config_v1.txt וקבצי נתונים ראשוניים.</li>
+                    <li>אין חיבור ל־Builder backend ואין registry.</li>
+                  </>
+                )}
               </ul>
             </div>
             <div className="creation-preview-card">
@@ -1098,7 +1298,7 @@ export function SiteFormModal({
                 <li>השלב הבא: יצירת ספריות ותיקיות SharePoint.</li>
                 <li>Release נבחר: {releaseTargetLabel}</li>
                 <li>תיקיות נדרשות ייווצרו לפני העלאה.</li>
-                <li>runtime config נשמר ולא יידרס.</li>
+                {isMongo ? <li>runtime config נשמר ולא יידרס.</li> : null}
                 <li>האתר יישאר partially-created עד שיש dist/index.html מאומת.</li>
               </ul>
             </div>
@@ -1107,7 +1307,7 @@ export function SiteFormModal({
               <ul className="mt-2 space-y-1 text-sm muted">
                 <li>יצירת Site Collection עצמו אם SharePoint דורש תהליך ידני או הרשאת שירות.</li>
                 <li>פעולות SharePoint רצות דרך דפדפן מחובר כשאפשר; הרשאת שירות נדרשת רק אם הדפדפן לא יכול ליצור ספריות.</li>
-                <li>אימות ready מלא לפני שיש SharePoint hosting, Mongo seed, runtime config ו־deploy תקינים.</li>
+                <li>{isMongo ? "Ready מלא מחייב אירוח SharePoint, תוכנית Mongo, runtime config ו־deploy תקינים." : "Ready מלא מחייב ספריות SharePoint, קבצי TXT ראשוניים ו־deploy תקין."}</li>
               </ul>
             </div>
           </div>
@@ -1156,8 +1356,9 @@ export function SiteFormModal({
             ))}
           </div>
           {mongoPlan.warnings.length ? <p className="mt-3 text-sm muted">{mongoPlan.warnings.join(" · ")}</p> : null}
-          <details className="technical-details mt-3">
+          <details className="technical-details advanced-details">
             <summary>פרטים טכניים</summary>
+            <p className="mt-2 text-xs muted">JSON לתיעוד ול־Audit, לא נדרש להחלטה רגילה.</p>
             <pre className="mt-3 overflow-auto rounded-md p-3 text-xs" style={{ background: "var(--surface-muted)", color: "var(--text)" }}>
               {JSON.stringify({
                 identity: mongoPlan.identity,
@@ -1197,9 +1398,8 @@ export function SiteFormModal({
         <div className="grid gap-3 md:grid-cols-2">
           <LinkRow label="Release נבחר" value={releaseTargetLabel} />
           <LinkRow label="Artifact תקין" value={selectedInitialDeployRelease?.artifactValidation?.readyForDeploy ? "כן" : initialDeployMode === "skip" ? "דולג" : "לא"} />
-          <LinkRow label="תואם לאתר Mongo" value={selectedCompatibility?.storageCompatibility.includes("mongo") ? "כן" : selectedCompatibility ? "לא" : "-"} />
-          <LinkRow label="תואם לאתר TXT" value={selectedCompatibility?.storageCompatibility.includes("txt") ? "כן" : selectedCompatibility ? "לא" : "-"} />
-          <LinkRow label="לא ידרוס runtime config" value={selectedCompatibility?.preservesRuntimeConfig === false ? "חסום" : "כן"} />
+          <LinkRow label={isMongo ? "תואם למסלול Mongo" : "תואם למסלול TXT"} value={targetCompatible ? "כן" : selectedCompatibility ? "לא" : "-"} />
+          {isMongo ? <LinkRow label="לא ידרוס runtime config" value={selectedCompatibility?.preservesRuntimeConfig === false ? "חסום" : "כן"} /> : null}
           <LinkRow label="תיקיות נדרשות ייווצרו לפני העלאה" value={selectedCompatibility?.requiredFolders?.length ? selectedCompatibility.requiredFolders.join(", ") : "ייגזרו מה־artifact manifest"} />
         </div>
         {initialDeployMode === "skip" ? (
@@ -1224,11 +1424,22 @@ export function SiteFormModal({
       ) : null}
 
       <section className="soft-panel p-4">
-        <h3 className="mb-3 text-sm font-bold" style={{ color: "var(--text-strong)" }}>קבצים שייווצרו אם חסרים</h3>
+        <h3 className="mb-3 text-sm font-bold" style={{ color: "var(--text-strong)" }}>{isMongo ? "רכיבי Mongo שייווצרו אם חסרים" : "קבצי TXT שייווצרו אם חסרים"}</h3>
         <div className="grid gap-2 md:grid-cols-2">
-          {resolvedPreview ? txtFileLabels.map((file) => (
-            <LinkRow key={file.key} label={file.label} value={resolvedPreview.txtFiles[file.key]} />
-          )) : <p className="text-sm muted">יש להזין קוד אתר כדי לחשב נתיבים.</p>}
+          {resolvedPreview ? (
+            isMongo ? (
+              <>
+                <LinkRow label="Registry ב־Builder backend" value={form.builderSiteId || form.mongoSiteId || form.siteCode || "-"} />
+                <LinkRow label="runtime config" value={form.runtimeConfigPath || resolvedPreview.runtimeConfigPath} />
+                <LinkRow label="מסמכי seed" value={mongoPlan ? `${mongoPlan.seedDocs.length}` : "יופיע אחרי יצירת תוכנית Mongo"} />
+                <LinkRow label="שם Collection" value={mongoPlan?.builderBackend.expectedSafeCollectionName || form.safeCollectionName || GENERATED_SAFE_COLLECTION_LABEL} />
+              </>
+            ) : (
+              txtFileLabels.map((file) => (
+                <LinkRow key={file.key} label={file.label} value={resolvedPreview.txtFiles[file.key]} />
+              ))
+            )
+          ) : <p className="text-sm muted">יש להזין קוד אתר כדי לחשב נתיבים.</p>}
         </div>
       </section>
 
@@ -1284,111 +1495,163 @@ export function SiteFormModal({
     const selectedCompatibility = selectedInitialDeployRelease ? getReleaseArtifactCompatibility(selectedInitialDeployRelease) : null;
     const compatibleWithMongo = Boolean(selectedCompatibility?.storageCompatibility.includes("mongo"));
     const compatibleWithTxt = Boolean(selectedCompatibility?.storageCompatibility.includes("txt"));
+    const targetCompatible = initialDeployStorage === "mongo" ? compatibleWithMongo : compatibleWithTxt;
     const selectedIsUnknown = Boolean(selectedInitialDeployRelease && selectedCompatibility?.storageCompatibility.length === 0);
+    const selectedCompatibilityLabel = selectedCompatibility?.storageCompatibility.length
+      ? selectedCompatibility.storageCompatibility.join(" + ")
+      : selectedInitialDeployRelease
+        ? "תאימות לא ידועה"
+        : "";
+    const selectedReleaseReady = Boolean(selectedInitialDeployRelease && (targetCompatible || selectedIsUnknown));
+    const selectedReleaseStatus = !selectedInitialDeployRelease
+      ? "לא נבחר Release"
+      : targetCompatible
+        ? "מתאים למסלול"
+        : selectedIsUnknown
+          ? "לא מסווג"
+          : "לא מתאים";
     const noCompatibleReleaseMessage = initialDeployStorage === "mongo"
       ? "אין Release מתאים לאתר Mongo. צור או סמן Release כתואם Mongo לפני פריסה ראשונית."
       : "אין Release מתאים לאתר TXT legacy.";
 
     return (
       <div className="space-y-4">
-        <section className="soft-panel p-4">
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <section className="soft-panel initial-deploy-card p-4">
+          <div className="initial-deploy-header">
             <div>
-              <h3 className="text-sm font-bold" style={{ color: "var(--text-strong)" }}>פריסה ראשונית</h3>
-              <p className="mt-1 text-xs muted">המערכת תעלה את קבצי ה־dist רק אחרי שתשתית SharePoint מוכנה.</p>
+              <span className="badge badge-info">{initialDeployStorage === "mongo" ? "אתר Mongo חדש" : "אתר TXT legacy"}</span>
+              <h3>פריסה ראשונית</h3>
+              <p>בחרו איך האתר יקבל את קבצי ה־dist הראשונים. שום פריסה לא תרוץ לפני שתשתית SharePoint מוכנה.</p>
             </div>
-            <span className="badge badge-info">{initialDeployStorage === "mongo" ? "אתר Mongo חדש" : "אתר TXT legacy"}</span>
+            <button className="btn btn-secondary" type="button" disabled={releasesLoading} onClick={() => void onRefreshReleases?.()}>
+              <RefreshCw size={15} />רענן Releases
+            </button>
           </div>
 
-          <div className="segmented-control w-fit">
-            <button className={initialDeployMode === "auto" ? "active" : ""} type="button" onClick={() => setInitialDeployMode("auto")}>בחירה אוטומטית</button>
-            <button className={initialDeployMode === "manual" ? "active" : ""} type="button" onClick={() => setInitialDeployMode("manual")}>בחירה ידנית</button>
-            <button className={initialDeployMode === "skip" ? "active" : ""} type="button" onClick={() => setInitialDeployMode("skip")}>דלג</button>
+          <div className="initial-deploy-mode-row">
+            <div className="segmented-control initial-deploy-segmented">
+              <button className={initialDeployMode === "auto" ? "active" : ""} type="button" onClick={() => setInitialDeployMode("auto")}>בחירה אוטומטית</button>
+              <button className={initialDeployMode === "manual" ? "active" : ""} type="button" onClick={() => setInitialDeployMode("manual")}>בחירה ידנית</button>
+              <button className={initialDeployMode === "skip" ? "active" : ""} type="button" onClick={() => setInitialDeployMode("skip")}>דלג</button>
+            </div>
+            <p>
+              {initialDeployMode === "auto"
+                ? "המערכת בוחרת את ה־Release החדש ביותר שמתאים למסלול האתר."
+                : initialDeployMode === "manual"
+                  ? "בחרו ידנית Release מהרשימה אחרי בדיקת התאמה."
+                  : "האתר יישמר בלי פריסה ראשונית ויישאר במצב חלקי."}
+            </p>
           </div>
 
           {initialDeployMode === "skip" ? (
-            <div className="mt-4 rounded-md border border-[var(--warning)] bg-[var(--surface-muted)] p-3 text-sm">
+            <div className="initial-deploy-warning mt-4">
               <p className="font-bold" style={{ color: "var(--warning)" }}>דילוג על פריסה ראשונית ישאיר את האתר במצב חלקי.</p>
               <p className="mt-1 muted">האתר נוצר חלקית. עדיין לא בוצעה פריסה ראשונית.</p>
             </div>
           ) : (
-            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+            <div className="initial-release-picker mt-4">
               <label className="block text-sm">
-                <span className="field-label">בחר Release לפריסה ראשונית</span>
+                <span className="initial-release-picker-label">
+                  <span className="field-label">Release לפריסה ראשונית</span>
+                  <span className={`badge ${selectedReleaseReady ? "badge-success" : selectedIsUnknown ? "badge-warning" : "badge-neutral"}`}>{selectedReleaseStatus}</span>
+                </span>
                 {initialDeployMode === "auto" ? (
                   <input
-                    className="control"
-                    value={autoInitialDeployRelease ? `${autoInitialDeployRelease.version} - ${autoInitialDeployRelease.artifactRef || ""}` : ""}
+                    className="control initial-release-control"
+                    value={selectedInitialDeployRelease ? releaseOptionLabel(selectedInitialDeployRelease, selectedCompatibility?.artifactKind || "Artifact מוכן") : ""}
                     readOnly
                     placeholder={releasesLoading ? "טוען Releases..." : noCompatibleReleaseMessage}
                     aria-invalid={Boolean(errors.initialDeploy)}
                   />
                 ) : (
-                  <select className="control" value={initialDeployReleaseId} onChange={(event) => setInitialDeployReleaseId(event.target.value)} aria-invalid={Boolean(errors.initialDeploy)}>
+                  <select className="control initial-release-control" value={initialDeployReleaseId} onChange={(event) => setInitialDeployReleaseId(event.target.value)} aria-invalid={Boolean(errors.initialDeploy)}>
                     <option value="">{releasesLoading ? "טוען Releases..." : "בחר Release מתאים"}</option>
                     {initialDeployOptions.map((release) => {
                       const compatibility = getReleaseArtifactCompatibility(release);
                       const unknown = compatibility.storageCompatibility.length === 0;
                       return (
                         <option key={release._id} value={release._id}>
-                          {release.version} - {unknown ? "Unknown compatibility" : compatibility.storageCompatibility.join(" + ")}
+                          {releaseOptionLabel(release, unknown ? "תאימות לא ידועה" : compatibility.storageCompatibility.join(" + "))}
                         </option>
                       );
                     })}
                   </select>
                 )}
-                {errors.initialDeploy ? <span className="mt-1 block text-xs" style={{ color: "var(--danger)" }}>{errors.initialDeploy}</span> : null}
-                {!errors.initialDeploy && !selectedInitialDeployRelease ? <span className="mt-1 block text-xs muted">אין Release מתאים. צור Release מתאים או דלג על פריסה ראשונית.</span> : null}
               </label>
-              <button className="btn btn-secondary h-fit self-end" type="button" disabled={releasesLoading} onClick={() => void onRefreshReleases?.()}>
-                רענן Releases
-              </button>
+
+              {selectedInitialDeployRelease ? (
+                <div className={`initial-release-summary ${selectedReleaseReady ? "initial-release-summary-ready" : "initial-release-summary-blocked"}`}>
+                  <div>
+                    <p className="initial-release-name">{releaseDisplayLabel(selectedInitialDeployRelease)}</p>
+                    <p className="initial-release-meta">
+                      גרסה {selectedInitialDeployRelease.version} · {selectedCompatibility?.artifactKind || "Artifact"}{selectedCompatibilityLabel ? ` · ${selectedCompatibilityLabel}` : ""}
+                    </p>
+                  </div>
+                  <span className={`badge ${selectedReleaseReady ? "badge-success" : selectedIsUnknown ? "badge-warning" : "badge-danger"}`}>
+                    {selectedReleaseStatus}
+                  </span>
+                </div>
+              ) : (
+                <div className="initial-release-empty">
+                  <p>{releasesLoading ? "בודק Releases זמינים..." : "לא נמצא Release מתאים לבחירה אוטומטית."}</p>
+                  <span>{noCompatibleReleaseMessage}</span>
+                </div>
+              )}
+
+              {errors.initialDeploy ? <span className="block text-xs" style={{ color: "var(--danger)" }}>{errors.initialDeploy}</span> : null}
             </div>
           )}
 
           {initialDeployMode !== "skip" ? (
-            <label className="mt-3 flex items-start gap-2 text-sm">
-              <input
-                className="mt-1"
-                type="checkbox"
-                checked={allowUnknownInitialDeployRelease}
-                onChange={(event) => setAllowUnknownInitialDeployRelease(event.target.checked)}
-              />
-              <span>
-                <span className="block font-bold" style={{ color: "var(--text-strong)" }}>בחירה מתקדמת של Release לא מסווג</span>
-                <span className="block text-xs muted">Unknown compatibility לא נבחר אוטומטית. אפשר לבחור אותו רק במפורש, עם אזהרה.</span>
-              </span>
-            </label>
+            <details className="initial-deploy-advanced mt-3" open={allowUnknownInitialDeployRelease}>
+              <summary>
+                <span>אפשרויות מתקדמות</span>
+                <small>Release לא מסווג</small>
+              </summary>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={allowUnknownInitialDeployRelease}
+                  onChange={(event) => setAllowUnknownInitialDeployRelease(event.target.checked)}
+                />
+                <span>
+                  <span>אפשר לבחור Release עם תאימות לא ידועה</span>
+                  <small>לא ייבחר אוטומטית. השתמשו בזה רק אם בדקתם ידנית שה־Artifact מתאים.</small>
+                </span>
+              </label>
+            </details>
           ) : null}
         </section>
 
         <section className="soft-panel p-4">
           <h3 className="mb-3 text-sm font-bold" style={{ color: "var(--text-strong)" }}>תוכנית פריסה ראשונית</h3>
           <div className="grid gap-3 md:grid-cols-2">
-            <LinkRow label="Release נבחר" value={selectedInitialDeployRelease ? `${selectedInitialDeployRelease.version} (${selectedInitialDeployRelease._id})` : initialDeployMode === "skip" ? "דילוג מכוון" : "לא נבחר"} />
+            <LinkRow label="Release נבחר" value={selectedInitialDeployRelease ? releaseDisplayLabel(selectedInitialDeployRelease) : initialDeployMode === "skip" ? "דילוג מכוון" : "לא נבחר"} />
+            {selectedInitialDeployRelease ? <LinkRow label="מספר גרסה" value={selectedInitialDeployRelease.version} /> : null}
             <LinkRow label="Artifact תקין" value={selectedInitialDeployRelease?.artifactValidation?.readyForDeploy ? "כן" : "לא"} />
-            <LinkRow label="תואם לאתר Mongo" value={compatibleWithMongo ? "כן" : selectedIsUnknown ? "לא ידוע" : "לא"} />
-            <LinkRow label="תואם לאתר TXT" value={compatibleWithTxt ? "כן" : selectedIsUnknown ? "לא ידוע" : "לא"} />
+            <LinkRow label={initialDeployStorage === "mongo" ? "תואם למסלול Mongo" : "תואם למסלול TXT"} value={targetCompatible ? "כן" : selectedIsUnknown ? "לא ידוע" : "לא"} />
             <LinkRow label="סוג Artifact" value={selectedCompatibility?.artifactKind || "-"} />
             <LinkRow label="מקור תאימות" value={selectedCompatibility?.compatibilitySource || "-"} />
             <LinkRow label="תיקיות נדרשות" value={selectedCompatibility?.requiredFolders?.length ? selectedCompatibility.requiredFolders.join(", ") : "ייגזרו מה־manifest בזמן ביצוע"} />
-            <LinkRow label="Runtime config ב־Artifact" value={selectedCompatibility?.runtimeConfigFiles?.length ? selectedCompatibility.runtimeConfigFiles.join(", ") : "לא זוהה"} />
+            {initialDeployStorage === "mongo" ? <LinkRow label="Runtime config ב־Artifact" value={selectedCompatibility?.runtimeConfigFiles?.length ? selectedCompatibility.runtimeConfigFiles.join(", ") : "לא זוהה"} /> : null}
           </div>
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
             <span className={`badge ${selectedInitialDeployRelease ? "badge-success" : initialDeployMode === "skip" ? "badge-warning" : "badge-danger"}`}>Release נבחר</span>
             <span className={`badge ${selectedInitialDeployRelease?.artifactValidation?.readyForDeploy ? "badge-success" : "badge-danger"}`}>Artifact תקין</span>
-            <span className={`badge ${initialDeployStorage === "mongo" ? compatibleWithMongo || selectedIsUnknown ? "badge-success" : "badge-danger" : compatibleWithTxt || selectedIsUnknown ? "badge-success" : "badge-danger"}`}>
+            <span className={`badge ${targetCompatible || selectedIsUnknown ? "badge-success" : "badge-danger"}`}>
               {initialDeployStorage === "mongo" ? "תואם לאתר Mongo" : "תואם לאתר TXT"}
             </span>
-            <span className="badge badge-success">לא ידרוס runtime config</span>
+            {initialDeployStorage === "mongo" ? <span className="badge badge-success">לא ידרוס runtime config</span> : null}
             <span className="badge badge-info">תיקיות נדרשות ייווצרו לפני העלאה</span>
             <span className="badge badge-warning">לא ניתן לפרוס לפני שתשתית SharePoint מוכנה</span>
           </div>
-          {selectedCompatibility?.runtimeConfigFiles?.length ? (
-            <p className="mt-3 text-sm muted">ה־artifact כולל runtime config. ברירת המחדל היא לשמור את הקובץ שנוצר לאתר ולא לדרוס אותו. runtime config נשמר ולא יידרס.</p>
-          ) : (
-            <p className="mt-3 text-sm muted">runtime config נשמר ולא יידרס.</p>
-          )}
+          {initialDeployStorage === "mongo" ? (
+            selectedCompatibility?.runtimeConfigFiles?.length ? (
+              <p className="mt-3 text-sm muted">ה־artifact כולל runtime config. ברירת המחדל היא לשמור את הקובץ שנוצר לאתר ולא לדרוס אותו.</p>
+            ) : (
+              <p className="mt-3 text-sm muted">runtime config שנוצר לאתר נשמר ולא יידרס.</p>
+            )
+          ) : null}
           {selectedInitialDeployRelease && initialDeployStorage === "mongo" && !compatibleWithMongo && !selectedIsUnknown ? (
             <p className="mt-2 text-sm" style={{ color: "var(--danger)" }}>ה־Release הזה לא תואם לאתר Mongo.</p>
           ) : null}
@@ -1437,19 +1700,29 @@ export function SiteFormModal({
   );
 
   const renderChoice = () => (
-    <div className="grid gap-4 p-5 md:grid-cols-2">
-      <button type="button" className="soft-panel p-5 text-right transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" onClick={() => selectFlow("track-existing")}>
-        <FolderCheck className="mb-4 text-[var(--accent)]" size={28} />
-        <h3 className="text-lg font-bold" style={{ color: "var(--text-strong)" }}>הוסף אתר קיים</h3>
-        <p className="mt-2 text-sm muted">האתר כבר קיים. ה־HUB רק יתחיל לעקוב אחריו.</p>
-        <span className="btn btn-primary mt-5 inline-flex">המשך להוספת אתר קיים</span>
-      </button>
-      <button type="button" className="soft-panel p-5 text-right transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" onClick={() => selectFlow("create-new")}>
-        <Sparkles className="mb-4 text-[var(--accent)]" size={28} />
-        <h3 className="text-lg font-bold" style={{ color: "var(--text-strong)" }}>צור אתר חדש</h3>
-        <p className="mt-2 text-sm muted">הקמת אתר Site Builder חדש: TXT legacy או Mongo חדש עם תוכנית ואימות.</p>
-        <span className="btn btn-primary mt-5 inline-flex">המשך ליצירת אתר חדש</span>
-      </button>
+    <div className="space-y-4 p-5">
+      <ModeBoundary
+        title="בחרו מה באמת עומד לקרות"
+        items={[
+          { label: "הוספת אתר קיים", description: "מטא־דאטה בלבד: ה־Hub מתחיל לעקוב. לא נוצרים קבצים, ספריות או הרשאות.", tone: "info" },
+          { label: "יצירת אתר חדש", description: "אשף הקמה מלא: תכנון, בעלים, SharePoint, Mongo/TXT, פריסה ראשונית ואימות.", tone: "warning" },
+          { label: "פעולות מסוכנות", description: "יופיעו רק אחרי סקירה סופית עם חסמים, scope ומה לא ישתנה.", tone: "success" }
+        ]}
+      />
+      <div className="grid gap-4 md:grid-cols-2">
+        <button type="button" className="soft-panel p-5 text-right transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" onClick={() => selectFlow("track-existing")}>
+          <FolderCheck className="mb-4 text-[var(--accent)]" size={28} />
+          <h3 className="text-lg font-bold" style={{ color: "var(--text-strong)" }}>הוסף אתר קיים</h3>
+          <p className="mt-2 text-sm muted">האתר כבר קיים. ה־Hub ישמור רשומה ויריץ בדיקות קריאה בלבד. לא תהיה כתיבה ל־SharePoint.</p>
+          <span className="btn btn-primary mt-5 inline-flex">המשך להוספת אתר קיים</span>
+        </button>
+        <button type="button" className="soft-panel p-5 text-right transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" onClick={() => selectFlow("create-new")}>
+          <Sparkles className="mb-4 text-[var(--accent)]" size={28} />
+          <h3 className="text-lg font-bold" style={{ color: "var(--text-strong)" }}>צור אתר חדש</h3>
+          <p className="mt-2 text-sm muted">הקמת אתר חדש עם תוכנית, חסמים, פריסה ראשונית ואימות. האתר לא יסומן מוכן לפני שהשערים עוברים.</p>
+          <span className="btn btn-primary mt-5 inline-flex">המשך ליצירת אתר חדש</span>
+        </button>
+      </div>
     </div>
   );
 
@@ -1463,6 +1736,7 @@ export function SiteFormModal({
       return renderTrackSave();
     }
 
+    if (createStep === "storage") return renderStorageChoice();
     if (createStep === "basic") return renderBasicFields();
     if (createStep === "owners") return renderOwners();
     if (createStep === "location") return renderConnectionFields(true);
@@ -1514,7 +1788,7 @@ export function SiteFormModal({
           <div className="flex gap-2">
             <button className="btn btn-secondary" onClick={flow === "choice" ? onClose : goBack} type="button">{flow === "choice" ? "ביטול" : activeIndex <= 0 && !site ? "חזרה לבחירה" : "הקודם"}</button>
             {flow !== "choice" && !isLastStep ? (
-              <button className="btn btn-primary" onClick={goNext} type="button">הבא</button>
+              <button className="btn btn-primary" onClick={goNext} type="button" disabled={nextDisabled}>הבא</button>
             ) : null}
             {flow !== "choice" && isLastStep ? (
               <button className="btn btn-primary" onClick={save} type="button" disabled={saving}>

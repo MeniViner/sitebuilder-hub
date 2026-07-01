@@ -7,6 +7,7 @@ import { HelpLabel } from "../components/help/HelpLabel";
 import { KpiCard } from "../components/KpiCard";
 import { LinkRow } from "../components/LinkRow";
 import { LoadingState } from "../components/LoadingState";
+import { AdvancedDetails, GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { API_BASE_URL, DiagnosticsResult, getHubPersonalNumber, SharePointDiagnosticsCheck, sitesApi } from "../api/sitesApi";
@@ -19,7 +20,7 @@ import {
 } from "../utils/sharepointBrowserConnector";
 
 const boolLabel = (value?: boolean) => value ? "כן" : "לא";
-const sharePoint401Explanation = "הדפדפן מחובר ל־SharePoint, אבל השרת המקומי לא מחובר";
+const sharePoint401Explanation = "הדפדפן הוא מסלול SharePoint; השרת המקומי לא אמור להתחבר ל־SharePoint";
 
 const probeSummary = (probe?: Record<string, unknown>) => {
   if (!probe) return { ok: false, label: "לא נבדק", status: "" };
@@ -99,7 +100,7 @@ export function DiagnosticsPage() {
       } catch (backendError) {
         backendResult = {
           generatedAt: new Date().toISOString(),
-          connectorMode: "backend-sharepoint",
+          connectorMode: "browser-sharepoint",
           ok: false,
           errorCode: "BACKEND_DIAGNOSTICS_API_FAILED",
           humanExplanation: backendError instanceof Error ? backendError.message : String(backendError)
@@ -155,9 +156,51 @@ export function DiagnosticsPage() {
     <div className="space-y-5">
       <PageHeader
         title="בעיות וחיבורים"
-        subtitle="אבחון אחד לכל בעיות זהות, Origin, SharePoint, נתיבים ו־401."
+        subtitle="האם הדפדפן מחובר, האם השרת מחובר, ומה באמת חוסם פעולה"
         helpKey="diagnostics"
         actions={<button className="btn btn-secondary" type="button" onClick={() => load(siteId)}><RefreshCcw size={15} />רענון</button>}
+      />
+
+      <OperationalSummary
+        title="אבחון בלי לערבב חיבורים"
+        purpose="המסך מפריד בין חיבור הדפדפן ל־SharePoint לבין חיבור השרת. חיבור אחד יכול לעבוד גם כשהשני חסום."
+        state={diagnostics
+          ? `מצב אפליקציה: ${diagnostics.appMode} · אתר נבחר: ${diagnostics.selectedSite?.displayName || "לא נבחר"}`
+          : "טוען אבחון חיבורים וזהות."}
+        attention={combinedConnectorStatus.backendBlockedBy401 && browserSharePointCheck?.overall.digestWorks
+          ? "הדפדפן מחובר ומוכן לפעולות דפדפן; השרת המקומי עדיין חסום ב־SharePoint."
+          : browserSharePointCheck && !browserSharePointCheck.overall.digestWorks
+            ? "הדפדפן לא הצליח לקבל Digest. פעולות SharePoint דרך הדפדפן חסומות עד התחברות."
+            : backendSharePointCheck && !backendSharePointCheck.overall?.writeVerified
+              ? "השרת אינו מסלול SharePoint. פעולות SharePoint ממשיכות דרך הדפדפן בלבד."
+              : "אין חסם SharePoint ברור מהבדיקות האחרונות."}
+        attentionTone={browserSharePointCheck && !browserSharePointCheck.overall.digestWorks ? "danger" : backendSharePointCheck && !backendSharePointCheck.overall?.writeVerified ? "warning" : "success"}
+        nextAction={browserSharePointCheck || backendSharePointCheck
+          ? "קראו קודם את המחבר המועדף ואז עברו למסך הפעולה המתאים."
+          : "בחרו אתר ולחצו בדוק SharePoint עכשיו כדי לראות Browser ו־Backend זה לצד זה."}
+        blocked={error ? "האבחון לא נטען. רעננו את המסך או בדקו שה־API המקומי פעיל." : undefined}
+        tone={browserSharePointCheck && !browserSharePointCheck.overall.digestWorks ? "danger" : combinedConnectorStatus.backendBlockedBy401 ? "warning" : "info"}
+      />
+
+      <GuidedFlow
+        title="סדר בדיקה מומלץ"
+        subtitle="המטרה היא להבין מה חסום לפני שנוגעים בפריסה, שחזור או הרשאות."
+        steps={[
+          { title: "בחר אתר", description: "בדקו את אותו אתר שבו הפעולה נכשלה.", status: siteId ? "done" : "pending" },
+          { title: "בדוק SharePoint עכשיו", description: "מריץ בדיקת דפדפן ומציג שהשרת אינו מסלול SharePoint.", status: browserSharePointCheck || backendSharePointCheck ? "done" : "active" },
+          { title: "קרא את המחבר המועדף", description: "אם הדפדפן תקין, פעולות SharePoint רצות דרכו. אין fallback שרת.", status: browserSharePointCheck || backendSharePointCheck ? "active" : "pending" },
+          { title: "תקן במסך המתאים", description: "פריסה, גיבוי, Health או הרשאות מטופלים במסכים שלהם.", status: "pending" }
+        ]}
+      />
+
+      <ModeBoundary
+        title="גבולות חיבור"
+        items={[
+          { label: "Browser SharePoint", description: "משתמש בהתחברות של הדפדפן. מתאים לפעולות שמוגדרות להרצה בדפדפן.", tone: "success" },
+          { label: "Server SharePoint", description: "מושבת בכוונה. אין SharePoint בשרת.", tone: "neutral" },
+          { label: "Mongo / Builder", description: "בודק נתוני backend ו־seed. זה לא אותו דבר כמו SharePoint hosting.", tone: "info" },
+          { label: "Advanced", description: "נתיבים, headers ו־URLs מלאים מיועדים לתחקור טכני בלבד.", tone: "neutral" }
+        ]}
       />
 
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}
@@ -176,18 +219,18 @@ export function DiagnosticsPage() {
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard title="מצב אפליקציה" value={diagnostics.appMode} icon={<Cable size={18} />} tone="info" helpKey="mode.localDevOwner" />
             <KpiCard title="זהות פעילה" value={diagnostics.auth.activeBackendUser?.name || "לא ידוע"} icon={<CheckCircle2 size={18} />} tone={diagnostics.auth.activeBackendUser?.source === "sharepoint" ? "success" : diagnostics.auth.localFallbackActive ? "warning" : "neutral"} helpKey="sharepoint.currentUser" />
-            <KpiCard title="SharePoint write" value={diagnostics.sharePoint.writeEnabled ? "מוגדר" : "כבוי"} icon={<ShieldAlert size={18} />} tone={diagnostics.sharePoint.writeEnabled ? "warning" : "neutral"} helpKey="sharepoint.write" />
-            <KpiCard title="Storage backend" value={diagnostics.selectedSite?.storageBackend || "unknown"} icon={<CheckCircle2 size={18} />} tone={diagnostics.selectedSite?.storageBackend === "mongo" ? "info" : diagnostics.selectedSite?.storageBackend === "txt" ? "success" : "neutral"} helpKey="mode.owner" />
+            <KpiCard title="SharePoint בשרת" value="מושבת" icon={<ShieldAlert size={18} />} tone="neutral" helpKey="sharepoint.write" />
+            <KpiCard title="מקור נתונים" value={diagnostics.selectedSite?.storageBackend || "unknown"} icon={<CheckCircle2 size={18} />} tone={diagnostics.selectedSite?.storageBackend === "mongo" ? "info" : diagnostics.selectedSite?.storageBackend === "txt" ? "success" : "neutral"} helpKey="mode.owner" />
           </div>
 
           <SectionCard title="מצב וחיבורי בסיס" subtitle="Origin, API וזהות שהשרת רואה" helpKey="system.apiBaseUrl">
             <div className="grid gap-2 md:grid-cols-2">
-              <LinkRow label="Frontend origin" value={diagnostics.frontendOrigin || window.location.origin} />
-              <LinkRow label="CLIENT_ORIGIN" value={diagnostics.configuredClientOrigin} />
-              <LinkRow label="CLIENT_ORIGINS" value={diagnostics.configuredClientOrigins.join(", ")} />
-              <LinkRow label="API base URL" value={diagnostics.currentApiBaseUrl} />
+              <LinkRow label="כתובת הדפדפן" value={diagnostics.frontendOrigin || window.location.origin} />
+              <LinkRow label="כתובת מותרת ראשית" value={diagnostics.configuredClientOrigin} />
+              <LinkRow label="כתובות מותרות" value={diagnostics.configuredClientOrigins.join(", ")} />
+              <LinkRow label="כתובת API" value={diagnostics.currentApiBaseUrl} />
               <LinkRow label="Mongo" value={diagnostics.mongo} />
-              <LinkRow label="Current user detection" value={diagnostics.auth.currentUserDetectionResult} />
+              <LinkRow label="זיהוי משתמש" value={diagnostics.auth.currentUserDetectionResult} />
             </div>
             {diagnostics.envWarnings.length ? (
               <div className="mt-4 space-y-2">
@@ -198,7 +241,7 @@ export function DiagnosticsPage() {
 
           <SectionCard
             title="בחירת אתר לבדיקת SharePoint"
-            subtitle="הבדיקה תריץ Browser SharePoint Connector וגם Backend SharePoint Connector, ותציג אותם בנפרד."
+            subtitle="הבדיקה תריץ Browser SharePoint Connector ותציג שהשרת אינו מחבר SharePoint."
             helpKey="sharepoint.browserConnector"
             actions={<button className="btn btn-primary" type="button" disabled={busyAction === "sharepoint-check"} onClick={runSharePointCheck}><RefreshCcw size={15} />בדוק SharePoint עכשיו</button>}
           >
@@ -218,121 +261,121 @@ export function DiagnosticsPage() {
           </SectionCard>
 
           <SectionCard
-            title="Browser SharePoint Connector"
-            subtitle="בדיקות שמבוצעות ישירות מהדפדפן עם credentials: include מול אתר היעד."
+            title="חיבור דפדפן ל־SharePoint"
+            subtitle="בדיקות שמבוצעות ישירות מהדפדפן המחובר מול אתר היעד."
             helpKey="sharepoint.browserConnector"
           >
             {browserSharePointCheck ? (
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <KpiCard title="Current user" value={browserCurrentUser.label} icon={<CheckCircle2 size={18} />} tone={browserCurrentUser.ok ? "success" : "danger"} description={browserCurrentUser.status} helpKey="sharepoint.currentUser" />
-                  <KpiCard title="Read test" value={browserReadTest.label} icon={<CheckCircle2 size={18} />} tone={browserReadTest.ok ? "success" : "danger"} description={browserReadTest.status} helpKey="sharepoint.read" />
-                  <KpiCard title="Digest" value={browserDigestTest.label} icon={<CheckCircle2 size={18} />} tone={browserDigestTest.ok ? "success" : "danger"} description={`${browserDigestTest.status} · Digest found: ${boolLabel(browserSharePointCheck.digestTest.digestFound)}`} helpKey="sharepoint.digest" />
-                  <KpiCard title="Connector mode" value="browser-sharepoint" icon={<ShieldAlert size={18} />} tone={browserSharePointCheck.overall.digestWorks ? "success" : "warning"} description={browserSharePointCheck.writeCapability.message} helpKey="sharepoint.write" />
+                  <KpiCard title="משתמש מחובר" value={browserCurrentUser.label} icon={<CheckCircle2 size={18} />} tone={browserCurrentUser.ok ? "success" : "danger"} description={browserCurrentUser.status} helpKey="sharepoint.currentUser" />
+                  <KpiCard title="קריאת בדיקה" value={browserReadTest.label} icon={<CheckCircle2 size={18} />} tone={browserReadTest.ok ? "success" : "danger"} description={browserReadTest.status} helpKey="sharepoint.read" />
+                  <KpiCard title="Digest לכתיבה" value={browserDigestTest.label} icon={<CheckCircle2 size={18} />} tone={browserDigestTest.ok ? "success" : "danger"} description={`${browserDigestTest.status} · נמצא: ${boolLabel(browserSharePointCheck.digestTest.digestFound)}`} helpKey="sharepoint.digest" />
+                  <KpiCard title="מסלול מומלץ" value="דפדפן" icon={<ShieldAlert size={18} />} tone={browserSharePointCheck.overall.digestWorks ? "success" : "warning"} description={browserSharePointCheck.writeCapability.message} helpKey="sharepoint.write" />
                 </div>
 
                 <div className={`rounded-lg border p-3 text-sm ${browserSharePointCheck.overall.digestWorks ? "" : "panel-warning"}`} style={{ borderColor: "var(--border)" }}>
                   <p className="font-bold" style={{ color: "var(--text-strong)" }}>{browserSharePointCheck.overall.humanExplanation}</p>
                   <p className="mt-1 muted">{browserSharePointCheck.overall.suggestedFix}</p>
                   {combinedConnectorStatus.backendBlockedBy401 && browserSharePointCheck.overall.digestWorks ? (
-                    <p className="mt-2 font-bold" style={{ color: "var(--success)" }}>הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. השרת המקומי לא מחובר ל־SharePoint. במצב SharePoint-hosted המערכת תשתמש בחיבור דרך הדפדפן.</p>
+                    <p className="mt-2 font-bold" style={{ color: "var(--success)" }}>הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. אין SharePoint בשרת; המערכת משתמשת בחיבור דרך הדפדפן.</p>
                   ) : null}
                 </div>
 
                 <div className="grid gap-2 md:grid-cols-2">
-                  <LinkRow label="Target SharePoint site" value={browserSharePointCheck.targetSharePointSiteUrl} isUrl />
-                  <LinkRow label="Current user URL/status" value={`${browserSharePointCheck.currentUser.url} · ${browserSharePointCheck.currentUser.status || "-"}`} />
-                  <LinkRow label="Read URL/status" value={`${browserSharePointCheck.readTest.url} · ${browserSharePointCheck.readTest.status || "-"}`} />
-                  <LinkRow label="Contextinfo URL/status" value={`${browserSharePointCheck.digestTest.url} · ${browserSharePointCheck.digestTest.status || "-"}`} />
-                  <LinkRow label="Digest found" value={boolLabel(browserSharePointCheck.digestTest.digestFound)} />
-                  <LinkRow label="Digest preview" value={browserSharePointCheck.digestTest.digestPreview ? `${browserSharePointCheck.digestTest.digestPreview}...` : "-"} />
+                  <LinkRow label="אתר SharePoint שנבדק" value={browserSharePointCheck.targetSharePointSiteUrl} isUrl />
+                  <LinkRow label="בדיקת משתמש" value={`${browserSharePointCheck.currentUser.url} · ${browserSharePointCheck.currentUser.status || "-"}`} />
+                  <LinkRow label="בדיקת קריאה" value={`${browserSharePointCheck.readTest.url} · ${browserSharePointCheck.readTest.status || "-"}`} />
+                  <LinkRow label="בדיקת Digest" value={`${browserSharePointCheck.digestTest.url} · ${browserSharePointCheck.digestTest.status || "-"}`} />
+                  <LinkRow label="נמצא Digest" value={boolLabel(browserSharePointCheck.digestTest.digestFound)} />
+                  <LinkRow label="תצוגה מקוצרת" value={browserSharePointCheck.digestTest.digestPreview ? `${browserSharePointCheck.digestTest.digestPreview}...` : "-"} />
                 </div>
               </div>
             ) : (
-              <EmptyState title="Browser SharePoint עדיין לא נבדק" description="לחצו על בדיקה כדי לראות currentuser, read ו־Digest מהדפדפן." />
+              <EmptyState title="חיבור הדפדפן עדיין לא נבדק" description="לחצו על בדיקה כדי לראות משתמש מחובר, קריאה ו־Digest מהדפדפן." />
             )}
           </SectionCard>
 
           <SectionCard
-            title="Backend SharePoint Connector"
-            subtitle="בדיקות שמבוצעות מהשרת המקומי. כשל 401 כאן לא חוסם מצב SharePoint-hosted אם הדפדפן תקין."
+            title="אין SharePoint בשרת"
+            subtitle="השרת לא מבצע בדיקות או פעולות SharePoint. הנתונים כאן מסבירים שהמסלול מושבת בכוונה."
             helpKey="sharepoint.backendConnector"
           >
             {backendSharePointCheck ? (
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <KpiCard title="Backend current user" value={backendCurrentUser.label} icon={<CheckCircle2 size={18} />} tone={backendCurrentUser.ok ? "success" : "danger"} description={backendCurrentUser.status} helpKey="sharepoint.currentUser" />
-                  <KpiCard title="Backend read" value={backendReadTest.label} icon={<CheckCircle2 size={18} />} tone={backendReadTest.ok ? "success" : "danger"} description={backendReadTest.status} helpKey="sharepoint.read" />
-                  <KpiCard title="Backend digest" value={backendDigestTest.label} icon={<CheckCircle2 size={18} />} tone={backendDigestTest.ok ? "success" : "danger"} description={backendDigestTest.status} helpKey="sharepoint.digest" />
-                  <KpiCard title="Backend write verified" value={boolLabel(backendSharePointCheck.overall?.writeVerified)} icon={<ShieldAlert size={18} />} tone={backendSharePointCheck.overall?.writeVerified ? "success" : "warning"} helpKey="sharepoint.write" />
+                  <KpiCard title="משתמש בשרת" value="מושבת" icon={<CheckCircle2 size={18} />} tone="neutral" description="לא נבדק מהשרת" helpKey="sharepoint.currentUser" />
+                  <KpiCard title="קריאת שרת" value="מושבת" icon={<CheckCircle2 size={18} />} tone="neutral" description="לא נשלחות בקשות GET" helpKey="sharepoint.read" />
+                  <KpiCard title="Digest שרת" value="מושבת" icon={<CheckCircle2 size={18} />} tone="neutral" description="Digest נבדק בדפדפן" helpKey="sharepoint.digest" />
+                  <KpiCard title="כתיבת SharePoint" value="בדפדפן בלבד" icon={<ShieldAlert size={18} />} tone="warning" helpKey="sharepoint.write" />
                 </div>
 
                 {!backendSharePointCheck.overall?.writeVerified ? (
                   <div className="rounded-lg border p-3 text-sm" style={{ background: "var(--warning-soft)", borderColor: "color-mix(in srgb, var(--warning) 35%, var(--border))" }}>
                     <p className="font-bold" style={{ color: "var(--text-strong)" }}>{backendSharePointCheck.overall?.humanExplanation || backendSharePointCheck.humanExplanation || sharePoint401Explanation}</p>
-                    <p className="mt-1 muted">{backendSharePointCheck.overall?.suggestedFix || backendSharePointCheck.suggestedFix || "בדקו Cookie / Bearer token / כתובת אתר."}</p>
+                    <p className="mt-1 muted">{backendSharePointCheck.overall?.suggestedFix || backendSharePointCheck.suggestedFix || "הריצו בדיקת Browser SharePoint מתוך משתמש מחובר."}</p>
                     {backendSharePointCheck.overall?.failedUrl ? <code className="num mt-2 block break-all text-xs">{backendSharePointCheck.overall.failedUrl}</code> : null}
                   </div>
                 ) : null}
 
                 <div className="grid gap-2 md:grid-cols-2">
-                  <LinkRow label="Connector mode" value={backendSharePointCheck.connectorMode || "backend-sharepoint"} />
-                  <LinkRow label="Target SharePoint site" value={backendSharePointCheck.targetSharePointSiteUrl} isUrl />
-                  <LinkRow label="Failing URL" value={backendSharePointCheck.overall?.failedUrl || "-"} />
-                  <LinkRow label="HTTP status" value={backendSharePointCheck.overall?.failedStatus ? String(backendSharePointCheck.overall.failedStatus) : "-"} />
-                  <LinkRow label="Backend error code" value={backendSharePointCheck.overall?.failedBackendErrorCode || backendSharePointCheck.errorCode || "-"} />
-                  <LinkRow label="SHAREPOINT_WRITE_ENABLED" value={boolLabel(Boolean(backendSharePointCheck.configured?.sharePointWriteEnabled))} />
-                  <LinkRow label="Auth cookie configured" value={boolLabel(Boolean(backendSharePointCheck.configured?.sharePointAuthCookieConfigured))} />
-                  <LinkRow label="Cookie names" value={Array.isArray(backendSharePointCheck.configured?.sharePointAuthCookieNames) ? (backendSharePointCheck.configured?.sharePointAuthCookieNames as string[]).join(", ") || "-" : "-"} />
-                  <LinkRow label="Bearer token configured" value={boolLabel(Boolean(backendSharePointCheck.configured?.sharePointBearerTokenConfigured))} />
-                  <LinkRow label="Unauthenticated write bypass" value={boolLabel(Boolean(backendSharePointCheck.configured?.unauthenticatedWriteBypassEnabled))} />
+                  <LinkRow label="מסלול מחבר" value={backendSharePointCheck.connectorMode || "browser-sharepoint"} />
+                  <LinkRow label="אתר SharePoint שנבדק" value={backendSharePointCheck.targetSharePointSiteUrl} isUrl />
+                  <LinkRow label="כתובת שנכשלה" value={backendSharePointCheck.overall?.failedUrl || "-"} />
+                  <LinkRow label="סטטוס HTTP" value={backendSharePointCheck.overall?.failedStatus ? String(backendSharePointCheck.overall.failedStatus) : "-"} />
+                  <LinkRow label="קוד שגיאת שרת" value={backendSharePointCheck.overall?.failedBackendErrorCode || backendSharePointCheck.errorCode || "-"} />
+                  <LinkRow label="SharePoint בשרת מושבת" value={boolLabel(Boolean(backendSharePointCheck.configured?.serverSharePointDisabled))} />
+                  <LinkRow label="הגדרת SharePoint שרתית" value="לא נדרשת ולא בשימוש" />
                 </div>
               </div>
             ) : (
-              <EmptyState title="Backend SharePoint עדיין לא נבדק" description="לחצו על בדיקה כדי לראות אם השרת המקומי מחובר ל־SharePoint." />
+              <EmptyState title="מסלול השרת מושבת" description="לחצו על בדיקה כדי לראות שהשרת לא משמש כחיבור SharePoint ושפעולות SharePoint רצות בדפדפן." />
             )}
           </SectionCard>
 
-          <SectionCard
-            title="Builder Backend"
-            subtitle="הגדרות Builder backend שה־HUB מחזיר ל־Frontend בזמן ריצה. אין כאן API keys גולמיים."
-            helpKey="create.backendApiUrl"
-          >
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <LinkRow label="Current environment" value={diagnostics.builderBackendConfig?.currentEnvironment || "unknown"} />
-              <LinkRow label="Default backend" value={diagnostics.builderBackendConfig?.defaultBuilderBackendApiUrl || "not configured"} />
-              <LinkRow label="Default credential ref" value={diagnostics.builderBackendConfig?.defaultBuilderApiKeyRef || "not configured"} />
-              <LinkRow label="Production/classified default" value={diagnostics.builderBackendConfig?.productionClassifiedDefaultExists ? "קיים" : "חסר"} />
-            </div>
-            <div className="mt-3 grid gap-2">
-              {diagnostics.builderBackendConfig?.builderBackendOptions?.length ? diagnostics.builderBackendConfig.builderBackendOptions.map((option) => (
-                <div key={option.backendApiUrl} className="rounded-md border p-3 text-sm" style={{ borderColor: "var(--border)", background: "var(--surface-muted)" }}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-bold" style={{ color: "var(--text-strong)" }}>{option.label}</p>
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      {option.default ? <span className="badge badge-success">default</span> : null}
-                      <span className={`badge ${option.allowed ? "badge-success" : "badge-danger"}`}>{option.allowed ? "allowed" : "blocked"}</span>
-                      <span className={`badge ${option.credentialConfigured ? "badge-success" : "badge-warning"}`}>{option.credentialConfigured ? "credential configured" : "credential missing"}</span>
+          <AdvancedDetails title="Advanced: Builder backend" description="תצורת backend, credential refs וסביבות">
+            <SectionCard
+              title="Builder Backend"
+              subtitle="הגדרות Builder backend שה־HUB מחזיר ל־Frontend בזמן ריצה. אין כאן API keys גולמיים."
+              helpKey="create.backendApiUrl"
+            >
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <LinkRow label="Current environment" value={diagnostics.builderBackendConfig?.currentEnvironment || "unknown"} />
+                <LinkRow label="Default backend" value={diagnostics.builderBackendConfig?.defaultBuilderBackendApiUrl || "not configured"} />
+                <LinkRow label="Default credential ref" value={diagnostics.builderBackendConfig?.defaultBuilderApiKeyRef || "not configured"} />
+                <LinkRow label="Production/classified default" value={diagnostics.builderBackendConfig?.productionClassifiedDefaultExists ? "קיים" : "חסר"} />
+              </div>
+              <div className="mt-3 grid gap-2">
+                {diagnostics.builderBackendConfig?.builderBackendOptions?.length ? diagnostics.builderBackendConfig.builderBackendOptions.map((option) => (
+                  <div key={option.backendApiUrl} className="rounded-md border p-3 text-sm" style={{ borderColor: "var(--border)", background: "var(--surface-muted)" }}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-bold" style={{ color: "var(--text-strong)" }}>{option.label}</p>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {option.default ? <span className="badge badge-success">default</span> : null}
+                        <span className={`badge ${option.allowed ? "badge-success" : "badge-danger"}`}>{option.allowed ? "allowed" : "blocked"}</span>
+                        <span className={`badge ${option.credentialConfigured ? "badge-success" : "badge-warning"}`}>{option.credentialConfigured ? "credential configured" : "credential missing"}</span>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid gap-1 md:grid-cols-2">
+                      <LinkRow label="URL" value={option.backendApiUrl} />
+                      <LinkRow label="Host" value={option.backendApiUrlHost} />
+                      <LinkRow label="Environment" value={option.environment} />
+                      <LinkRow label="Credential ref" value={option.credentialRef || "not configured"} />
                     </div>
                   </div>
-                  <div className="mt-2 grid gap-1 md:grid-cols-2">
-                    <LinkRow label="URL" value={option.backendApiUrl} />
-                    <LinkRow label="Host" value={option.backendApiUrlHost} />
-                    <LinkRow label="Environment" value={option.environment} />
-                    <LinkRow label="Credential ref" value={option.credentialRef || "not configured"} />
-                  </div>
-                </div>
-              )) : (
-                <EmptyState title="לא הוגדר Builder backend" description="יש להגדיר SITE_BUILDER_DEFAULT_BACKEND_API_URL או SITE_BUILDER_BACKEND_API_URLS." />
-              )}
-            </div>
-          </SectionCard>
+                )) : (
+                  <EmptyState title="לא הוגדר Builder backend" description="יש להגדיר SITE_BUILDER_DEFAULT_BACKEND_API_URL או SITE_BUILDER_BACKEND_API_URLS." />
+                )}
+              </div>
+            </SectionCard>
+          </AdvancedDetails>
 
-          <SectionCard
-            title="Runtime config"
-            subtitle="סטטוס שמור של קובץ runtime config. API key מוצג כסטטוס בלבד, לא כערך."
-            helpKey="diagnostics"
-          >
+          <AdvancedDetails title="Advanced: Runtime config" description="נתוני runtime config בלי לחשוף API keys">
+            <SectionCard
+              title="Runtime config"
+              subtitle="סטטוס שמור של קובץ runtime config. API key מוצג כסטטוס בלבד, לא כערך."
+              helpKey="diagnostics"
+            >
             {diagnostics.runtimeConfig ? (
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-2">
@@ -343,7 +386,7 @@ export function DiagnosticsPage() {
                 <div className="grid gap-2 md:grid-cols-2">
                   <LinkRow label="Path" value={diagnostics.runtimeConfig.path || "-"} />
                   <LinkRow label="URL" value={diagnostics.runtimeConfig.url || "-"} isUrl />
-                  <LinkRow label="Storage backend" value={diagnostics.runtimeConfig.storageBackend || "-"} />
+                  <LinkRow label="מקור נתונים" value={diagnostics.runtimeConfig.storageBackend || "-"} />
                   <LinkRow label="Backend host" value={diagnostics.runtimeConfig.backendApiUrlHost || "-"} />
                   <LinkRow label="siteId" value={diagnostics.runtimeConfig.builderSiteId || "-"} />
                   <LinkRow label="Checked at" value={formatDateTime(diagnostics.runtimeConfig.checkedAt)} />
@@ -353,13 +396,15 @@ export function DiagnosticsPage() {
             ) : (
               <EmptyState title="אין runtime config להצגה" description="בחרו אתר כדי לראות סטטוס runtime config." />
             )}
-          </SectionCard>
+            </SectionCard>
+          </AdvancedDetails>
 
-          <SectionCard
-            title="Builder / Mongo backend connector"
-            subtitle="סטטוס שמור של בדיקות Builder backend, registry, safeCollectionName ו־seed docs."
-            helpKey="diagnostics"
-          >
+          <AdvancedDetails title="Advanced: Builder / Mongo" description="Registry, collection, seed docs ו־safeCollectionName">
+            <SectionCard
+              title="Builder / Mongo backend connector"
+              subtitle="סטטוס שמור של בדיקות Builder backend, registry, safeCollectionName ו־seed docs."
+              helpKey="diagnostics"
+            >
             {diagnostics.builderBackend ? (
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-2">
@@ -383,9 +428,11 @@ export function DiagnosticsPage() {
             ) : (
               <EmptyState title="אין סטטוס Builder backend" description="בחרו אתר Mongo והריצו בדיקת Mongo backend כדי לראות ראיות." />
             )}
-          </SectionCard>
+            </SectionCard>
+          </AdvancedDetails>
 
-          <SectionCard title="נתיבי SharePoint" subtitle="הנתיבים המחושבים לפי האתר הנבחר, כולל URL סופי וצורה מקודדת" helpKey="site.finalDistPath">
+          <AdvancedDetails title="Advanced: נתיבי SharePoint" description="נתיבי REST ו־server-relative לאבחון טכני">
+            <SectionCard title="נתיבי SharePoint" subtitle="הנתיבים המחושבים לפי האתר הנבחר, כולל URL סופי וצורה מקודדת" helpKey="site.finalDistPath">
             {pathRows.length ? (
               <DataTable
                 columns={pathColumns}
@@ -404,7 +451,8 @@ export function DiagnosticsPage() {
             ) : (
               <EmptyState title="אין נתיבי אתר" description="בחרו אתר פעיל כדי לראות נתיבי SharePoint." />
             )}
-          </SectionCard>
+            </SectionCard>
+          </AdvancedDetails>
         </>
       ) : null}
     </div>

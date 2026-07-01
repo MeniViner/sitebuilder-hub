@@ -98,6 +98,15 @@ export function normalizeError(error: unknown): { code: string; message: string;
     };
   }
 
+  if (error instanceof Error && error.message === "txt-to-mongo-migration-snapshot-invalid") {
+    return {
+      code: "TXT_TO_MONGO_SNAPSHOT_INVALID",
+      message: "אי אפשר להמיר ל־Mongo כי Snapshot ה־TXT מהדפדפן חסר או לא תקין.",
+      status: 400,
+      details: (error as Error & { details?: unknown }).details
+    };
+  }
+
   if (error instanceof Error && error.message === "browser-sharepoint-evidence-connector-mode-required") {
     return {
       code: "BROWSER_SHAREPOINT_EVIDENCE_INVALID",
@@ -160,34 +169,26 @@ export function normalizeError(error: unknown): { code: string; message: string;
     };
   }
 
-  if (error instanceof Error && error.message === "restore-browser-sharepoint-not-implemented") {
+  if (error instanceof Error && error.message === "browser-sharepoint-required") {
     return {
-      code: "RESTORE_BROWSER_SHAREPOINT_NOT_IMPLEMENTED",
-      message: "שחזור דורש הרשאת שרת ל־SharePoint או מימוש שחזור דרך הדפדפן.",
+      code: "BROWSER_SHAREPOINT_REQUIRED",
+      message: "פעולת SharePoint חייבת לרוץ דרך הדפדפן הפעיל. השרת שומר רק סטטוס ו־Evidence.",
       status: 409
     };
   }
 
-  if (error instanceof Error && error.message === "browser-sharepoint-operation-not-implemented") {
+  if (error instanceof Error && error.message === "sharepoint-browser-execution-required") {
     return {
-      code: "BROWSER_SHAREPOINT_OPERATION_NOT_IMPLEMENTED",
-      message: "הפעולה הזאת עדיין לא הוסבה לחיבור דרך הדפדפן.",
+      code: "SHAREPOINT_BROWSER_EXECUTION_REQUIRED",
+      message: "פעולת SharePoint לא רצה בשרת. יש להפעיל אותה דרך הדפדפן המחובר ולשמור Evidence.",
       status: 409
     };
   }
 
-  if (error instanceof Error && error.message === "backend-sharepoint-service-auth-required") {
+  if (error instanceof Error && error.message === "browser-backup-verification-required") {
     return {
-      code: "BACKEND_SHAREPOINT_SERVICE_AUTH_REQUIRED",
-      message: "הפעולה הזאת עדיין רצה דרך השרת ולכן דורשת הרשאת שרת ל־SharePoint.",
-      status: 409
-    };
-  }
-
-  if (error instanceof Error && error.message === "admin-sync-backend-service-auth-or-browser-required") {
-    return {
-      code: "ADMIN_SYNC_BACKEND_SERVICE_AUTH_OR_BROWSER_REQUIRED",
-      message: "סנכרון מנהלים דרך השרת עדיין דורש הרשאת שרת ל־SharePoint או הסבה לחיבור דרך הדפדפן.",
+      code: "BROWSER_BACKUP_VERIFICATION_REQUIRED",
+      message: "אימות גיבוי SharePoint מתבצע דרך הדפדפן בלבד. השרת לא קורא קבצים מ־SharePoint.",
       status: 409
     };
   }
@@ -409,7 +410,7 @@ export function normalizeError(error: unknown): { code: string; message: string;
   if (error instanceof Error && error.name === "SharePointWriteCapabilityError") {
     return {
       code: "SHAREPOINT_WRITE_NOT_CONFIGURED",
-      message: "Deploy cannot run because SharePoint write is not configured.",
+      message: "מסלול SharePoint מהשרת מושבת. השתמשו בפעולת דפדפן מחובר.",
       status: 409,
       details: { reason: error.message }
     };

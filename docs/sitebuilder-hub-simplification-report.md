@@ -203,3 +203,6 @@ The HUB is now easier to run locally and safer to reason about, but it is still 
 - Production identity/RBAC is still incomplete.
 - Backup and restore remain advanced operational flows and need environment-specific validation before production use.
 - Batch deploy exists in the backend but is intentionally not the main MVP UI path.
+# Legacy Historical Report
+
+This document includes older server-side SharePoint terminology. The current source of truth is `docs/sharepoint-browser-only-status-report.md`: SharePoint operations run through the browser only.

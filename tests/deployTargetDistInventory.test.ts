@@ -275,10 +275,11 @@ describe("deploy target dist inventory stale-file policy", () => {
       backupRequired: true,
       mode: "production-safe"
     });
-    expect(plan.missingRequirements).toContain("Deploy cannot run because SharePoint write is not configured.");
+    expect(plan.missingRequirements).not.toContain("Deploy cannot run because SharePoint write is not configured.");
+    expect(plan.connectorMode).toBe("browser-sharepoint");
     expect(planJson).toContain("read-only");
-    expect(planJson).toContain("assets/legacy.js");
-    expect(planJson).toContain("absent-from-release-artifact");
+    expect(planJson).toContain("browser-sharepoint-inventory-required");
+    expect(planJson).toContain("Target dist inventory was not read from the server");
     expect(planJson).toContain("keep");
     expect(planJson).not.toContain("\"delete\"");
     expect(mocks.uploadSharePointFile).not.toHaveBeenCalled();

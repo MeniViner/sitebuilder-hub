@@ -1,39 +1,34 @@
 import { env } from "../config/env";
 import { Job } from "../models/Job";
-import { Release } from "../models/Release";
 import { Site } from "../models/Site";
 import { SiteVersionDeployment } from "../models/SiteVersionDeployment";
 import { logger } from "../utils/logger";
-import { executeSharePointBackup, executeSharePointRestore } from "./realBackup.service";
-import { executeSiteBootstrap } from "./siteBootstrap.service";
-import { executeSiteProvisioning } from "./siteProvisioning.service";
-import { executeSharePointDeploy } from "./deployArtifact.service";
-import { executeAdminTxtRepair } from "./admins.service";
-import { readLiveAdminSources } from "./liveAdminSources.service";
-import { executePermissionsSetup } from "./permissionsSetup.service";
-import { runReadOnlySharePointHealthCheck } from "./sharepointHealth.service";
-import { assertSharePointWriteAvailable } from "./sharepointOperationClient";
-import {
-  assertDistinctRecentVerifiedBackupForRestore,
-  assertRecentVerifiedBackupForDangerousWrite
-} from "./writeSafety.service";
-import { buildDeployPolicy, buildLocalDevDeploySafetySnapshot } from "./deployPolicy.service";
-import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
+import { getDangerousValidationBypassEnvVar } from "./dangerousBackupBypass.service";
 import { writeSystemAuditLog } from "./audit.service";
-import { isBrowserRequiredJob, shouldBlockBackendSharePointByDefault } from "./sharepointOperationPolicy.service";
+import { isBrowserRequiredJob } from "./sharepointOperationPolicy.service";
 import {
   claimNextJob,
-  setJobEvidence,
   setJobFailed,
-  setJobProgress,
-  setJobResult,
   setJobStatus,
-  setJobTargetPaths,
   setJobSucceeded
 } from "./jobs.service";
 
 let timer: NodeJS.Timeout | null = null;
 let isProcessing = false;
+
+const SHAREPOINT_BROWSER_ONLY_JOB_TYPES = new Set([
+  "health-check",
+  "deploy",
+  "backup",
+  "restore",
+  "admin-sync",
+  "repair",
+  "version-upgrade",
+  "version-rollback",
+  "site-provision",
+  "permissions-setup",
+  "site-bootstrap"
+]);
 
 const SUMMARY_FIELD_PATTERN = /(id|code|version|count|counts|bytes|status|at|steps|type|attempt)$/i;
 const AUDIT_PAYLOAD_PREVIEW_LIMIT = 10;
@@ -200,150 +195,15 @@ async function handleVersionUpgrade(job: any) {
     siteId: job.siteId?.toString(),
     payload: logger.isPayloadLoggingEnabled() ? job.payload : undefined
   });
-  logger[isRollback ? "warn" : "info"]("releases", isRollback ? "Handling version rollback job" : "Handling version deploy job", {
+  logger.warn("jobs", "Server worker refused SharePoint version job; use the browser connector", {
     jobId: job._id.toString(),
     siteId: job.siteId?.toString(),
+    type: job.type,
+    connectorMode: job.connectorMode,
+    executionMode: job.executionMode,
     rollbackReason: isRollback ? (job.payload as any)?.rollbackReason : undefined
   });
-  assertApprovedForExecution(job, isRollback ? "version-rollback-job-requires-approval" : "version-upgrade-job-requires-approval");
-  assertSharePointWriteAvailable();
-
-  const payload = (job.payload || {}) as {
-    releaseId?: string;
-    deploymentId?: string;
-    targetVersion?: string;
-    deployMode?: string;
-    deployPolicy?: {
-      requiresRecentVerifiedBackup?: boolean;
-      mode?: string;
-    };
-    backupSafety?: {
-      policy?: string;
-      required?: boolean;
-      satisfied?: boolean;
-      reason?: string;
-      backup?: {
-        id?: string;
-        backupId?: string;
-      };
-    };
-  };
-
-  if (!job.siteId || !payload.releaseId || !payload.deploymentId) {
-    throw new Error("Missing deployment payload");
-  }
-
-  const [site, release, deployment] = await Promise.all([
-    Site.findById(job.siteId),
-    Release.findById(payload.releaseId),
-    SiteVersionDeployment.findById(payload.deploymentId)
-  ]);
-
-  if (!site || !release || !deployment) {
-    throw new Error("Site/Release/Deployment not found");
-  }
-
-  const deployPolicy = payload.deployPolicy?.mode
-    ? { ...buildDeployPolicy(payload.deployPolicy.mode, isRollback ? "rollback" : "deploy"), ...payload.deployPolicy }
-    : buildDeployPolicy(payload.deployMode, isRollback ? "rollback" : "deploy");
-  const storedBackupSafety = payload.backupSafety;
-  const storedBackupOverrideAccepted = Boolean(
-    storedBackupSafety?.satisfied &&
-    storedBackupSafety?.required === false &&
-    (storedBackupSafety?.policy === "local-dev-owner-override" || storedBackupSafety?.policy === "dangerous-env-backup-bypass")
-  );
-  await setJobProgress(
-    job._id.toString(),
-    15,
-    deployPolicy.requiresRecentVerifiedBackup
-      ? isRollback
-        ? "Checking recent verified backup before SharePoint rollback"
-        : "Checking recent verified backup before SharePoint deploy"
-      : "Local/dev owner deploy: backup policy is recorded as not required"
-  );
-  const backupSafety = deployPolicy.requiresRecentVerifiedBackup && !storedBackupOverrideAccepted
-    ? await assertRecentVerifiedBackupForDangerousWrite({
-        siteId: site._id,
-        operation: isRollback ? "rollback" : "deploy"
-      })
-    : storedBackupOverrideAccepted
-      ? storedBackupSafety
-      : buildLocalDevDeploySafetySnapshot(isRollback ? "rollback" : "deploy");
-  logger.info("backups", "Execution-time dangerous write backup safety satisfied", {
-    jobId: job._id.toString(),
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    operation: isRollback ? "rollback" : "deploy",
-    backupSafety
-  });
-  logger.info("releases", "Deploy/rollback execution backup safety re-check completed", {
-    jobId: job._id.toString(),
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    operation: isRollback ? "rollback" : "deploy",
-    backupId: backupSafety && "backup" in backupSafety ? backupSafety.backup?.id : undefined,
-    backupExternalId: backupSafety && "backup" in backupSafety ? backupSafety.backup?.backupId : undefined
-  });
-
-  site.targetVersion = release.version;
-  site.versionStatus = "updating";
-  site.sharePointStatus.deployStatus = "running" as any;
-  await site.save();
-
-  await setJobProgress(
-    job._id.toString(),
-    25,
-    isRollback ? "Planning SharePoint rollback from release artifact" : "Planning SharePoint deploy from release artifact"
-  );
-  const result = await executeSharePointDeploy({
-    siteId: site._id.toString(),
-    releaseId: release._id.toString(),
-    deploymentId: deployment._id.toString()
-  });
-  const targetPaths = result.plan.files.map((file) => file.targetPath);
-  await setJobTargetPaths(job._id.toString(), targetPaths, `Recorded ${targetPaths.length} deploy target paths`);
-  await setJobEvidence(
-    job._id.toString(),
-    (result.deployment as any).verification?.evidence || [],
-    isRollback ? "Rollback verification evidence recorded" : "Deploy verification evidence recorded"
-  );
-  await setJobResult(
-    job._id.toString(),
-    {
-      finalAppUrl: (result.deployment as any).verification?.finalAppUrlVerification?.url,
-      finalAppUrlVerification: (result.deployment as any).verification?.finalAppUrlVerification,
-      postHealth: (result.deployment as any).verification?.postHealth
-        ? {
-            checkedAt: (result.deployment as any).verification.postHealth.checkedAt,
-            derivedHealthStatus: (result.deployment as any).verification.postHealth.derivedHealthStatus,
-            evidenceCount: (result.deployment as any).verification.postHealth.evidenceCount,
-            failedCount: (result.deployment as any).verification.postHealth.failedCount,
-            authBlockedCount: (result.deployment as any).verification.postHealth.authBlockedCount
-          }
-        : undefined,
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      releaseId: release._id.toString(),
-      releaseVersion: release.version,
-      deploymentId: deployment._id.toString(),
-      filesCount: result.plan.summary.filesCount,
-      totalSizeBytes: result.plan.summary.totalSizeBytes,
-      finalDistRoot: result.plan.resolvedPaths.finalDistRoot,
-      targetVersion: release.version,
-      mode: isRollback ? "rollback" : "deploy",
-      rollbackReason: isRollback ? (job.payload as any)?.rollbackReason || "" : undefined,
-      backupSafety
-    },
-    isRollback ? "Rollback result recorded" : "Deploy result recorded"
-  );
-
-  await setJobProgress(
-    job._id.toString(),
-    95,
-    isRollback
-      ? `Rolled back ${result.plan.summary.filesCount} files to ${result.plan.resolvedPaths.finalDistRoot}`
-      : `Uploaded ${result.plan.summary.filesCount} files to ${result.plan.resolvedPaths.finalDistRoot}`
-  );
+  throw new Error("sharepoint-browser-execution-required");
 }
 
 async function handleBackup(job: any) {
@@ -352,33 +212,7 @@ async function handleBackup(job: any) {
     siteId: job.siteId?.toString(),
     payload: logger.isPayloadLoggingEnabled() ? job.payload : undefined
   });
-  assertApprovedForExecution(job, "backup-job-requires-approval");
-  assertSharePointWriteAvailable();
-
-  if (!job.siteId) throw new Error("Missing siteId for backup job");
-  const site = await Site.findById(job.siteId);
-  if (!site) throw new Error("Site not found");
-
-  await setJobProgress(job._id.toString(), 20, "Starting real SharePoint backup execution");
-  const backup = await executeSharePointBackup({
-    siteId: site._id.toString(),
-    jobId: job._id.toString(),
-    createdBy: job.createdBy || "system",
-    sourcePaths: (job.payload as any)?.sourcePaths
-  });
-  await setJobTargetPaths(job._id.toString(), [backup.storagePath], "Backup target path recorded");
-  await setJobEvidence(job._id.toString(), (backup as any).sourcePaths || [], "Backup source evidence recorded");
-  await setJobResult(
-    job._id.toString(),
-    {
-      backupId: backup.backupId,
-      storagePath: backup.storagePath,
-      filesCount: backup.filesCount,
-      sizeBytes: backup.sizeBytes
-    },
-    "Backup result recorded"
-  );
-  await setJobProgress(job._id.toString(), 90, `SharePoint backup created at ${backup.storagePath}`);
+  throw new Error("sharepoint-browser-execution-required");
 }
 
 async function handleRestore(job: any) {
@@ -387,80 +221,7 @@ async function handleRestore(job: any) {
     siteId: job.siteId?.toString(),
     payload: logger.isPayloadLoggingEnabled() ? job.payload : undefined
   });
-  logger.info("backups", "Restore job execution requested", {
-    jobId: job._id.toString(),
-    siteId: job.siteId?.toString(),
-    requiresApproval: Boolean(job.requiresApproval),
-    approvedAt: job.approvedAt
-  });
-
-  if ((!job.requiresApproval || !job.approvedAt || !job.approvedBy) && !isDangerousValidationBypassEnabled("approval-gates")) {
-    logger.error("errors", "Restore job blocked because approval is missing", {
-      jobId: job._id.toString(),
-      siteId: job.siteId?.toString(),
-      requiresApproval: Boolean(job.requiresApproval),
-      approvedAt: job.approvedAt
-    });
-    throw new Error("restore-job-requires-approval");
-  }
-
-  assertSharePointWriteAvailable();
-
-  const payload = (job.payload || {}) as {
-    backupId?: string;
-    siteBackupId?: string;
-    backupObjectId?: string;
-    backupExternalId?: string;
-  };
-  const backupId = String(payload.backupId || payload.siteBackupId || payload.backupObjectId || "").trim();
-  if (!backupId) throw new Error("Missing backupId for restore job");
-
-  await setJobProgress(job._id.toString(), 15, "Checking recent verified backup before SharePoint restore");
-  const backupSafety = await assertRecentVerifiedBackupForDangerousWrite({
-    siteId: job.siteId,
-    operation: "restore"
-  });
-  const preRestoreBackupSafety = await assertDistinctRecentVerifiedBackupForRestore({
-    siteId: job.siteId,
-    restoreBackupObjectId: backupId,
-    restoreBackupExternalId: payload.backupExternalId
-  });
-  logger.info("backups", "Execution-time restore backup safety re-check completed", {
-    jobId: job._id.toString(),
-    siteId: job.siteId?.toString(),
-    backupId,
-    backupExternalId: payload.backupExternalId,
-    backupSafety,
-    preRestoreBackupSafety
-  });
-
-  await setJobProgress(job._id.toString(), 20, "Starting SharePoint restore execution");
-  const result = await executeSharePointRestore({
-    backupId,
-    jobId: job._id.toString(),
-    requestedBy: job.createdBy || job.approvedBy || "system",
-    siteId: job.siteId?.toString()
-  });
-
-  const targetPaths = result.evidence.map((item) => item.targetPath);
-  await setJobTargetPaths(job._id.toString(), targetPaths, `Recorded ${targetPaths.length} restore target paths`);
-  await setJobEvidence(job._id.toString(), result.evidence, "Restore verification evidence recorded");
-  await setJobResult(
-    job._id.toString(),
-    {
-      backupId: result.backupId,
-      backupExternalId: result.backupExternalId,
-      siteId: result.siteId,
-      siteCode: result.siteCode,
-      filesCount: result.filesCount,
-      restoredCount: result.restoredCount,
-      totalSizeBytes: result.totalSizeBytes,
-      backupSafety,
-      preRestoreBackupSafety
-    },
-    "Restore result recorded"
-  );
-  await setJobProgress(job._id.toString(), 90, `Restored and verified ${result.restoredCount} files from backup`);
+  throw new Error("sharepoint-browser-execution-required");
 }
 
 async function handleSiteProvision(job: any) {
@@ -468,29 +229,7 @@ async function handleSiteProvision(job: any) {
     jobId: job._id.toString(),
     siteId: job.siteId?.toString()
   });
-  assertApprovedForExecution(job, "site-provision-job-requires-approval");
-  assertSharePointWriteAvailable();
-
-  if (!job.siteId) throw new Error("Missing siteId for site provisioning job");
-
-  await setJobProgress(job._id.toString(), 15, "Starting SharePoint Site Builder provisioning");
-  const result = await executeSiteProvisioning(job.siteId.toString());
-  const targetPaths = result.completedSteps.map((step) => step.target);
-  await setJobTargetPaths(job._id.toString(), targetPaths, `Recorded ${targetPaths.length} provisioning targets`);
-  await setJobEvidence(job._id.toString(), result.completedSteps, "Provisioning step evidence recorded");
-  await setJobResult(
-    job._id.toString(),
-    {
-      siteId: result.siteId,
-      siteCode: result.siteCode,
-      completedSteps: result.completedSteps.length,
-      finalDistRoot: result.resolvedPaths.finalDistRoot,
-      usersDbRoot: result.resolvedPaths.usersDbRoot,
-      siteDbRoot: result.resolvedPaths.siteDbRoot
-    },
-    "Provisioning result recorded"
-  );
-  await setJobProgress(job._id.toString(), 90, `Provisioned ${result.completedSteps.length} SharePoint structure steps`);
+  throw new Error("sharepoint-browser-execution-required");
 }
 
 async function handleSiteBootstrap(job: any) {
@@ -499,43 +238,7 @@ async function handleSiteBootstrap(job: any) {
     siteId: job.siteId?.toString(),
     payload: logger.isPayloadLoggingEnabled() ? job.payload : undefined
   });
-  assertSharePointWriteAvailable();
-  assertApprovedForExecution(job, "site-bootstrap-job-requires-approval");
-
-  if (!job.siteId) throw new Error("Missing siteId for site bootstrap job");
-
-  await setJobProgress(job._id.toString(), 10, "Starting SharePoint site collection creation and bootstrap");
-  const result = await executeSiteBootstrap(job.siteId.toString(), job.payload || {});
-  const targetPaths = [
-    result.resolvedPaths.sharePointSiteUrl,
-    ...result.completedSteps.map((step) => step.target)
-  ];
-  await setJobTargetPaths(job._id.toString(), targetPaths, `Recorded ${targetPaths.length} bootstrap targets`);
-  await setJobEvidence(
-    job._id.toString(),
-    {
-      siteCollection: result.siteCollection,
-      provisioningSteps: result.provisioning?.completedSteps || [],
-      permissionsSteps: result.permissions?.completedSteps || []
-    },
-    "Site bootstrap evidence recorded"
-  );
-  await setJobResult(
-    job._id.toString(),
-    {
-      siteId: result.siteId,
-      siteCode: result.siteCode,
-      sharePointSiteUrl: result.resolvedPaths.sharePointSiteUrl,
-      finalAppUrl: result.resolvedPaths.finalAppUrl,
-      bootstrapUrl: result.resolvedPaths.bootstrapUrl,
-      siteCollectionAction: result.siteCollection.action,
-      completedSteps: result.completedSteps.length,
-      provisioningSteps: result.provisioning?.completedSteps.length || 0,
-      permissionsSteps: result.permissions?.completedSteps.length || 0
-    },
-    "Site bootstrap result recorded"
-  );
-  await setJobProgress(job._id.toString(), 90, `Bootstrapped SharePoint site ${result.siteCode}`);
+  throw new Error("sharepoint-browser-execution-required");
 }
 
 async function handlePermissionsSetup(job: any) {
@@ -543,112 +246,18 @@ async function handlePermissionsSetup(job: any) {
     jobId: job._id.toString(),
     siteId: job.siteId?.toString()
   });
-  assertApprovedForExecution(job, "permissions-setup-job-requires-approval");
-  assertSharePointWriteAvailable();
-
-  if (!job.siteId) throw new Error("Missing siteId for permissions setup job");
-
-  await setJobProgress(job._id.toString(), 20, "Starting siteUsersDb permissions setup");
-  const result = await executePermissionsSetup(job.siteId.toString());
-  const targetPaths = result.completedSteps.map((step) => step.target);
-  await setJobTargetPaths(job._id.toString(), targetPaths, `Recorded ${targetPaths.length} permission targets`);
-  await setJobEvidence(job._id.toString(), result.completedSteps, "Permissions setup evidence recorded");
-  await setJobResult(
-    job._id.toString(),
-    {
-      siteId: result.siteId,
-      siteCode: result.siteCode,
-      completedSteps: result.completedSteps.length,
-      permissionsMarkerFile: result.resolvedPaths.permissionsMarkerFile,
-      usersDbRoot: result.resolvedPaths.usersDbRoot
-    },
-    "Permissions setup result recorded"
-  );
-  await setJobProgress(job._id.toString(), 90, `Configured ${result.completedSteps.length} permissions steps`);
+  throw new Error("sharepoint-browser-execution-required");
 }
 
 async function handleAdminSync(job: any) {
   const mode = getAdminSyncMode(job);
-  const persistSnapshot = mode === "sync";
   logger.info("jobs", "Handling admin sync job", {
     jobId: job._id.toString(),
     siteId: job.siteId?.toString(),
     mode,
-    persistSnapshot,
     payload: logger.isPayloadLoggingEnabled() ? job.payload : undefined
   });
-  if (!job.siteId) throw new Error("Missing siteId for admin sync job");
-  if (shouldBlockBackendSharePointByDefault("admin-sync")) {
-    logger.warn("jobs", "Admin sync backend SharePoint read blocked before worker execution", {
-      jobId: job._id.toString(),
-      siteId: job.siteId?.toString(),
-      mode
-    });
-    throw new Error("admin-sync-backend-service-auth-or-browser-required");
-  }
-
-  await setJobProgress(
-    job._id.toString(),
-    30,
-    persistSnapshot
-      ? "Reading live admin sources from SharePoint and persisting Hub snapshot"
-      : "Reading live admin sources from SharePoint without persisting Hub snapshot"
-  );
-  const result = await readLiveAdminSources(job.siteId.toString(), {
-    persist: persistSnapshot,
-    jobId: job._id.toString(),
-    capturedBy: job.createdBy || "system"
-  });
-  const failedSources = result.sourceStatus.filter((source) => !source.ok);
-  await setJobEvidence(job._id.toString(), result.sourceStatus, "Admin source status evidence recorded");
-  await setJobResult(
-    job._id.toString(),
-    {
-      siteId: result.siteId,
-      siteCode: result.siteCode,
-      mode,
-      readOnly: !persistSnapshot,
-      persistedSnapshot: persistSnapshot,
-      capturedAt: result.capturedAt,
-      adminsCount: result.adminsCount,
-      sourceStatus: result.sourceStatus,
-      adminDifferences: result.adminDifferences,
-      sourceCounts: {
-        txt: result.txtAdmins.length,
-        siteCollection: result.siteCollectionAdmins.length,
-        ownersGroup: result.ownersGroupAdmins.length
-      }
-    },
-    "Admin sync result recorded"
-  );
-  logger.info("admins", "Admin sync job result persisted", {
-    jobId: job._id.toString(),
-    siteId: result.siteId,
-    siteCode: result.siteCode,
-    mode,
-    persistedSnapshot: persistSnapshot,
-    adminsCount: result.adminsCount,
-    failedSources: failedSources.length
-  });
-
-  if (failedSources.length > 0) {
-    const message = `admin-sync-source-failed:${failedSources.map((source) => source.source).join(",")}`;
-    logger.warn("admins", "Admin sync job failed because one or more sources failed", {
-      jobId: job._id.toString(),
-      siteId: result.siteId,
-      siteCode: result.siteCode,
-      failedSources
-    });
-    throw new Error(message);
-  }
-
-  await setJobProgress(
-    job._id.toString(),
-    80,
-    persistSnapshot
-      ? `Captured ${result.adminsCount} unique admins from live sources and persisted Hub snapshot`
-      : `Captured ${result.adminsCount} unique admins from live sources without persistence`
-  );
+  throw new Error("sharepoint-browser-execution-required");
 }
 
 async function handleHealthCheck(job: any) {
@@ -657,32 +266,7 @@ async function handleHealthCheck(job: any) {
     siteId: job.siteId?.toString(),
     payload: logger.isPayloadLoggingEnabled() ? job.payload : undefined
   });
-  if (!job.siteId) throw new Error("Missing siteId for health-check job");
-
-  await setJobProgress(job._id.toString(), 20, "Running read-only SharePoint health check");
-  const result = await runReadOnlySharePointHealthCheck(job.siteId.toString());
-  await setJobTargetPaths(
-    job._id.toString(),
-    result.evidence.map((item) => item.url),
-    `Recorded ${result.evidence.length} health-check probe URLs`
-  );
-  await setJobEvidence(job._id.toString(), result.evidence, "Health-check evidence recorded");
-  await setJobResult(
-    job._id.toString(),
-    {
-      siteId: result.siteId,
-      siteCode: result.siteCode,
-      checkedAt: result.checkedAt,
-      derivedHealthStatus: result.derivedHealthStatus,
-      health: result.health,
-      evidenceCount: result.evidence.length,
-      failedCount: result.evidence.filter((item) => !item.ok).length,
-      authBlockedCount: result.evidence.filter((item) => item.authBlocked).length,
-      scheduled: Boolean((job.payload as any)?.scheduled)
-    },
-    "Health-check result recorded"
-  );
-  await setJobProgress(job._id.toString(), 90, `Read-only health check completed: ${result.derivedHealthStatus}`);
+  throw new Error("sharepoint-browser-execution-required");
 }
 
 async function handleRepair(job: any) {
@@ -691,84 +275,7 @@ async function handleRepair(job: any) {
     siteId: job.siteId?.toString(),
     payload: logger.isPayloadLoggingEnabled() ? job.payload : undefined
   });
-
-  if (!job.siteId) throw new Error("Missing siteId for repair job");
-  if ((!job.requiresApproval || !job.approvedAt || !job.approvedBy) && !isDangerousValidationBypassEnabled("approval-gates")) {
-    logger.error("jobs", "Repair job blocked because approval is missing", {
-      jobId: job._id.toString(),
-      siteId: job.siteId?.toString(),
-      requiresApproval: Boolean(job.requiresApproval),
-      approvedAt: job.approvedAt,
-      approvedBy: job.approvedBy
-    });
-    throw new Error("repair-job-requires-approval");
-  }
-
-  const payload = (job.payload || {}) as {
-    operation?: string;
-    repairType?: string;
-    targetPath?: string;
-    missingInTxt?: string[];
-    mergedTxtAdmins?: Array<{
-      displayName?: string;
-      personalNumber?: string;
-      email?: string;
-      loginName?: string;
-    }>;
-    reason?: string;
-  };
-
-  if (payload.repairType !== "admin-txt" && payload.operation !== "admin-txt-repair") {
-    logger.warn("jobs", "Unsupported repair job payload failed", {
-      jobId: job._id.toString(),
-      repairType: payload.repairType,
-      operation: payload.operation
-    });
-    throw new Error(`unsupported-repair-type:${payload.repairType || payload.operation || "unknown"}`);
-  }
-
-  logger.info("admins", "Approved TXT admin repair job started", {
-    jobId: job._id.toString(),
-    siteId: job.siteId.toString(),
-    targetPath: payload.targetPath
-  });
-
-  await setJobProgress(job._id.toString(), 20, "Starting approved admin TXT repair");
-  const result = await executeAdminTxtRepair({
-    siteId: job.siteId.toString(),
-    jobId: job._id.toString(),
-    requestedBy: job.createdBy || job.approvedBy || "system",
-    targetPath: payload.targetPath,
-    missingInTxt: payload.missingInTxt,
-    mergedTxtAdmins: payload.mergedTxtAdmins,
-    reason: payload.reason
-  });
-
-  await setJobTargetPaths(job._id.toString(), [result.targetPath], "Recorded admin TXT repair target path");
-  await setJobEvidence(job._id.toString(), result.evidence, "Admin TXT repair evidence recorded");
-  await setJobResult(
-    job._id.toString(),
-    {
-      siteId: result.siteId,
-      siteCode: result.siteCode,
-      targetPath: result.targetPath,
-      repairedMissingInTxtCount: result.repairedMissingInTxtCount,
-      adminsCount: result.adminsCount,
-      adminDifferences: result.adminDifferences,
-      sourceCounts: result.sourceCounts,
-      capturedAt: result.capturedAt
-    },
-    "Admin TXT repair result recorded"
-  );
-  await setJobProgress(job._id.toString(), 90, "Repaired users_data.txt and refreshed live admin evidence");
-
-  logger.info("admins", "Approved TXT admin repair job completed", {
-    jobId: job._id.toString(),
-    siteId: result.siteId,
-    siteCode: result.siteCode,
-    targetPath: result.targetPath,
-    repairedMissingInTxtCount: result.repairedMissingInTxtCount
-  });
+  throw new Error("sharepoint-browser-execution-required");
 }
 
 async function processJob(job: any) {
@@ -788,6 +295,16 @@ async function processJob(job: any) {
       connectorMode: job.connectorMode
     });
     throw new Error("browser-required-job-cannot-run-in-worker");
+  }
+  if (SHAREPOINT_BROWSER_ONLY_JOB_TYPES.has(String(job.type))) {
+    logger.warn("jobs", "Worker refused to process SharePoint job because server SharePoint is disabled", {
+      jobId: job._id.toString(),
+      type: job.type,
+      siteId: job.siteId?.toString(),
+      executionMode: job.executionMode,
+      connectorMode: job.connectorMode
+    });
+    throw new Error("sharepoint-browser-execution-required");
   }
   switch (job.type) {
     case "version-upgrade":
@@ -935,25 +452,27 @@ export async function runJobNow(jobId: string) {
 
   const now = new Date();
   const executionMode = String((job as any).executionMode || "backend");
-  const browserConnector = job.connectorMode === "browser-sharepoint" || (job.payload as any)?.connectorMode === "browser-sharepoint";
-  const blockedServiceAuth = job.connectorMode === "backend-sharepoint" && (job.status === "blocked-service-auth-required" || executionMode === "blocked-service-auth-required");
+  const browserOnlySharePointJob = SHAREPOINT_BROWSER_ONLY_JOB_TYPES.has(String(job.type));
+  const browserConnector =
+    browserOnlySharePointJob ||
+    job.connectorMode === "browser-sharepoint" ||
+    (job.payload as any)?.connectorMode === "browser-sharepoint" ||
+    job.connectorMode === "backend-sharepoint" ||
+    (job.payload as any)?.connectorMode === "backend-sharepoint";
   const nextStatus = job.requiresApproval
     ? "awaiting-approval"
     : browserConnector
       ? "browser-required"
-      : blockedServiceAuth
-        ? "blocked-service-auth-required"
-        : "queued";
+      : "queued";
   const nextExecutionMode = nextStatus === "browser-required"
     ? "browser-required"
-    : nextStatus === "blocked-service-auth-required"
-      ? "blocked-service-auth-required"
-      : "backend";
+    : "backend";
   await Job.findByIdAndUpdate(jobId, {
     $set: {
       status: nextStatus,
       executionMode: nextExecutionMode,
       progressPercent: 0,
+      connectorMode: browserConnector ? "browser-sharepoint" : job.connectorMode || "server-local",
       errorCode: "",
       errorMessage: "",
       errorDetails: "",
@@ -989,9 +508,7 @@ export async function runJobNow(jobId: string) {
           ? "Job rerun requested and is awaiting approval"
           : nextStatus === "browser-required"
             ? "Job rerun requested and is waiting for browser SharePoint execution"
-            : nextStatus === "blocked-service-auth-required"
-              ? "Job rerun remains blocked because backend SharePoint service auth is required"
-              : "Job queued for immediate rerun",
+            : "Job queued for immediate rerun",
         at: now
       }
     }

@@ -5,15 +5,19 @@ export function LinkRow({
   label,
   value,
   isUrl = false,
-  description
+  description,
+  showCopy = true
 }: {
   label: string;
   value?: string;
   isUrl?: boolean;
   description?: string;
+  showCopy?: boolean;
 }) {
+  const hasActions = showCopy || (isUrl && Boolean(value));
+
   return (
-    <div className="grid gap-3 border-b divider py-3 last:border-b-0 md:grid-cols-[210px_1fr_auto] md:items-center">
+    <div className={`grid gap-3 border-b divider py-3 last:border-b-0 ${hasActions ? "md:grid-cols-[210px_1fr_auto]" : "md:grid-cols-[210px_1fr]"} md:items-center`}>
       <div>
         <p className="text-sm font-bold" style={{ color: "var(--text-strong)" }}>{label}</p>
         {description ? <p className="mt-0.5 text-xs muted">{description}</p> : null}
@@ -27,15 +31,17 @@ export function LinkRow({
           <span className="text-sm subtle">לא מוגדר</span>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <CopyButton value={value} />
-        {isUrl && value ? (
-          <a className="btn btn-secondary min-h-0 px-2 py-1 text-xs" href={value} target="_blank" rel="noreferrer">
-            <ExternalLink size={13} />
-            פתח
-          </a>
-        ) : null}
-      </div>
+      {hasActions ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {showCopy ? <CopyButton value={value} /> : null}
+          {isUrl && value ? (
+            <a className="btn btn-secondary min-h-0 px-2 py-1 text-xs" href={value} target="_blank" rel="noreferrer">
+              <ExternalLink size={13} />
+              פתח
+            </a>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

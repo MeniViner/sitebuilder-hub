@@ -14,10 +14,6 @@ import {
 } from "./jobs.service";
 import { resolveSiteBuilderPaths } from "../utils/sitebuilderPaths";
 import {
-  assertSharePointWriteAvailable,
-  readSharePointFileEvidence
-} from "./sharepointOperationClient";
-import {
   assertDistinctRecentVerifiedBackupForRestore,
   assertRecentVerifiedBackupForDangerousWrite,
   BackupSafetySnapshot
@@ -25,11 +21,8 @@ import {
 import { logger } from "../utils/logger";
 import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
 import {
-  backendServiceAuthReady,
-  getBackendServiceAuthBlocker,
   getBrowserRequiredJobMessage,
-  getSharePointOperationPolicy,
-  shouldBlockBackendSharePointByDefault
+  getSharePointOperationPolicy
 } from "./sharepointOperationPolicy.service";
 
 type ApprovalGatedJobInput = Parameters<typeof createJob>[0] & {
@@ -234,76 +227,31 @@ export async function enqueueSiteBackup(params: {
     backupTargetRoot
   });
 
-  if (executionContext !== "browser-user" && !backendServiceAuthReady()) {
-    const policy = getSharePointOperationPolicy("scheduled-backup");
-    const blocker = getBackendServiceAuthBlocker("scheduled-backup");
-    const job = await createJob({
-      type: "backup",
-      siteId: site._id.toString(),
-      createdBy: params.createdBy,
-      maxAttempts: 1,
-      executionMode: "blocked-service-auth-required",
-      connectorMode: "backend-sharepoint",
-      operationPolicy: policy.operation,
-      connectorStatusLabel: policy.statusLabelHe,
-      connectorBlocker: blocker,
-      requiresApproval: false,
-      approvalSummary: approval.approvalSummary,
-      approvalSnapshot: approval.approvalSnapshot,
-      payload: {
-        sourcePaths,
-        backupTargetRoot,
-        backupId,
-        backupFolder,
-        connectorMode: "backend-sharepoint",
-        executionMode: "blocked-service-auth-required",
-        blocker
-      }
-    });
-    await Site.findByIdAndUpdate(site._id, {
-      backupStatus: "failed",
-      lastError: blocker
-    });
-    return {
-      job,
-      browserOperationPlan: undefined,
-      requiresApproval: false,
-      approvalStatus: "blocked-service-auth-required",
-      connectorMode: "backend-sharepoint" as const,
-      executionMode: "blocked-service-auth-required" as const,
-      message: blocker
-    };
-  }
-
-  if (executionContext !== "browser-user") {
-    assertSharePointWriteAvailable();
-  }
-
-  const browserOperationPlan = executionContext === "browser-user"
-    ? {
-        operation: "backup" as const,
-        connectorMode: "browser-sharepoint" as const,
-        executionMode: "browser-required" as const,
-        siteId: site._id.toString(),
-        siteCode: site.siteCode,
-        targetSiteUrl: resolvedPaths.sharePointSiteUrl,
-        backupId,
-        target: {
-          backupsRoot: backupTargetRoot,
-          backupFolder
-        },
-        sourcePaths,
-        message: getBrowserRequiredJobMessage("backup")
-      }
-    : undefined;
-  const backupPolicy = getSharePointOperationPolicy(executionContext === "browser-user" ? "backup" : "scheduled-backup");
+  const operation = executionContext === "scheduled" ? "scheduled-backup" : "backup";
+  const browserOperationPlan = {
+    operation: "backup" as const,
+    policyOperation: operation,
+    connectorMode: "browser-sharepoint" as const,
+    executionMode: "browser-required" as const,
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    targetSiteUrl: resolvedPaths.sharePointSiteUrl,
+    backupId,
+    target: {
+      backupsRoot: backupTargetRoot,
+      backupFolder
+    },
+    sourcePaths,
+    message: getBrowserRequiredJobMessage(operation)
+  };
+  const backupPolicy = getSharePointOperationPolicy(operation);
   const jobInput: ApprovalGatedJobInput = {
     type: "backup",
     siteId: site._id.toString(),
     createdBy: params.createdBy,
-    requiresApproval: true,
-    executionMode: executionContext === "browser-user" ? "browser-required" : "backend",
-    connectorMode: executionContext === "browser-user" ? "browser-sharepoint" : "backend-sharepoint",
+    requiresApproval: executionContext === "browser-user",
+    executionMode: "browser-required",
+    connectorMode: "browser-sharepoint",
     operationPolicy: backupPolicy.operation,
     connectorStatusLabel: backupPolicy.statusLabelHe,
     connectorBlocker: backupPolicy.blockerHe || "",
@@ -314,8 +262,8 @@ export async function enqueueSiteBackup(params: {
       backupTargetRoot,
       backupId,
       backupFolder,
-      connectorMode: executionContext === "browser-user" ? "browser-sharepoint" : "backend-sharepoint",
-      executionMode: executionContext === "browser-user" ? "browser-required" : "backend",
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required",
       browserOperationPlan
     }
   };
@@ -344,14 +292,12 @@ export async function enqueueSiteBackup(params: {
     job,
     browserOperationPlan,
     requiresApproval: job.requiresApproval,
-    approvalStatus: job.requiresApproval ? "pending" : executionContext === "browser-user" ? "browser-required" : "not-required",
-    connectorMode: executionContext === "browser-user" ? "browser-sharepoint" as const : "backend-sharepoint" as const,
-    executionMode: executionContext === "browser-user" ? "browser-required" as const : "backend" as const,
+    approvalStatus: job.requiresApproval ? "pending" : "browser-required",
+    connectorMode: "browser-sharepoint" as const,
+    executionMode: "browser-required" as const,
     message: job.requiresApproval
       ? "Backup job queued and requires approval because advanced approvals are enabled."
-      : executionContext === "browser-user"
-        ? "ממתין להרצה דרך הדפדפן"
-        : BACKUP_OWNER_DIRECT_MESSAGE
+      : "נוצרה משימת גיבוי שממתינה לדפדפן SharePoint מחובר."
   };
 }
 
@@ -489,6 +435,30 @@ const buildRestoreFilesFromEvidence = (backup: any): RestoreFilePlan[] =>
     }))
     .filter((row) => row.sourcePath && row.targetPath);
 
+type BrowserRestoreEvidencePayload = {
+  sourcePath?: string;
+  targetPath?: string;
+  backupPath?: string;
+  status?: "verified" | "failed";
+  checkedAt?: string;
+  expectedBackupSizeBytes?: number;
+  expectedBackupSha256?: string;
+  backupSizeBytes?: number;
+  backupSha256?: string;
+  expectedRestoreSizeBytes?: number;
+  expectedRestoreSha256?: string;
+  restoredSizeBytes?: number;
+  restoredSha256?: string;
+  sizeMatches?: boolean;
+  sha256Matches?: boolean;
+  httpStatus?: number;
+  httpStatusText?: string;
+  contentType?: string;
+  etag?: string;
+  lastModified?: string;
+  error?: string;
+};
+
 type BrowserBackupEvidencePayload = {
   sourcePath?: string;
   targetPath?: string;
@@ -575,6 +545,66 @@ const browserBackupEvidenceFromPayload = (
     expectedBackupSha256: stringValue(payload.expectedBackupSha256),
     backupSizeBytes: numberOrZero(payload.backupSizeBytes),
     backupSha256: stringValue(payload.backupSha256),
+    sizeMatches,
+    sha256Matches,
+    httpStatus: payload.httpStatus === undefined ? undefined : numberOrZero(payload.httpStatus),
+    httpStatusText: stringValue(payload.httpStatusText),
+    contentType: stringValue(payload.contentType),
+    etag: stringValue(payload.etag),
+    lastModified: stringValue(payload.lastModified),
+    error: stringValue(payload.error)
+  };
+};
+
+const browserRestoreEvidenceFromPayload = (
+  expected: RestoreFilePlan,
+  payload: BrowserRestoreEvidencePayload | undefined,
+  checkedAt: Date
+) => {
+  if (!payload) {
+    return {
+      sourcePath: expected.targetPath,
+      targetPath: expected.targetPath,
+      backupPath: expected.sourcePath,
+      status: "failed" as const,
+      checkedAt,
+      expectedBackupSizeBytes: expected.expectedSizeBytes,
+      expectedBackupSha256: expected.expectedSha256,
+      backupSizeBytes: 0,
+      backupSha256: "",
+      expectedRestoreSizeBytes: expected.expectedSizeBytes,
+      expectedRestoreSha256: expected.expectedSha256,
+      restoredSizeBytes: 0,
+      restoredSha256: "",
+      sizeMatches: false,
+      sha256Matches: false,
+      error: "browser-restore-evidence-missing"
+    };
+  }
+
+  const payloadBackupPath = normalizeServerRelativePath(payload.backupPath || payload.sourcePath);
+  const payloadTargetPath = normalizeServerRelativePath(payload.targetPath);
+  if (payloadBackupPath && payloadBackupPath !== expected.sourcePath) throw new Error("browser-restore-backup-path-mismatch");
+  if (payloadTargetPath && payloadTargetPath !== expected.targetPath) throw new Error("browser-restore-target-path-mismatch");
+
+  const sizeMatches = Boolean(payload.sizeMatches);
+  const sha256Matches = Boolean(payload.sha256Matches);
+  const status = payload.status === "verified" && sizeMatches && sha256Matches ? "verified" as const : "failed" as const;
+
+  return {
+    sourcePath: expected.targetPath,
+    targetPath: expected.targetPath,
+    backupPath: expected.sourcePath,
+    status,
+    checkedAt: dateValue(payload.checkedAt, checkedAt),
+    expectedBackupSizeBytes: numberOrZero(payload.expectedBackupSizeBytes || expected.expectedSizeBytes),
+    expectedBackupSha256: stringValue(payload.expectedBackupSha256 || expected.expectedSha256),
+    backupSizeBytes: numberOrZero(payload.backupSizeBytes),
+    backupSha256: stringValue(payload.backupSha256),
+    expectedRestoreSizeBytes: numberOrZero(payload.expectedRestoreSizeBytes || expected.expectedSizeBytes),
+    expectedRestoreSha256: stringValue(payload.expectedRestoreSha256 || expected.expectedSha256),
+    restoredSizeBytes: numberOrZero(payload.restoredSizeBytes),
+    restoredSha256: stringValue(payload.restoredSha256),
     sizeMatches,
     sha256Matches,
     httpStatus: payload.httpStatus === undefined ? undefined : numberOrZero(payload.httpStatus),
@@ -872,117 +902,180 @@ export async function enqueueBackupRestore(params: {
   backupId: string;
   createdBy: string;
   notes?: string;
-  connectorMode?: "browser-sharepoint" | "backend-sharepoint";
-  confirmBackendSharePoint?: boolean;
+  connectorMode?: "browser-sharepoint";
 }) {
   logger.info("backups", "Queueing backup restore", {
     backupId: params.backupId,
     createdBy: params.createdBy,
-    notes: params.notes
+    notes: params.notes,
+    connectorMode: params.connectorMode || "browser-sharepoint"
   });
-  const backup = await SiteBackup.findById(params.backupId);
+  const backup = await findBackupByIdOrExternalId(params.backupId);
   if (!backup) throw new Error("backup-not-found");
 
   const site = await Site.findById(backup.siteId);
   if (!site) throw new Error("site-not-found");
-  if (shouldBlockBackendSharePointByDefault("restore", {
-    connectorMode: params.connectorMode,
-    confirmBackendSharePoint: params.confirmBackendSharePoint
-  })) {
-    throw new Error("restore-browser-sharepoint-not-implemented");
-  }
-  assertSharePointWriteAvailable();
-
   const files = buildRestoreFilesFromEvidence(backup);
-  if (!files.length) {
-    if (isDangerousValidationBypassEnabled("restore-evidence-gates")) {
-      logger.warn("backups", "Restore evidence gate bypass requested but no restorable files were found", {
-        backupId: backup._id.toString(),
-        backupExternalId: backup.backupId,
-        envVar: getDangerousValidationBypassEnvVar("restore-evidence-gates")
-      });
-    }
-    throw new Error("backup-restore-evidence-missing");
-  }
-  const backupSafety = await assertRecentVerifiedBackupForDangerousWrite({
-    siteId: site._id,
-    operation: "restore"
-  });
-  const preRestoreBackupSafety = await assertDistinctRecentVerifiedBackupForRestore({
-    siteId: site._id,
-    restoreBackupObjectId: backup._id,
-    restoreBackupExternalId: backup.backupId
-  });
+  if (!files.length) throw new Error("restore-evidence-missing");
 
-  const approval = buildRestoreApproval({
-    backup,
-    site,
-    createdBy: params.createdBy,
-    files,
-    notes: params.notes,
-    backupSafety,
-    preRestoreBackupSafety
-  });
-
-  const jobInput: ApprovalGatedJobInput = {
+  const policy = getSharePointOperationPolicy("restore");
+  const job = await createJob({
     type: "restore",
     siteId: site._id.toString(),
     createdBy: params.createdBy,
-    requiresApproval: true,
-    approvalSummary: approval.approvalSummary,
-    approvalSnapshot: approval.approvalSnapshot,
+    executionMode: "browser-required",
+    connectorMode: "browser-sharepoint",
+    operationPolicy: policy.operation,
+    connectorStatusLabel: policy.statusLabelHe,
+    connectorBlocker: policy.blockerHe || getBrowserRequiredJobMessage("restore"),
     payload: {
       backupId: backup._id.toString(),
       backupExternalId: backup.backupId,
-      files,
       notes: params.notes || "",
-      preRestoreBackupId: preRestoreBackupSafety.backup?.id || "",
-      preRestoreBackupExternalId: preRestoreBackupSafety.backup?.backupId || ""
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required",
+      browserOperationPlan: {
+        operation: "restore",
+        connectorMode: "browser-sharepoint",
+        executionMode: "browser-required",
+        backupId: backup._id.toString(),
+        backupExternalId: backup.backupId,
+        siteId: site._id.toString(),
+        siteCode: site.siteCode,
+        targetSiteUrl: site.sharePointSiteUrl,
+        files,
+        message: getBrowserRequiredJobMessage("restore")
+      }
     }
-  };
-
-  logger.info("jobs", "Restore job queued", {
-    type: jobInput.type,
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    backupId: backup._id.toString(),
-    backupExternalId: backup.backupId,
-    fileCount: files.length,
-    pathSummary: summarizeRestorePaths(files),
-    backupSafety,
-    preRestoreBackupSafety
   });
 
-  const job = await createJob(jobInput);
+  backup.restoreStatus = "running";
+  backup.lastRestoreJobId = job._id as any;
+  backup.lastRestoreError = "";
+  await backup.save();
 
-  logger.info("backups", "Restore job queued", {
+  logger.info("backups", "Restore job queued for browser execution", {
     backupId: backup._id.toString(),
     backupExternalId: backup.backupId,
-    preRestoreBackupId: preRestoreBackupSafety.backup?.id,
-    preRestoreBackupExternalId: preRestoreBackupSafety.backup?.backupId,
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     jobId: job._id.toString(),
-    fileCount: files.length,
-    requiresApproval: job.requiresApproval,
-    approvalStatus: job.requiresApproval ? "pending" : "not-required"
+    filesCount: files.length
   });
-
-  const requiresApproval = Boolean(job.requiresApproval || job.status === "awaiting-approval");
 
   return {
     job,
+    backup,
+    browserOperationPlan: (job.payload as any).browserOperationPlan,
+    connectorMode: "browser-sharepoint" as const,
+    executionMode: "browser-required" as const,
+    message: "נוצרה משימת שחזור שממתינה להרצה דרך הדפדפן."
+  };
+}
+
+export async function recordBrowserSharePointRestoreEvidence(params: {
+  backupId: string;
+  actor: string;
+  input: {
+    connectorMode: "browser-sharepoint";
+    jobId?: string;
+    targetSiteUrl?: string;
+    restoreEvidence?: BrowserRestoreEvidencePayload[];
+    errors?: unknown[];
+    startedAt?: string;
+    completedAt?: string;
+    finalStatus: "success" | "failed";
+  };
+}) {
+  if (params.input.connectorMode !== "browser-sharepoint") throw new Error("browser-restore-connector-mode-required");
+  const backup = await findBackupByIdOrExternalId(params.backupId);
+  if (!backup) throw new Error("backup-not-found");
+  const site = await Site.findById(backup.siteId);
+  if (!site) throw new Error("site-not-found");
+
+  const resolvedPaths = resolveSiteBackupPaths(site);
+  if (params.input.targetSiteUrl && normalizeUrl(params.input.targetSiteUrl) !== normalizeUrl(resolvedPaths.sharePointSiteUrl)) {
+    throw new Error("browser-restore-site-mismatch");
+  }
+
+  const expectedFiles = buildRestoreFilesFromEvidence(backup);
+  if (!expectedFiles.length) throw new Error("restore-evidence-missing");
+  const checkedAt = dateValue(params.input.completedAt);
+  const payloadByBackupPath = new Map(
+    (params.input.restoreEvidence || [])
+      .map((item) => [normalizeServerRelativePath(item.backupPath || item.sourcePath), item] as const)
+      .filter(([backupPath]) => Boolean(backupPath))
+  );
+  const restoreEvidence = expectedFiles.map((file) =>
+    browserRestoreEvidenceFromPayload(file, payloadByBackupPath.get(file.sourcePath), checkedAt)
+  );
+  const verifiedFilesCount = restoreEvidence.filter((item) => item.status === "verified" && item.sizeMatches && item.sha256Matches).length;
+  const failedFilesCount = restoreEvidence.length - verifiedFilesCount;
+  const successRequested = params.input.finalStatus === "success";
+  const allVerified = restoreEvidence.length > 0 && failedFilesCount === 0;
+  const finalStatus = successRequested && allVerified ? "verified" : "failed";
+  const errorMessage = finalStatus === "verified" ? "" : evidenceErrorMessage(params.input.errors) || "browser-sharepoint-restore-failed";
+
+  backup.restoreStatus = finalStatus;
+  backup.lastRestoreAt = checkedAt;
+  if (params.input.jobId && Types.ObjectId.isValid(params.input.jobId)) {
+    backup.lastRestoreJobId = new Types.ObjectId(params.input.jobId) as any;
+  }
+  backup.restoreEvidence = restoreEvidence as any;
+  backup.lastRestoreError = errorMessage;
+  await backup.save();
+
+  site.lastError = errorMessage;
+  if (!errorMessage) {
+    site.lastHealthCheckAt = checkedAt;
+  }
+  await site.save();
+
+  const jobId = stringValue(params.input.jobId);
+  if (jobId) {
+    await setJobStatus(jobId, "browser-in-progress", {
+      progressPercent: 80,
+      message: "Browser SharePoint restore evidence received"
+    });
+    await setJobTargetPaths(jobId, restoreEvidence.map((item) => item.targetPath), "Browser restore target paths recorded");
+    await setJobEvidence(jobId, restoreEvidence, "Browser restore per-file evidence recorded");
+    await setJobResult(
+      jobId,
+      {
+        connectorMode: "browser-sharepoint",
+        backupObjectId: backup._id.toString(),
+        backupId: backup.backupId,
+        status: finalStatus,
+        filesCount: restoreEvidence.length,
+        verifiedFilesCount,
+        failedFilesCount
+      },
+      "Browser restore result recorded"
+    );
+    if (finalStatus === "verified") await setJobSucceeded(jobId, "Browser SharePoint restore completed and verified");
+    else await setJobFailed(jobId, errorMessage);
+  }
+
+  logger[finalStatus === "verified" ? "info" : "warn"]("backups", "Browser SharePoint restore evidence recorded", {
     backupId: backup._id.toString(),
     backupExternalId: backup.backupId,
     siteId: site._id.toString(),
     siteCode: site.siteCode,
-    files,
-    pathSummary: summarizeRestorePaths(files),
-    risks: approval.approvalSnapshot.risks,
-    preRestoreBackupSafety,
-    requiresApproval,
-    approvalStatus: requiresApproval ? "pending" : "not-required",
-    message: requiresApproval ? "Restore job requires approval because advanced approvals are enabled." : RESTORE_OWNER_DIRECT_MESSAGE
+    finalStatus,
+    verifiedFilesCount,
+    failedFilesCount
+  });
+
+  return {
+    site,
+    backup,
+    summary: {
+      connectorMode: "browser-sharepoint" as const,
+      finalStatus,
+      filesCount: restoreEvidence.length,
+      verifiedFilesCount,
+      failedFilesCount
+    }
   };
 }
 
@@ -1006,7 +1099,7 @@ export async function verifyBackup(params: {
   backupId: string;
   checkedBy: string;
   details?: string;
-}) {
+}): Promise<never> {
   logger.info("backups", "Verifying backup", {
     backupId: params.backupId,
     checkedBy: params.checkedBy,
@@ -1014,101 +1107,7 @@ export async function verifyBackup(params: {
   });
   const backup = await SiteBackup.findById(params.backupId);
   if (!backup) throw new Error("backup-not-found");
-
-  const site = await Site.findById(backup.siteId);
-  if (!site) throw new Error("site-not-found");
-
-  const resolvedPaths = resolveSiteBuilderPaths({
-    siteCode: site.siteCode,
-    sharePointHost: site.sharePointHost,
-    sharePointSiteUrl: site.sharePointSiteUrl,
-    siteDbLibrary: site.siteDbLibrary,
-    usersDbLibrary: site.usersDbLibrary,
-    bootstrapLibrary: site.bootstrapLibrary,
-    bootstrapFolder: site.bootstrapFolder,
-    widgetsDbTarget: site.widgetsDbTarget
-  });
-
-  const storedEvidence = getStoredBackupEvidence(backup);
-  const checkedAt = new Date();
-  const verificationEvidence = [];
-
-  if (!storedEvidence.length) {
-    logger.warn("backups", "Backup verification evidence missing", { backupId: backup._id.toString() });
-    backup.verification = {
-      status: "failed",
-      checkedAt,
-      checkedBy: params.checkedBy,
-      details: "Stored backup verification evidence is missing; read-only verification could not be performed.",
-      evidence: []
-    } as any;
-    backup.status = "failed";
-    backup.error = "backup-verification-evidence-missing";
-    await backup.save();
-    return backup;
-  }
-
-  logger.info("backups", "Running read-only SharePoint backup verification", {
-    backupId: backup._id.toString(),
-    backupExternalId: backup.backupId,
-    evidenceCount: storedEvidence.length
-  });
-
-  for (const row of storedEvidence) {
-    if (!row.targetPath || !row.expectedBackupSha256 || !row.expectedBackupSizeBytes) {
-      verificationEvidence.push(failedVerificationEvidence(row, "backup-stored-evidence-incomplete"));
-      continue;
-    }
-
-    const readEvidence = await readSharePointFileEvidence(resolvedPaths, row.targetPath, {
-      sizeBytes: row.expectedBackupSizeBytes,
-      sha256: row.expectedBackupSha256
-    });
-
-    verificationEvidence.push({
-      sourcePath: row.sourcePath,
-      targetPath: row.targetPath,
-      status: readEvidence.status,
-      checkedAt: new Date(readEvidence.checkedAt),
-      sourceSizeBytes: row.sourceSizeBytes,
-      sourceSha256: row.sourceSha256,
-      expectedBackupSizeBytes: row.expectedBackupSizeBytes,
-      expectedBackupSha256: row.expectedBackupSha256,
-      backupSizeBytes: readEvidence.sizeBytes || 0,
-      backupSha256: readEvidence.sha256 || "",
-      sizeMatches: Boolean(readEvidence.sizeMatches),
-      sha256Matches: Boolean(readEvidence.sha256Matches),
-      httpStatus: readEvidence.httpStatus,
-      httpStatusText: readEvidence.httpStatusText,
-      contentType: readEvidence.contentType,
-      etag: readEvidence.etag,
-      lastModified: readEvidence.lastModified,
-      error: readEvidence.error
-    });
-  }
-
-  const verifiedCount = verificationEvidence.filter((item) => item.status === "verified").length;
-  const failedCount = verificationEvidence.length - verifiedCount;
-  const verificationStatus = failedCount === 0 ? "verified" : "failed";
-  backup.verification = {
-    status: verificationStatus,
-    checkedAt,
-    checkedBy: params.checkedBy,
-    details: params.details || `Read-only SharePoint verification completed: ${verifiedCount}/${verificationEvidence.length} files verified.`,
-    evidence: verificationEvidence
-  } as any;
-
-  backup.status = verificationStatus === "verified" ? "verified" : "failed";
-  backup.error = verificationStatus === "verified" ? "" : "backup-verification-failed";
-  await backup.save();
-
-  logger.info("backups", "Backup verification completed", {
-    backupId: backup._id.toString(),
-    status: backup.status,
-    verifiedCount,
-    failedCount
-  });
-  return backup;
+  throw new Error("browser-backup-verification-required");
 }
 
 export async function createRestorePlan(params: {

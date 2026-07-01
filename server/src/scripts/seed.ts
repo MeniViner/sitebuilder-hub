@@ -79,9 +79,9 @@ const samples = [
 ];
 
 const releases = [
-  { version: "0.1.18", releaseType: "patch", notes: "Baseline release", createdBy: "seed" },
-  { version: "0.1.19", releaseType: "patch", notes: "Stability fixes", createdBy: "seed" },
-  { version: "0.1.20", releaseType: "patch", notes: "Hub compatibility", createdBy: "seed" }
+  { name: "Baseline portal", version: "0.1.18", releaseType: "patch", notes: "Baseline release", createdBy: "seed" },
+  { name: "Stability fixes", version: "0.1.19", releaseType: "patch", notes: "Stability fixes", createdBy: "seed" },
+  { name: "Hub compatibility", version: "0.1.20", releaseType: "patch", notes: "Hub compatibility", createdBy: "seed" }
 ];
 
 async function seed() {

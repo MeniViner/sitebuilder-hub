@@ -10,6 +10,7 @@ import { HelpLabel } from "../components/help/HelpLabel";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { AdvancedDetails, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { formatDateTime, formatNumber } from "../utils/format";
@@ -148,13 +149,13 @@ export function AuditPage() {
   const auditColumns: DataTableColumn<AuditLogRow>[] = [
     {
       key: "action",
-      header: "Action",
+      header: "פעולה",
       helpKey: "audit",
       render: (row) => row.action
     },
     {
       key: "entity",
-      header: "Entity",
+      header: "על מה",
       helpKey: "audit.evidence",
       render: (row) => (
         <div>
@@ -165,25 +166,25 @@ export function AuditPage() {
     },
     {
       key: "result",
-      header: "Result",
+      header: "תוצאה",
       helpKey: "job.status",
       render: (row) => <span className={`badge ${row.result === "failure" ? "badge-danger" : "badge-success"}`}>{row.result === "failure" ? "כשלון" : "הצלחה"}</span>
     },
     {
       key: "actor",
-      header: "Actor",
+      header: "מי ביצע",
       helpKey: "sharepoint.currentUser",
       render: (row) => row.actor?.userName || row.actor?.userId || "system"
     },
     {
       key: "date",
-      header: "Date",
+      header: "מתי",
       helpKey: "history",
       render: (row) => <span className="num text-xs">{formatDateTime(row.createdAt)}</span>
     },
     {
       key: "request",
-      header: "Request ID",
+      header: "מזהה בקשה",
       helpKey: "audit.evidence",
       render: (row) => <span className="num text-xs muted">{row.requestId || "-"}</span>
     },
@@ -205,7 +206,7 @@ export function AuditPage() {
         <span className={`badge ${row.result === "failure" ? "badge-danger" : "badge-success"}`}>{row.result === "failure" ? "כשלון" : "הצלחה"}</span>
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
-        <span className="muted">Actor: {row.actor?.userName || row.actor?.userId || "system"}</span>
+        <span className="muted">מי ביצע: {row.actor?.userName || row.actor?.userId || "system"}</span>
         <span className="num muted">{formatDateTime(row.createdAt)}</span>
       </div>
       <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" onClick={() => setSelectedRow(row)} type="button"><Eye size={13} />פתח פרטים</button>
@@ -216,9 +217,34 @@ export function AuditPage() {
     <div className="space-y-5">
       <PageHeader
         title="יומן פעולות"
-        subtitle="Audit log מסונן, דוח מסכם וייצוא CSV לפעולות Hub."
+        subtitle="קבלה מסודרת לכל פעולה: מי עשה, מה קרה, האם הצליח, ואיפה נמצאות הראיות"
         helpKey="audit"
         actions={<MetadataOnlyBadge mode="metadata" />}
+      />
+
+      <OperationalSummary
+        title="קבלות פעולה שאפשר להבין"
+        purpose="המסך הזה מיועד לבדיקה ותיעוד. הוא לא מריץ פעולות, אלא עוזר למצוא מי עשה מה, מתי, ומה נכשל."
+        state={`${formatNumber(totalRows)} רשומות לפי הסינון הנוכחי · ${formatNumber(activeFilterCount)} מסננים פעילים`}
+        attention={failureRows
+          ? `${formatNumber(failureRows)} כשלונות נמצאו. התחילו בכשלונות האחרונים ופתחו את המסך הרלוונטי לתיקון.`
+          : "אין כשלונות בסינון הנוכחי."}
+        attentionTone={failureRows ? "danger" : "success"}
+        nextAction={failureRows
+          ? "פתחו כשלון אחרון, קראו את התקציר, ואז עברו למסך Jobs, Diagnostics או האתר הרלוונטי."
+          : "אפשר לחפש פעולה, משתמש, אתר או לייצא CSV לצורך תיעוד."}
+        blocked={error ? "טעינת היומן נכשלה. נסו לרענן או בדקו את חיבור ה־backend." : undefined}
+        tone={failureRows ? "warning" : "success"}
+      />
+
+      <ModeBoundary
+        title="מה בטוח לעשות כאן"
+        items={[
+          { label: "חיפוש וסינון", description: "קריאה בלבד. לא משנה אתרים, הרשאות או Jobs.", tone: "success" },
+          { label: "ייצוא CSV", description: "מוריד עותק של הרשומות המסוננות לתיעוד.", tone: "info" },
+          { label: "פתיחת פרטים", description: "מציגה קבלה אנושית ואז Raw payload תחת Advanced.", tone: "neutral" },
+          { label: "תיקון כשל", description: "מתבצע במסך הפעולה המקורי, לא מתוך היומן.", tone: "warning" }
+        ]}
       />
 
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}
@@ -310,7 +336,7 @@ export function AuditPage() {
             ) : null}
           </SectionCard>
 
-          <SectionCard title="Audit log" subtitle="רשומות אחרונות לפי הסינון" helpKey="audit">
+          <SectionCard title="רשומות יומן" subtitle="רשומות אחרונות לפי הסינון" helpKey="audit">
             {rows.length === 0 ? (
               <EmptyState title="אין רשומות Audit" description="לא נמצאו רשומות לפי הסינון הנוכחי." />
             ) : (
@@ -342,7 +368,7 @@ export function AuditPage() {
             <input className="control num" value={filters.entityId} onChange={(event) => setFilters((current) => ({ ...current, entityId: event.target.value }))} />
           </label>
           <label className="block">
-            <span className="field-label"><HelpLabel helpKey="sharepoint.currentUser">Actor</HelpLabel></span>
+            <span className="field-label"><HelpLabel helpKey="sharepoint.currentUser">מי ביצע</HelpLabel></span>
             <input className="control" value={filters.actor} onChange={(event) => setFilters((current) => ({ ...current, actor: event.target.value }))} />
           </label>
           <label className="block">
@@ -362,9 +388,37 @@ export function AuditPage() {
 
       <DetailsDrawer open={Boolean(selectedRow)} title={selectedRow?.action || "Audit"} subtitle={selectedRow?._id} onClose={() => setSelectedRow(null)}>
         {selectedRow ? (
-          <pre className="overflow-x-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
-            {JSON.stringify(selectedRow, null, 2)}
-          </pre>
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="soft-panel p-3">
+                <p className="field-label">תוצאה</p>
+                <span className={`badge ${selectedRow.result === "failure" ? "badge-danger" : "badge-success"}`}>{selectedRow.result === "failure" ? "כשלון" : "הצלחה"}</span>
+              </div>
+              <div className="soft-panel p-3">
+                <p className="field-label">מתי</p>
+                <p className="num">{formatDateTime(selectedRow.createdAt)}</p>
+              </div>
+              <div className="soft-panel p-3">
+                <p className="field-label">מי ביצע</p>
+                <p>{selectedRow.actor?.userName || selectedRow.actor?.userId || "system"}</p>
+              </div>
+              <div className="soft-panel p-3">
+                <p className="field-label">על מה</p>
+                <p>{selectedRow.entityType || "-"}</p>
+                <p className="num text-xs muted">{selectedRow.entityId || ""}</p>
+              </div>
+            </div>
+            <div className="soft-panel p-3">
+              <p className="field-label">מה קרה</p>
+              <p className="font-bold" style={{ color: "var(--text-strong)" }}>{selectedRow.action}</p>
+              <p className="num mt-1 text-xs muted">{selectedRow.requestId || "ללא מזהה בקשה"}</p>
+            </div>
+            <AdvancedDetails title="פרטי יומן מתקדמים" description="JSON מלא לתחקור טכני או תמיכה">
+              <pre className="overflow-x-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
+                {JSON.stringify(selectedRow, null, 2)}
+              </pre>
+            </AdvancedDetails>
+          </div>
         ) : null}
       </DetailsDrawer>
     </div>

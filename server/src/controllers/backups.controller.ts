@@ -17,6 +17,7 @@ import {
   getBackupById,
   listBackups,
   listSiteBackups,
+  recordBrowserSharePointRestoreEvidence,
   recordBrowserSharePointBackupEvidence,
   recordBrowserSharePointBackupVerification,
   verifyBackup
@@ -24,6 +25,7 @@ import {
 import {
   browserBackupEvidenceSchema,
   browserBackupVerificationEvidenceSchema,
+  browserRestoreEvidenceSchema,
   queueRestoreSchema,
   restorePlanSchema,
   runAllBackupsSchema,
@@ -221,21 +223,13 @@ export const getBackup = async (req: Request, res: Response) => {
 export const postVerifyBackup = async (req: Request, res: Response) => {
   try {
     const payload = verifyBackupSchema.parse(req.body || {});
-    const backup = await verifyBackup({
+    await verifyBackup({
       backupId: req.params.id,
       checkedBy: req.user?.name || "system",
       details: payload.details
     });
 
-    await writeAuditLog({
-      req,
-      action: "backups.verify",
-      entityType: "SiteBackup",
-      entityId: backup._id.toString(),
-      metadata: { status: backup.status }
-    });
-
-    return ok(res, backup);
+    return ok(res, null);
   } catch (error) {
     return handleError(error, res);
   }
@@ -303,27 +297,56 @@ export const postRestoreBackup = async (req: Request, res: Response) => {
       backupId: req.params.id,
       createdBy: req.user?.name || "system",
       notes: payload.notes,
-      connectorMode: payload.connectorMode,
-      confirmBackendSharePoint: payload.confirmBackendSharePoint
+      connectorMode: payload.connectorMode
     });
 
     await writeAuditLog({
       req,
-      action: "backups.restore-queue",
+      action: "backups.restore-browser-required",
       entityType: "SiteBackup",
-      entityId: result.backupId,
+      entityId: result.backup._id.toString(),
       metadata: {
         jobId: result.job._id.toString(),
-        backupExternalId: result.backupExternalId,
-        siteId: result.siteId,
-        siteCode: result.siteCode,
-        fileCount: result.files.length,
-        requiresApproval: result.requiresApproval,
-        approvalStatus: result.approvalStatus
+        connectorMode: "browser-sharepoint",
+        filesCount: result.browserOperationPlan?.files?.length || 0
       }
     });
 
     return ok(res, result, undefined, 202);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const postBrowserRestoreEvidence = async (req: Request, res: Response) => {
+  try {
+    const payload = browserRestoreEvidenceSchema.parse(req.body || {});
+    const result = await recordBrowserSharePointRestoreEvidence({
+      backupId: req.params.id,
+      actor: req.user?.name || "browser-sharepoint",
+      input: payload
+    });
+
+    await writeAuditLog({
+      req,
+      action: "backups.browser-restore-evidence",
+      entityType: "SiteBackup",
+      entityId: result.backup._id.toString(),
+      metadata: {
+        connectorMode: "browser-sharepoint",
+        finalStatus: payload.finalStatus,
+        filesCount: result.summary.filesCount,
+        verifiedFilesCount: result.summary.verifiedFilesCount,
+        failedFilesCount: result.summary.failedFilesCount,
+        jobId: payload.jobId || ""
+      }
+    });
+
+    return ok(res, {
+      backup: result.backup,
+      site: result.site,
+      summary: result.summary
+    });
   } catch (error) {
     return handleError(error, res);
   }

@@ -12,6 +12,7 @@ import { HelpLabel } from "../components/help/HelpLabel";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBadge } from "../components/StatusBadge";
@@ -170,14 +171,14 @@ export function HealthPage() {
     },
     {
       key: "storage",
-      header: "Storage",
+      header: "מקור נתונים",
       render: (site) => (
         <div className="space-y-1 text-xs">
           <span className={`badge ${site.storageBackend === "mongo" ? "badge-info" : site.storageBackend === "txt" ? "badge-success" : "badge-neutral"}`}>
             {site.storageBackend === "mongo" ? "Mongo" : site.storageBackend === "txt" ? "TXT" : "Unknown"}
           </span>
-          <p className="muted">Runtime: <span className="num">{site.runtimeConfigStatus?.readStatus || "unknown"}</span></p>
-          <p className="muted">Data: <span className="num">{site.dataBackendStatus || "unknown"}</span></p>
+          <p className="muted">הגדרות: <span className="num">{site.runtimeConfigStatus?.readStatus || "unknown"}</span></p>
+          <p className="muted">נתונים: <span className="num">{site.dataBackendStatus || "unknown"}</span></p>
         </div>
       )
     },
@@ -214,8 +215,8 @@ export function HealthPage() {
       render: (site) => (
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-primary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `readonly-${site._id}`} onClick={() => void runReadOnlyFor(site._id)} type="button">בדוק</button>
-          <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `runtime-${site._id}`} onClick={() => void runRuntimeConfigFor(site._id)} type="button">Runtime</button>
-          {site.storageBackend === "mongo" ? <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `mongo-${site._id}`} onClick={() => void runMongoHealthFor(site._id)} type="button">Mongo</button> : null}
+          <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `runtime-${site._id}`} onClick={() => void runRuntimeConfigFor(site._id)} type="button">בדוק הגדרות</button>
+          {site.storageBackend === "mongo" ? <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `mongo-${site._id}`} onClick={() => void runMongoHealthFor(site._id)} type="button">בדוק Mongo</button> : null}
           <Link className="btn btn-secondary min-h-0 px-2 py-1 text-xs" to={`/sites/${site._id}`}>פרטים</Link>
         </div>
       )
@@ -243,8 +244,8 @@ export function HealthPage() {
       </div>
       <div className="flex flex-wrap gap-2">
         <button className="btn btn-primary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `readonly-${site._id}`} onClick={() => void runReadOnlyFor(site._id)} type="button">בדוק</button>
-        <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `runtime-${site._id}`} onClick={() => void runRuntimeConfigFor(site._id)} type="button">Runtime</button>
-        {site.storageBackend === "mongo" ? <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `mongo-${site._id}`} onClick={() => void runMongoHealthFor(site._id)} type="button">Mongo</button> : null}
+        <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `runtime-${site._id}`} onClick={() => void runRuntimeConfigFor(site._id)} type="button">בדוק הגדרות</button>
+        {site.storageBackend === "mongo" ? <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `mongo-${site._id}`} onClick={() => void runMongoHealthFor(site._id)} type="button">בדוק Mongo</button> : null}
         <Link className="btn btn-secondary min-h-0 px-2 py-1 text-xs" to={`/sites/${site._id}`}>פרטים</Link>
       </div>
     </div>
@@ -276,9 +277,49 @@ export function HealthPage() {
     <div className="space-y-5">
       <PageHeader
         title="בדיקות תקינות"
-        subtitle="תצוגה רוחבית של health לכל האתרים והרצת בדיקת Browser SharePoint read-only לאתר נבחר."
+        subtitle="האם האתר חי, מה נבדק, ואיזו בדיקה בטוחה להריץ עכשיו"
         helpKey="health"
         actions={<MetadataOnlyBadge mode="readonly" />}
+      />
+
+      <OperationalSummary
+        title="בריאות האתרים במבט אחד"
+        purpose="המסך בודק אם אתר מוכן לעבודה: קבצי אירוח ב־SharePoint, הגדרת runtime, ומקור נתונים כמו Mongo או TXT."
+        state={`${formatNumber(sites.length)} אתרים · ${formatNumber(counts.healthy)} תקינים · ${formatNumber(counts.failed)} נכשלו`}
+        attention={counts.failed
+          ? `${formatNumber(counts.failed)} אתרים נכשלו בבדיקה ודורשים פתיחת Evidence.`
+          : counts.warning
+            ? `${formatNumber(counts.warning)} אתרים באזהרה. מומלץ להריץ בדיקה read-only.`
+            : counts.unknown
+              ? `${formatNumber(counts.unknown)} אתרים עדיין לא נבדקו.`
+              : "כל האתרים שנבדקו נראים תקינים."}
+        attentionTone={counts.failed ? "danger" : counts.warning || counts.unknown ? "warning" : "success"}
+        nextAction={counts.failed || counts.warning
+          ? "בחרו אתר בעייתי, הריצו בדיקה read-only, ואז פתחו את הראיות כדי להבין מה חסר."
+          : "אפשר לבחור אתר ולהריץ בדיקה ידנית כדי לוודא שהמצב עדכני."}
+        blocked={!sites.length && !loading ? "אין אתרים ברשימת Hub. הוסיפו אתר במסך אתרים לפני בדיקות תקינות." : undefined}
+        tone={counts.failed ? "danger" : counts.warning || counts.unknown ? "warning" : "success"}
+      />
+
+      <GuidedFlow
+        title="בדיקת אתר בלי לשנות אותו"
+        subtitle="הבדיקה הראשית היא קריאה בלבד. פעולות תזמון נשמרות בנפרד."
+        steps={[
+          { title: "בחר אתר", description: "התחילו מהאתר שהכי חשוב לוודא עכשיו.", status: selectedSite ? "done" : "pending" },
+          { title: "הרץ בדיקת דפדפן", description: "בודקת SharePoint דרך הדפדפן המחובר ואינה משנה קבצים.", status: healthResult ? "done" : "active" },
+          { title: "קרא Evidence", description: "אם משהו נכשל, פתחו את שורות הראיה במקום לנחש.", status: healthResult ? "active" : "pending" },
+          { title: "תקן במסך המתאים", description: "Runtime, Mongo או פריסה מטופלים במסכים שלהם.", status: "pending" }
+        ]}
+      />
+
+      <ModeBoundary
+        title="סוגי בדיקות"
+        items={[
+          { label: "Browser SharePoint", description: "קריאה בלבד דרך הדפדפן המחובר. בטוח להרצה ידנית.", tone: "success" },
+          { label: "Runtime", description: "בודק הגדרות runtime שנשמרו לאתר.", tone: "info" },
+          { label: "Mongo", description: "בודק seed ומצב backend רק לאתרי Mongo.", tone: "info" },
+          { label: "תזמון", description: "שומר הגדרת תחזוקה ויוצר Jobs במחזור הסריקה.", tone: "warning" }
+        ]}
       />
 
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}
@@ -342,12 +383,12 @@ export function HealthPage() {
         </>
       ) : null}
 
-      <DetailsDrawer open={Boolean(healthResult)} title="תוצאות בדיקת Health" subtitle={healthResult ? `${healthResult.siteCode} · ${healthResult.source || healthResult.connectorMode || "Backend SharePoint"} · ${formatDateTime(healthResult.checkedAt)}` : ""} onClose={() => setHealthResult(null)}>
+      <DetailsDrawer open={Boolean(healthResult)} title="תוצאות בדיקת תקינות" subtitle={healthResult ? `${healthResult.siteCode} · ${healthResult.source || healthResult.connectorMode || "בדיקת שרת"} · ${formatDateTime(healthResult.checkedAt)}` : ""} onClose={() => setHealthResult(null)}>
         {healthResult ? (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <HealthBadge status={healthResult.derivedHealthStatus as any} />
-              <span className="badge badge-info">{healthResult.source || "Backend SharePoint"}</span>
+              <span className="badge badge-info">{healthResult.source || "בדיקת שרת"}</span>
               <span className="num text-xs muted">{formatDateTime(healthResult.checkedAt)}</span>
             </div>
             {healthResult.evidence.length === 0 ? (

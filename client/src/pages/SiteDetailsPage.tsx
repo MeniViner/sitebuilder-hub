@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Archive, ClipboardList, DatabaseBackup, Edit3, ExternalLink, Eye, FileClock, FolderInput, GitBranch, ListChecks, MessageSquareText, MoreHorizontal, RefreshCcw, Rocket, ShieldCheck, Users, Workflow } from "lucide-react";
-import { Backup, BackupPlan, BuilderMongoHealthResult, DeploymentVerificationEvidence, Job, PermissionsSetupPlan, RuntimeConfigValidationResult, SharePointHealthEvidence, SharePointHealthResult, SiteBootstrapPlan, SiteDeployment, SiteOperationsSummary, SiteProvisionPlan, sitesApi } from "../api/sitesApi";
+import { Backup, BackupPlan, BuilderMongoHealthResult, DeploymentVerificationEvidence, Job, PermissionsSetupPlan, RuntimeConfigValidationResult, SharePointHealthEvidence, SharePointHealthResult, SiteBootstrapPlan, SiteDeployment, SiteOperationsSummary, SiteProvisionPlan, TxtToMongoMigrationResult, sitesApi } from "../api/sitesApi";
 import { Site, SiteHealth } from "../types/site";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { AdminLiveReadMeta, AdminSourceLists, AdminSourceStatusTable, AdminSourceSummaryCards } from "../components/AdminSourceSummaryCards";
@@ -17,6 +17,7 @@ import { KpiCard } from "../components/KpiCard";
 import { LinkRow } from "../components/LinkRow";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { AdvancedDetails, GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBadge } from "../components/StatusBadge";
@@ -24,7 +25,26 @@ import { VersionBadge } from "../components/VersionBadge";
 import type { HelpContentKey } from "../help/helpContent";
 import { formatBytes, formatDateTime, formatMb, formatNumber, jobStatusLabel, jobTypeLabel } from "../utils/format";
 import { runBrowserSharePointBackupOperation } from "../utils/sharepointBrowserOperationRunner";
-import { buildBrowserSharePointBackupPlan } from "../utils/sharepointBrowserConnector";
+import {
+  buildBrowserSharePointBackupPlan,
+  deployArtifactToSharePointBrowser,
+  ensureSharePointFolderHierarchyBrowser
+} from "../utils/sharepointBrowserConnector";
+import {
+  deriveRequiredFoldersFromArtifactFilePaths,
+  latestCompatibleRelease,
+  manifestFilesForPlan
+} from "../utils/artifactCompatibility";
+import { buildDeploymentMetadataFile, DEPLOYMENT_METADATA_FILE } from "../utils/deploymentMetadata";
+import { resolveSiteBuilderPaths } from "../utils/sitebuilderPaths";
+import {
+  runBrowserAdminTxtRepairOperation,
+  readBrowserTxtSnapshotForMongoMigration,
+  runBrowserMongoRuntimeConfigUpload,
+  runBrowserSharePointBootstrapOperation,
+  runBrowserSharePointPermissionsOperation,
+  runBrowserSharePointProvisionOperation
+} from "../utils/sharepointBrowserSiteOperations";
 import { useBrowserAdminsLiveRead } from "../hooks/useBrowserAdminsLiveRead";
 
 type TabKey = "overview" | "paths" | "health" | "versions" | "backups" | "admins" | "jobs" | "audit" | "notes";
@@ -43,8 +63,8 @@ const tabs: Array<{ key: TabKey; label: string; icon: ReactNode }> = [
   { key: "versions", label: "גרסאות", icon: <GitBranch size={15} /> },
   { key: "backups", label: "גיבויים", icon: <DatabaseBackup size={15} /> },
   { key: "admins", label: "מנהלים", icon: <Users size={15} /> },
-  { key: "jobs", label: "Jobs", icon: <Workflow size={15} /> },
-  { key: "audit", label: "Audit", icon: <FileClock size={15} /> },
+  { key: "jobs", label: "פעולות", icon: <Workflow size={15} /> },
+  { key: "audit", label: "יומן", icon: <FileClock size={15} /> },
   { key: "notes", label: "הערות", icon: <MessageSquareText size={15} /> }
 ];
 
@@ -144,9 +164,11 @@ const MobileMeta = ({ label, helpKey, children }: { label: string; helpKey?: Hel
 );
 
 const JsonBlock = ({ value }: { value: unknown }) => (
-  <pre className="num max-h-[420px] overflow-auto rounded-lg border p-3 text-xs" style={{ borderColor: "var(--border)", background: "var(--surface-muted)", color: "var(--text-strong)" }}>
-    {formatJson(value)}
-  </pre>
+  <AdvancedDetails title="Advanced JSON" description="Raw payload מלא לתחקור טכני">
+    <pre className="num max-h-[420px] overflow-auto rounded-lg border p-3 text-xs" style={{ borderColor: "var(--border)", background: "var(--surface-muted)", color: "var(--text-strong)" }}>
+      {formatJson(value)}
+    </pre>
+  </AdvancedDetails>
 );
 
 const deploymentEvidenceColumns: DataTableColumn<DeploymentVerificationEvidence>[] = [
@@ -172,9 +194,9 @@ const deploymentEvidenceColumns: DataTableColumn<DeploymentVerificationEvidence>
       </div>
     )
   },
-  {
-    key: "target",
-    header: "Target path",
+    {
+      key: "target",
+      header: "נתיב יעד",
     helpKey: "deploy.targetMode",
     render: (item) => (
       <div className="space-y-2">
@@ -349,6 +371,7 @@ export function SiteDetailsPage() {
   const [sharePointHealth, setSharePointHealth] = useState<SharePointHealthResult | null>(null);
   const [runtimeConfigResult, setRuntimeConfigResult] = useState<RuntimeConfigValidationResult | null>(null);
   const [mongoHealthResult, setMongoHealthResult] = useState<BuilderMongoHealthResult | null>(null);
+  const [migrationResult, setMigrationResult] = useState<TxtToMongoMigrationResult | null>(null);
   const [backupPlan, setBackupPlan] = useState<BackupPlan | null>(null);
   const [bootstrapPlan, setBootstrapPlan] = useState<SiteBootstrapPlan | null>(null);
   const [provisionPlan, setProvisionPlan] = useState<SiteProvisionPlan | null>(null);
@@ -584,12 +607,12 @@ export function SiteDetailsPage() {
   const auditColumns: DataTableColumn<any>[] = [
     { key: "action", header: "פעולה", helpKey: "audit", render: (row) => row.action },
     { key: "result", header: "תוצאה", helpKey: "job.status", render: (row) => <span className={`badge ${row.result === "failure" ? "badge-danger" : "badge-success"}`}>{row.result}</span> },
-    { key: "actor", header: "Actor", helpKey: "sharepoint.currentUser", render: (row) => row.actor?.userName || row.actor?.userId || "-" },
+    { key: "actor", header: "מי ביצע", helpKey: "sharepoint.currentUser", render: (row) => row.actor?.userName || row.actor?.userId || "-" },
     { key: "created", header: "תאריך", helpKey: "history", render: (row) => <span className="num text-xs">{formatDateTime(row.createdAt)}</span> },
-    { key: "request", header: "Request ID", helpKey: "audit.evidence", render: (row) => <span className="num text-xs muted">{row.requestId || "-"}</span> },
+    { key: "request", header: "מזהה בקשה", helpKey: "audit.evidence", render: (row) => <span className="num text-xs muted">{row.requestId || "-"}</span> },
     {
       key: "actions",
-      header: "Payload",
+      header: "פרטים",
       helpKey: "audit.evidence",
       render: (row) => (
         <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" onClick={() => setDetailsDrawer({ type: "audit", row })} type="button">
@@ -612,9 +635,247 @@ export function SiteDetailsPage() {
     }
   };
 
+  const requireCurrentSite = () => {
+    if (!site) throw new Error("site-not-loaded");
+    if (!site.sharePointSiteUrl && !site.resolvedPaths?.sharePointSiteUrl) throw new Error("sharepoint-site-url-missing");
+    return site;
+  };
+
+  const resolveBrowserDeployPathsForSite = (currentSite: Site) => {
+    const resolved = resolveSiteBuilderPaths({
+      siteCode: currentSite.siteCode,
+      sharePointHost: currentSite.sharePointHost,
+      sharePointSiteUrl: currentSite.sharePointSiteUrl || currentSite.resolvedPaths?.sharePointSiteUrl,
+      siteDbLibrary: currentSite.siteDbLibrary || currentSite.resolvedPaths?.siteDbLibrary,
+      usersDbLibrary: currentSite.usersDbLibrary || currentSite.resolvedPaths?.usersDbLibrary,
+      bootstrapLibrary: currentSite.bootstrapLibrary || currentSite.resolvedPaths?.bootstrapLibrary,
+      bootstrapFolder: currentSite.bootstrapFolder || currentSite.resolvedPaths?.bootstrapFolder,
+      widgetsDbTarget: currentSite.widgetsDbTarget || currentSite.resolvedPaths?.widgetsDbTarget,
+      runtimeConfigPath: currentSite.runtimeConfigPath || currentSite.resolvedPaths?.runtimeConfigPath
+    });
+    if (!resolved) throw new Error("לא ניתן לחשב נתיבי SharePoint לפריסת Mongo.");
+    return resolved;
+  };
+
+  const deployLatestMongoReleaseInBrowser = async (currentSite: Site) => {
+    const releases = (await sitesApi.releases()).data;
+    const release = latestCompatibleRelease(releases, "mongo");
+    if (!release) {
+      throw new Error("לא נמצא Release פעיל, מאומת ותואם Mongo. הנתונים עברו למונגו, אבל החלפת dist דורשת Release Mongo מוכן.");
+    }
+
+    const manifest = (await sitesApi.releaseArtifactManifest(release._id)).data;
+    const compatibility = manifest.compatibility || {
+      storageCompatibility: manifest.summary.storageCompatibility || [],
+      artifactKind: manifest.summary.artifactKind || "unknown",
+      requiresRuntimeConfig: Boolean(manifest.summary.requiresRuntimeConfig),
+      preservesRuntimeConfig: manifest.summary.preservesRuntimeConfig !== false,
+      requiredFolders: manifest.summary.requiredFolders || [],
+      runtimeConfigFiles: manifest.summary.runtimeConfigFiles || [],
+      compatibilitySource: manifest.summary.compatibilitySource || "unknown",
+      compatibilityWarnings: []
+    };
+    if (!manifest.summary.readyForDeploy) throw new Error("ה־Release Mongo האחרון לא מוכן לפריסה.");
+    if (!compatibility.storageCompatibility.includes("mongo")) throw new Error("ה־Release שנבחר לא מסומן כתואם Mongo.");
+    if (compatibility.preservesRuntimeConfig === false) throw new Error("ה־Release שנבחר עלול למחוק runtime config ולכן נחסם.");
+
+    const plan = (await sitesApi.deploySiteVersionPlan(currentSite._id, release._id, "local-dev-owner", "browser-sharepoint")).data;
+    if (!plan.summary.readyForDeploy) throw new Error("ה־artifact חסר או לא תקין.");
+    if (plan.summary.readyForDeployExecution === false && plan.missingRequirements?.length) {
+      throw new Error(plan.missingRequirements.join("; "));
+    }
+
+    const resolvedPaths = resolveBrowserDeployPathsForSite(currentSite);
+    const targetSiteUrl = plan.target?.sharePointSiteUrl || resolvedPaths.sharePointSiteUrl || currentSite.sharePointSiteUrl;
+    const targetDistPath = plan.target?.targetDistPath || resolvedPaths.finalDistRoot;
+    const finalAppUrl = plan.target?.finalAppUrl || resolvedPaths.finalAppUrl || currentSite.finalAppUrl;
+    const deployFiles = manifestFilesForPlan(plan.files, manifest.files);
+    const requiredFolders = deriveRequiredFoldersFromArtifactFilePaths(deployFiles.filter((file) => file.deployable).map((file) => file.relativePath));
+    for (const folder of requiredFolders) {
+      await ensureSharePointFolderHierarchyBrowser(resolvedPaths, `${targetDistPath.replace(/\/+$/g, "")}/${folder}`);
+    }
+
+    const deploymentMetadata = await buildDeploymentMetadataFile({
+      releaseId: release._id,
+      releaseVersion: plan.releaseVersion,
+      operation: "deploy",
+      site: currentSite,
+      targetSiteUrl,
+      targetDistPath,
+      finalAppUrl
+    });
+    const browserDeploy = await deployArtifactToSharePointBrowser({
+      releaseId: release._id,
+      siteId: currentSite._id,
+      siteCode: currentSite.siteCode,
+      targetSiteUrl,
+      targetDistPath,
+      finalAppUrl,
+      files: [...deployFiles, deploymentMetadata.file],
+      loadArtifactFile: (relativePath) =>
+        relativePath === DEPLOYMENT_METADATA_FILE
+          ? Promise.resolve(deploymentMetadata.response)
+          : sitesApi.releaseArtifactFile(release._id, relativePath)
+    });
+
+    const versionBefore = currentSite.currentVersion || currentSite.version || "";
+    const finalAppUrlVerified = browserDeploy.finalAppUrlVerification ? browserDeploy.finalAppUrlVerification.ok === true : true;
+    const finalAppUrlError = browserDeploy.finalAppUrlVerification && !browserDeploy.finalAppUrlVerification.ok
+      ? browserDeploy.finalAppUrlVerification.error || "final-app-url-verification-failed"
+      : "";
+    const effectiveFinalStatus = browserDeploy.finalStatus === "success" && finalAppUrlVerified ? "success" as const : "failed" as const;
+    const errors = finalAppUrlError
+      ? [...browserDeploy.errors, { error: finalAppUrlError, status: browserDeploy.finalAppUrlVerification?.status }]
+      : browserDeploy.errors;
+
+    const evidenceResponse = await sitesApi.recordBrowserDeployEvidence(currentSite._id, {
+      releaseId: release._id,
+      deployMode: "local-dev-owner",
+      connectorMode: "browser-sharepoint",
+      targetSite: {
+        siteId: currentSite._id,
+        siteCode: currentSite.siteCode,
+        sharePointSiteUrl: targetSiteUrl
+      },
+      targetPaths: {
+        targetDistPath,
+        finalAppUrl
+      },
+      uploadedFilesEvidence: browserDeploy.uploadedFilesEvidence,
+      readBackEvidence: browserDeploy.readBackEvidence,
+      finalAppUrlVerification: browserDeploy.finalAppUrlVerification,
+      errors,
+      startedAt: browserDeploy.startedAt,
+      completedAt: browserDeploy.completedAt,
+      finalStatus: effectiveFinalStatus,
+      versionBefore,
+      versionAfter: effectiveFinalStatus === "success" ? plan.releaseVersion : versionBefore
+    });
+
+    const indexVerified = browserDeploy.readBackEvidence.some((item) => item.relativePath === "index.html" && item.status === "verified" && item.sizeMatches && item.sha256Matches);
+    const deploymentMetadataVerified = browserDeploy.readBackEvidence.some((item) => item.relativePath === DEPLOYMENT_METADATA_FILE && item.status === "verified" && item.sizeMatches && item.sha256Matches);
+    if (browserDeploy.finalStatus !== "success" || !finalAppUrlVerified || !indexVerified || !deploymentMetadataVerified) {
+      throw new Error(errors.map((item) => typeof item === "string" ? item : item.error).filter(Boolean).join("; ") || "פריסת dist Mongo דרך הדפדפן נכשלה.");
+    }
+
+    return {
+      releaseVersion: plan.releaseVersion,
+      filesCount: browserDeploy.readBackEvidence.length,
+      deploymentId: evidenceResponse.data.deployment._id
+    };
+  };
+
+  const runProvisionInBrowser = async () => {
+    const currentSite = requireCurrentSite();
+    const queued = await sitesApi.queueSiteProvision(currentSite._id);
+    setProvisionPlan(queued.data.plan);
+    const evidence = await runBrowserSharePointProvisionOperation(currentSite);
+    await sitesApi.recordBrowserSiteProvisionEvidence(currentSite._id, {
+      ...evidence,
+      jobId: queued.data.job._id
+    });
+    setMessage(evidence.finalStatus === "success" ? "Provision הושלם דרך הדפדפן ונשמר Evidence" : "Provision נכשל דרך הדפדפן; Evidence נשמר");
+    await load();
+  };
+
+  const runPermissionsInBrowser = async () => {
+    const currentSite = requireCurrentSite();
+    const queued = await sitesApi.queuePermissionsSetup(currentSite._id);
+    setPermissionsPlan(queued.data.plan);
+    const evidence = await runBrowserSharePointPermissionsOperation(currentSite);
+    await sitesApi.recordBrowserPermissionsEvidence(currentSite._id, {
+      ...evidence,
+      jobId: queued.data.job._id
+    });
+    setMessage(evidence.finalStatus === "success" ? "הרשאות הוגדרו דרך הדפדפן ונשמר Evidence" : "הגדרת הרשאות נכשלה דרך הדפדפן; Evidence נשמר");
+    await load();
+  };
+
+  const runBootstrapInBrowser = async () => {
+    const currentSite = requireCurrentSite();
+    const queued = await sitesApi.queueSiteBootstrap(currentSite._id, {
+      runProvisioning: true,
+      runPermissionsSetup: true,
+      reason: "Bootstrap executed from site details through browser"
+    });
+    setBootstrapPlan(queued.data.plan);
+    const evidence = await runBrowserSharePointBootstrapOperation(currentSite);
+    await sitesApi.recordBrowserSiteBootstrapEvidence(currentSite._id, {
+      ...evidence,
+      jobId: queued.data.job._id
+    });
+    setMessage(evidence.finalStatus === "success" ? "Bootstrap הושלם דרך הדפדפן ונשמר Evidence" : "Bootstrap נכשל דרך הדפדפן; Evidence נשמר");
+    await load();
+  };
+
+  const runAdminTxtRepairInBrowser = async () => {
+    const currentSite = requireCurrentSite();
+    const queued = await sitesApi.queueAdminTxtRepair(currentSite._id, "Admin TXT repair executed from site details through browser");
+    const evidence = await runBrowserAdminTxtRepairOperation(currentSite, queued.data.plan, "Admin TXT repair from site details");
+    await sitesApi.recordBrowserAdminTxtRepairEvidence(currentSite._id, {
+      ...evidence,
+      jobId: queued.data.job._id
+    });
+    setMessage(evidence.finalStatus === "success" ? "users_data.txt תוקן דרך הדפדפן ונשמר Evidence" : "תיקון users_data.txt נכשל דרך הדפדפן; Evidence נשמר");
+    await load();
+  };
+
+  const runTxtToMongoMigrationInBrowser = async () => {
+    const currentSite = requireCurrentSite();
+    if (currentSite.storageBackend === "mongo") {
+      throw new Error("האתר כבר מוגדר כ־Mongo.");
+    }
+
+    const snapshot = await readBrowserTxtSnapshotForMongoMigration(currentSite);
+    const blockedFiles = snapshot.files.filter((file) => file.status !== "read" || file.parseStatus !== "json");
+    if (blockedFiles.length) {
+      setMigrationResult(null);
+      throw new Error(`נכשל לקרוא TXT תקין לפני מיגרציה: ${blockedFiles.map((file) => file.fileName || file.key || file.sourcePath).join(", ")}`);
+    }
+
+    const migration = await sitesApi.migrateTxtToMongo(currentSite._id, snapshot);
+    setMigrationResult(migration.data);
+    if (migration.data.finalStatus === "failed") {
+      throw new Error("ייבוא הנתונים ל־Mongo נכשל. פתחו Audit/Evidence לפרטים.");
+    }
+
+    const refreshed = (await sitesApi.getById(currentSite._id)).data;
+    const runtimeConfig = await sitesApi.mongoRuntimeConfigContent(currentSite._id);
+    const runtimeEvidence = await runBrowserMongoRuntimeConfigUpload(refreshed, runtimeConfig.data);
+    await sitesApi.recordMongoCreateBrowserEvidence(currentSite._id, runtimeEvidence);
+    if (!runtimeEvidence.runtimeConfig?.verified) {
+      throw new Error("הנתונים עברו ל־Mongo, אבל runtime config לא אומת ב־SharePoint.");
+    }
+
+    const deployResult = await deployLatestMongoReleaseInBrowser(refreshed);
+    setMessage(`מיגרציית TXT ל־Mongo הושלמה: ${migration.data.import.written.length} קבצי TXT הועברו, runtime config אומת, ו־dist עודכן לגרסת ${deployResult.releaseVersion}.`);
+    setActiveTab("versions");
+    await load();
+  };
+
   if (loading) return <LoadingState label="טוען פרטי אתר..." />;
   if (error && !site) return <ErrorState message={error} onRetry={load} />;
   if (!site) return <EmptyState title="האתר לא נמצא" description="לא נמצאה רשומה מתאימה ב־Hub." />;
+
+  const failedJobsCount = jobs.filter((job) => job.status === "failed").length;
+  const latestDeployment = deployments[0];
+  const latestBackup = backups[0];
+  const siteAttention = site.status === "archived"
+    ? "האתר בארכיון. פעולות שוטפות לא מומלצות לפני החזרה לניהול."
+    : site.derivedHealthStatus === "failed"
+      ? "בדיקת התקינות האחרונה נכשלה. פתחו תקינות וקראו Evidence."
+      : failedJobsCount
+        ? `${formatNumber(failedJobsCount)} פעולות אחרונות נכשלו. פתחו פעולות כדי לקרוא לוגים.`
+        : site.versionStatus === "outdated"
+          ? "האתר לא בגרסה האחרונה הידועה. פריסה אפשרית דרך מרכז הגרסאות."
+          : !site.lastBackupAt
+            ? "לא נמצא גיבוי אחרון. מומלץ ליצור תוכנית גיבוי."
+            : "אין בעיה דחופה שמוצגת באתר הזה.";
+  const siteAttentionTone = site.status === "archived" || site.derivedHealthStatus === "failed" || failedJobsCount
+    ? "danger"
+    : site.versionStatus === "outdated" || !site.lastBackupAt
+      ? "warning"
+      : "success";
 
   return (
     <div className="space-y-5">
@@ -632,6 +893,47 @@ export function SiteDetailsPage() {
         }
       />
 
+      <OperationalSummary
+        title="מצב האתר ומה בטוח לעשות"
+        purpose="זהו דף העבודה של אתר אחד: בריאות, גרסה, גיבויים, מנהלים, פעולות וראיות."
+        state={`סטטוס: ${site.status} · תקינות: ${site.derivedHealthStatus || "unknown"} · גרסה: ${site.currentVersion || site.version || "-"} · גיבוי אחרון: ${formatDateTime(site.lastBackupAt)}`}
+        attention={siteAttention}
+        attentionTone={siteAttentionTone}
+        nextAction={site.derivedHealthStatus === "failed"
+          ? "עברו ללשונית תקינות והריצו בדיקה read-only."
+          : failedJobsCount
+            ? "עברו ללשונית פעולות, פתחו Job שנכשל וקראו את הלוגים."
+            : site.versionStatus === "outdated"
+              ? "פתחו פריסה דרך הדפדפן במרכז הגרסאות."
+              : !site.lastBackupAt
+                ? "עברו לגיבויים וצרו תוכנית גיבוי לפני שינוי גדול."
+                : "אפשר לפתוח את האתר, לבדוק נתונים, או לעבור ללשונית המתאימה לפי הצורך."}
+        blocked={!writeAvailable
+          ? "SharePoint מתבצע דרך הדפדפן המחובר. השרת לא נדרש ולא אמור לכתוב ל־SharePoint."
+          : undefined}
+        tone={siteAttentionTone}
+      />
+
+      <GuidedFlow
+        title="סדר עבודה מומלץ לאתר"
+        steps={[
+          { title: "הבן מצב", description: "קראו תקינות, גרסה וגיבוי אחרון לפני פעולה.", status: "done" },
+          { title: "בדוק חסמים", description: "אם יש כשל, התחילו ב־Evidence ו־Jobs במקום לנחש.", status: siteAttentionTone === "danger" ? "active" : "pending" },
+          { title: "בחר פעולה מוגנת", description: "פריסה, גיבוי, Bootstrap והרשאות עוברים דרך תוכנית או אישור.", status: "pending" },
+          { title: "שמור ראיות", description: "אחרי פעולה, בדקו Evidence, Audit וגיבוי.", status: latestDeployment || latestBackup ? "done" : "pending" }
+        ]}
+      />
+
+      <ModeBoundary
+        title="גבולות פעולה באתר הזה"
+        items={[
+          { label: "פתח אתר", description: "פותח את האתר בדפדפן. לא משנה Hub או SharePoint.", tone: "success" },
+          { label: "בדיקות וגיבוי דפדפן", description: "משתמשות בחיבור הדפדפן ל־SharePoint כשזה נתמך.", tone: "info" },
+          { label: "Server SharePoint", description: "מושבת בכוונה. פעולות SharePoint נתמכות דרך הדפדפן המחובר בלבד.", tone: "neutral" },
+          { label: "ארכיון", description: "מסמן רשומה ב־Hub בלבד ולא מוחק קבצים מ־SharePoint.", tone: "danger" }
+        ]}
+      />
+
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}
       {error ? <ErrorState message={error} onRetry={load} /> : null}
 
@@ -641,7 +943,7 @@ export function SiteDetailsPage() {
             <StatusBadge status={site.status} />
             <HealthBadge status={site.derivedHealthStatus} />
             <VersionBadge status={site.versionStatus || "unknown"} />
-            {writeAvailable ? <span className="badge badge-success">SharePoint write זמין</span> : <MetadataOnlyBadge mode="notConnected" />}
+            <span className="badge badge-success">SharePoint דרך הדפדפן</span>
           </div>
           <button className="btn btn-secondary" onClick={load} type="button"><RefreshCcw size={15} />רענן</button>
         </div>
@@ -670,6 +972,31 @@ export function SiteDetailsPage() {
             <KpiCard title="גיבויים" value={formatNumber(site.backupCount || 0)} icon={<DatabaseBackup size={18} />} description={`אחרון: ${formatDateTime(site.lastBackupAt)}`} tone="neutral" helpKey="backup" />
           </div>
 
+          {site.storageBackend !== "mongo" ? (
+            <SectionCard title="מיגרציית TXT ל־Mongo" subtitle="ייבוא קבצי TXT דרך הדפדפן, כתיבה ל־Mongo, העלאת runtime config ופריסת dist תואם Mongo." helpKey="site.mongodb">
+              <div className="flex flex-wrap items-center gap-2">
+                <button className="btn btn-primary" disabled={busyAction === "txt-to-mongo"} onClick={() => runAction("txt-to-mongo", runTxtToMongoMigrationInBrowser)} type="button">
+                  <Workflow size={15} />המר אתר TXT ל־Mongo ועדכן dist
+                </button>
+                <span className="badge badge-success">SharePoint בדפדפן</span>
+                <span className="badge badge-info">Mongo דרך השרת</span>
+              </div>
+              {migrationResult ? (
+                <div className="mt-4 grid gap-3 md:grid-cols-4">
+                  <KpiCard title="קבצים שיובאו" value={formatNumber(migrationResult.import.written.length)} icon={<ListChecks size={18} />} tone={migrationResult.import.status === "ok" ? "success" : "warning"} helpKey="site.mongodb" />
+                  <KpiCard title="Registry" value={migrationResult.registry.status} icon={<ShieldCheck size={18} />} tone={migrationResult.registry.status === "ok" ? "success" : "danger"} helpKey="site.mongodb" />
+                  <KpiCard title="Import" value={migrationResult.import.status} icon={<DatabaseBackup size={18} />} tone={migrationResult.import.status === "ok" ? "success" : "danger"} helpKey="site.mongodb" />
+                  <KpiCard title="המשך" value="Auto Deploy" icon={<Rocket size={18} />} tone={migrationResult.finalStatus === "runtime-config-required" ? "info" : "warning"} helpKey="deploy" />
+                </div>
+              ) : null}
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button className="btn btn-secondary" type="button" onClick={() => setActiveTab("versions")}>
+                  <Rocket size={15} />פתח היסטוריית גרסאות
+                </button>
+              </div>
+            </SectionCard>
+          ) : null}
+
           <div className="grid gap-5 xl:grid-cols-2">
             <SectionCard title="בעלות ותפעול" subtitle="פרטי אחריות ומעקב" helpKey="site.owner">
               <div className="grid gap-3 md:grid-cols-2">
@@ -689,24 +1016,27 @@ export function SiteDetailsPage() {
               </div>
             </SectionCard>
 
-            <SectionCard title="Operations / Bootstrap" subtitle="תכנון read-only והרצת Bootstrap לאתר SharePoint" helpKey="site.bootstrap">
+            <SectionCard title="Operations / Bootstrap" subtitle="כל פעולת SharePoint רצה דרך הדפדפן הפעיל; השרת שומר Job ו־Evidence בלבד" helpKey="site.bootstrap">
               <div className="mb-4 flex flex-wrap gap-2">
                 <button className="btn btn-primary" disabled={busyAction === "bootstrap-plan"} onClick={() => runAction("bootstrap-plan", async () => {
                   const result = await sitesApi.siteBootstrapPlan(site._id);
                   setBootstrapPlan(result.data);
                   setMessage("תוכנית Bootstrap נבנתה");
                 })} type="button"><ClipboardList size={15} />בנה תוכנית</button>
-                <button className="btn btn-secondary" disabled={!writeAvailable || busyAction === "site-bootstrap"} onClick={() => runAction("site-bootstrap", async () => {
-                  const result = await sitesApi.queueSiteBootstrap(site._id, {
-                    runProvisioning: true,
-                    runPermissionsSetup: true,
-                    reason: "Bootstrap queued from site details"
-                  });
-                  setBootstrapPlan(result.data.plan);
-                  setMessage(result.data.message || `נוצר Job ל־Bootstrap: ${result.data.job._id}`);
-                  await load();
-                })} type="button"><Rocket size={15} />הרץ Bootstrap</button>
-                {!writeAvailable ? <MetadataOnlyBadge mode="notConnected" /> : null}
+                <button className="btn btn-secondary" disabled={busyAction === "provision-plan"} onClick={() => runAction("provision-plan", async () => {
+                  const result = await sitesApi.siteProvisionPlan(site._id);
+                  setProvisionPlan(result.data);
+                  setMessage("תוכנית Provision נבנתה");
+                })} type="button"><ClipboardList size={15} />תכנן Provision</button>
+                <button className="btn btn-secondary" disabled={busyAction === "permissions-plan"} onClick={() => runAction("permissions-plan", async () => {
+                  const result = await sitesApi.permissionsSetupPlan(site._id);
+                  setPermissionsPlan(result.data);
+                  setMessage("תוכנית הרשאות נבנתה");
+                })} type="button"><ClipboardList size={15} />תכנן הרשאות</button>
+                <button className="btn btn-primary" disabled={busyAction === "site-provision"} onClick={() => runAction("site-provision", runProvisionInBrowser)} type="button"><Workflow size={15} />הרץ Provision</button>
+                <button className="btn btn-secondary" disabled={busyAction === "permissions-setup"} onClick={() => runAction("permissions-setup", runPermissionsInBrowser)} type="button"><ShieldCheck size={15} />הרץ הרשאות</button>
+                <button className="btn btn-secondary" disabled={busyAction === "site-bootstrap"} onClick={() => runAction("site-bootstrap", runBootstrapInBrowser)} type="button"><Rocket size={15} />הרץ Bootstrap</button>
+                <span className="badge badge-success">Browser SharePoint</span>
               </div>
 
               {bootstrapPlan ? (
@@ -714,7 +1044,7 @@ export function SiteDetailsPage() {
                   <div className="grid gap-3 md:grid-cols-3">
                     <KpiCard title="צעדים" value={formatNumber(bootstrapStepsCount)} icon={<ListChecks size={18} />} tone="info" helpKey="site.bootstrap" />
                     <KpiCard title="חסמים" value={formatNumber(bootstrapBlockersCount)} icon={<ShieldCheck size={18} />} tone={bootstrapReady ? "success" : "warning"} helpKey="deploy.blocker" />
-                    <KpiCard title="כתיבה" value={writeAvailable ? "זמין" : "לא זמין"} icon={<Workflow size={18} />} tone={writeAvailable ? "success" : "warning"} helpKey="sharepoint.write" />
+                    <KpiCard title="הרצה" value="דפדפן" icon={<Workflow size={18} />} tone="success" helpKey="sharepoint.write" />
                   </div>
                   <LinkRow label="Target URL" value={bootstrapTargetUrl} isUrl />
                   {bootstrapBlockers.length ? (
@@ -725,10 +1055,10 @@ export function SiteDetailsPage() {
                       </ul>
                     </div>
                   ) : null}
-                  {bootstrapPlan.steps?.length ? (
-                    <div className="space-y-2">
-                      {bootstrapPlan.steps.slice(0, 5).map((step) => (
-                        <div key={step.key} className="soft-panel flex items-center justify-between gap-3 p-3">
+	                  {bootstrapPlan.steps?.length ? (
+	                    <div className="space-y-2">
+	                      {bootstrapPlan.steps.slice(0, 5).map((step) => (
+	                        <div key={step.key} className="soft-panel flex items-center justify-between gap-3 p-3">
                           <div className="min-w-0">
                             <p className="truncate text-sm font-bold">{step.label || step.key}</p>
                             {step.target ? <code className="num block max-w-full truncate text-xs muted" title={step.target}>{step.target}</code> : null}
@@ -737,9 +1067,25 @@ export function SiteDetailsPage() {
                         </div>
                       ))}
                     </div>
-                  ) : <p className="text-sm muted">עדיין לא נבנתה רשימת צעדים.</p>}
-                </div>
-              ) : (
+	                  ) : <p className="text-sm muted">עדיין לא נבנתה רשימת צעדים.</p>}
+	                  {provisionPlan || permissionsPlan ? (
+	                    <div className="grid gap-3 md:grid-cols-2">
+	                      {provisionPlan ? (
+	                        <div className="soft-panel p-3">
+	                          <p className="text-sm font-bold">Provision</p>
+	                          <p className="mt-1 text-xs muted">{formatNumber(provisionPlan.steps?.length || 0)} צעדים · {provisionPlan.notes?.[0] || "מוכן להרצה דרך הדפדפן"}</p>
+	                        </div>
+	                      ) : null}
+	                      {permissionsPlan ? (
+	                        <div className="soft-panel p-3">
+	                          <p className="text-sm font-bold">Permissions</p>
+	                          <p className="mt-1 text-xs muted">{formatNumber(permissionsPlan.steps?.length || 0)} צעדים · {permissionsPlan.notes?.[0] || "מוכן להרצה דרך הדפדפן"}</p>
+	                        </div>
+	                      ) : null}
+	                    </div>
+	                  ) : null}
+	                </div>
+	              ) : (
                 <EmptyState title="אין תוכנית Bootstrap עדיין" description="בנה תוכנית כדי לראות יעד, חסמים ורשימת צעדים לפני הרצה." />
               )}
             </SectionCard>
@@ -868,7 +1214,7 @@ export function SiteDetailsPage() {
         <SectionCard title="גרסאות ופריסות" subtitle="פריסות אמיתיות דורשות SharePoint write capability ושומרות evidence קריאה חזרה לכל קובץ." helpKey="deploy">
           <div className="mb-4 flex flex-wrap gap-2">
             <VersionBadge status={site.versionStatus || "unknown"} />
-            {writeAvailable ? <span className="badge badge-success">deploy מחובר ל־SharePoint</span> : <span className="badge badge-info">Browser SharePoint deploy</span>}
+            <span className="badge badge-info">Browser SharePoint deploy</span>
             <button
               className="btn btn-primary"
               type="button"
@@ -946,7 +1292,7 @@ export function SiteDetailsPage() {
                 : `גיבוי ${result.backupId} נכשל דרך הדפדפן; evidence נשמר`);
               await load();
             })} type="button">הרץ גיבוי בדפדפן</button>
-            {!writeAvailable ? <span className="badge badge-warning">השרת המקומי לא מחובר ל־SharePoint, אבל הגיבוי משתמש בחיבור הדפדפן ולכן ניתן להמשיך.</span> : null}
+            {!writeAvailable ? <span className="badge badge-warning">אין SharePoint בשרת. הגיבוי משתמש בחיבור הדפדפן ולכן ניתן להמשיך.</span> : null}
           </div>
           {backupPlan ? (
             <div className="mb-5 space-y-3">
@@ -993,12 +1339,13 @@ export function SiteDetailsPage() {
           <div className="mb-4 flex flex-wrap gap-2">
             <MetadataOnlyBadge mode="metadata" />
             <MetadataOnlyBadge mode="readonly" />
-            <span className="badge badge-success">מופעל דרך הדפדפן</span>
-            <button className="btn btn-primary" disabled={adminsLiveReadBusy || busyAction === "admins-live-read"} onClick={() => runAction("admins-live-read", async () => {
-              await runAdminsLiveRead();
-            })} type="button"><RefreshCcw size={14} />רענן מנהלים עכשיו</button>
-            <Link className="btn btn-secondary" to="/admins">פתח את מסך המנהלים</Link>
-          </div>
+	            <span className="badge badge-success">מופעל דרך הדפדפן</span>
+	            <button className="btn btn-primary" disabled={adminsLiveReadBusy || busyAction === "admins-live-read"} onClick={() => runAction("admins-live-read", async () => {
+	              await runAdminsLiveRead();
+	            })} type="button"><RefreshCcw size={14} />רענן מנהלים עכשיו</button>
+	            <button className="btn btn-secondary" disabled={site.storageBackend === "mongo" || busyAction === "admin-txt-repair"} onClick={() => runAction("admin-txt-repair", runAdminTxtRepairInBrowser)} type="button"><ShieldCheck size={14} />תקן TXT בדפדפן</button>
+	            <Link className="btn btn-secondary" to="/admins">פתח את מסך המנהלים</Link>
+	          </div>
           <div className="mb-4">
             <AdminSourceSummaryCards adminData={adminData} liveData={adminLiveData} siteLabel={adminsSourceLabel} variant="inline" />
           </div>
@@ -1059,10 +1406,10 @@ export function SiteDetailsPage() {
                     <span className={`badge shrink-0 ${row.result === "failure" ? "badge-danger" : "badge-success"}`}>{row.result}</span>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <MobileMeta label="Actor" helpKey="sharepoint.currentUser">{row.actor?.userName || row.actor?.userId || "-"}</MobileMeta>
-                    <MobileMeta label="Request ID" helpKey="audit.evidence"><span className="num">{row.requestId || "-"}</span></MobileMeta>
+                    <MobileMeta label="מי ביצע" helpKey="sharepoint.currentUser">{row.actor?.userName || row.actor?.userId || "-"}</MobileMeta>
+                    <MobileMeta label="מזהה בקשה" helpKey="audit.evidence"><span className="num">{row.requestId || "-"}</span></MobileMeta>
                   </div>
-                  <button className="btn btn-secondary w-full" onClick={() => setDetailsDrawer({ type: "audit", row })} type="button"><Eye size={14} />Payload</button>
+                  <button className="btn btn-secondary w-full" onClick={() => setDetailsDrawer({ type: "audit", row })} type="button"><Eye size={14} />פרטים</button>
                 </div>
               )}
             />
@@ -1086,7 +1433,7 @@ export function SiteDetailsPage() {
           </a>
           <button className="btn btn-secondary w-full" onClick={load} type="button"><RefreshCcw size={15} />רענן נתונים</button>
           <div className="rounded-lg border p-4" style={{ borderColor: "color-mix(in srgb, var(--danger) 35%, var(--border))", background: "var(--danger-soft)" }}>
-            <p className="mb-2 font-bold" style={{ color: "var(--danger)" }}>Danger zone</p>
+            <p className="mb-2 font-bold" style={{ color: "var(--danger)" }}>פעולה רגישה</p>
             <p className="mb-3 text-sm muted">העברה לארכיון מסמנת את האתר ב־Hub בלבד ולא מוחקת קבצים מ־SharePoint.</p>
             <button className="btn btn-danger w-full" onClick={() => { setActionsOpen(false); setConfirmArchive(true); }} type="button"><Archive size={16} />העבר לארכיון</button>
           </div>
@@ -1096,10 +1443,10 @@ export function SiteDetailsPage() {
       <DetailsDrawer
         open={Boolean(detailsDrawer)}
         title={
-          detailsDrawer?.type === "deployment" ? "Deployment evidence" :
+          detailsDrawer?.type === "deployment" ? "ראיות פריסה" :
           detailsDrawer?.type === "backup" ? "פרטי גיבוי" :
-          detailsDrawer?.type === "job" ? "Job logs" :
-          detailsDrawer?.type === "audit" ? "Audit payload" :
+          detailsDrawer?.type === "job" ? "לוגי פעולה" :
+          detailsDrawer?.type === "audit" ? "קבלת יומן" :
           "פרטים"
         }
         subtitle={site.displayName}
@@ -1215,7 +1562,7 @@ export function SiteDetailsPage() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <MobileMeta label="קבצים">{formatNumber(backup.filesCount)}</MobileMeta>
                   <MobileMeta label="גודל">{formatBytes(backup.sizeBytes)}</MobileMeta>
-                  <MobileMeta label="Restore">{backup.restoreStatus || "never-restored"}</MobileMeta>
+                  <MobileMeta label="שחזור">{backup.restoreStatus || "never-restored"}</MobileMeta>
                   <MobileMeta label="נתיב">{backup.storagePath ? <code className="num block max-w-full truncate" title={backup.storagePath}>{backup.storagePath}</code> : "-"}</MobileMeta>
                 </div>
                 {backup.lastRestoreError ? <code className="num mt-3 block max-w-full truncate text-xs" style={{ color: "var(--danger)" }} title={backup.lastRestoreError}>{backup.lastRestoreError}</code> : null}
@@ -1281,7 +1628,7 @@ export function SiteDetailsPage() {
 
               {restoreRows.length ? (
                 <div className="space-y-3">
-                  <h3 className="text-sm font-bold muted">Restore evidence</h3>
+                  <h3 className="text-sm font-bold muted">ראיות שחזור</h3>
                   <DataTable
                     columns={[
                       { key: "status", header: "סטטוס", render: (row: any) => <span className={`badge ${row.status === "verified" ? "badge-success" : "badge-danger"}`}>{row.status}</span> },

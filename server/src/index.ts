@@ -36,10 +36,10 @@ const bootstrap = async () => {
     rateLimitWindowMs: env.RATE_LIMIT_WINDOW_MS,
     rateLimitMax: env.RATE_LIMIT_MAX,
     sharePoint: {
-      writeEnabled: env.SHAREPOINT_WRITE_ENABLED,
-      unauthenticatedWriteAllowed: env.SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE,
-      hasAuthCookie: Boolean(env.SHAREPOINT_AUTH_COOKIE),
-      hasBearerToken: Boolean(env.SHAREPOINT_BEARER_TOKEN),
+      serverSharePointRestDisabled: true,
+      writeEnabledIgnored: env.SHAREPOINT_WRITE_ENABLED,
+      authCookieIgnored: Boolean(env.SHAREPOINT_AUTH_COOKIE),
+      bearerTokenIgnored: Boolean(env.SHAREPOINT_BEARER_TOKEN),
       requestTimeoutMs: env.SHAREPOINT_REQUEST_TIMEOUT_MS
     },
     dangerousOverrides: {

@@ -7,6 +7,8 @@ import {
   getReleaseArtifactValidation,
   getReleases,
   planBatchDeploy,
+  patchRelease,
+  patchReleaseName,
   postRelease
 } from "../controllers/releases.controller";
 import { requireRole } from "../middlewares/auth";
@@ -15,6 +17,8 @@ const router = Router();
 
 router.get("/", getReleases);
 router.post("/", requireRole("admin"), postRelease);
+router.patch("/:id", requireRole("admin"), patchRelease);
+router.patch("/:id/name", requireRole("admin"), patchReleaseName);
 router.get("/:id/artifact/manifest", requireRole("operator"), getReleaseArtifactManifestEndpoint);
 router.get("/:id/artifact/file", requireRole("admin"), getReleaseArtifactFileEndpoint);
 router.get("/:id/artifact/validate", requireRole("operator"), getReleaseArtifactValidation);

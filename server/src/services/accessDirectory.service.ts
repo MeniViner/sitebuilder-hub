@@ -658,20 +658,16 @@ export function buildAccessDirectoryFromSites(rawSites: any[], generatedAt = new
     .map((source) => source.lastReadAt!)
     .sort();
   const failedOrStaleSources = sourceMatrix.filter((source) => source.status === "failed" || source.status === "stale").length;
-  const connectorMode = sourceMatrix.some((source) => source.httpStatus === 401 || source.httpStatus === 403)
-    ? "backend-service-auth-required"
-    : sourceMatrix.some((source) => source.connector === "browser-sharepoint" && source.status === "success")
-      ? "browser-sharepoint"
-      : sourceMatrix.some((source) => source.connector === "mongo-backend" && source.status === "success")
-        ? "mongo-backend"
+  const connectorMode = sourceMatrix.some((source) => source.connector === "browser-sharepoint" && source.status === "success")
+    ? "browser-sharepoint"
+    : sourceMatrix.some((source) => source.connector === "mongo-backend" && source.status === "success")
+      ? "mongo-backend"
         : "metadata-only";
   const connectorModeLabelHe = connectorMode === "browser-sharepoint"
     ? "Browser SharePoint"
     : connectorMode === "mongo-backend"
       ? "Mongo Backend"
-      : connectorMode === "backend-service-auth-required"
-        ? "נדרשת הרשאת שרת"
-        : "Metadata בלבד";
+      : "Metadata בלבד";
 
   const summary: AccessDirectorySummary = {
     totalUsers: normalizedUsers.length,

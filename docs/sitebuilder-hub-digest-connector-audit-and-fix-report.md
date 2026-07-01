@@ -462,3 +462,6 @@ The worktree also contains many pre-existing unrelated local edits. They were no
 - Ready for browser read-only health checks: yes.
 - Ready for browser backup test on one real dev site: yes.
 - Ready for one real deploy test through browser upload: yes, preferably first on one non-production/dev target site.
+# Legacy Historical Report
+
+This document describes an older intermediate architecture. The current source of truth is `docs/sharepoint-browser-only-status-report.md`: there is no SharePoint in the server, and SharePoint operations run through the active browser session only.

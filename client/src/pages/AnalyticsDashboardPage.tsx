@@ -9,6 +9,7 @@ import { FilterBar } from "../components/FilterBar";
 import { HelpLabel } from "../components/help/HelpLabel";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
+import { ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBadge } from "../components/StatusBadge";
@@ -574,6 +575,13 @@ export function AnalyticsDashboardPage() {
   const totalAdmins = filteredSites.reduce((sum, site) => sum + Number(site.adminsCount || 0), 0);
   const staleBackups = filteredSites.filter((site) => ["ישן", "לא קיים"].includes(freshnessBucket(site.lastBackupAt))).length;
   const activeFilterCount = Object.entries(filters).filter(([key, value]) => key !== "includeArchived" && value !== "" && value !== "all").length + (filters.includeArchived ? 1 : 0);
+  const attentionSites = filteredSites.filter((site) =>
+    ["warning", "failed"].includes(site.status)
+    || ["warning", "failed"].includes(site.derivedHealthStatus)
+    || ["outdated", "failed"].includes(site.versionStatus || "unknown")
+    || site.backupStatus === "failed"
+  ).length;
+  const failedJobs = jobs.filter((job) => job.status === "failed").length;
 
   const topSites = useMemo(() => [...filteredSites]
     .sort((a, b) => metricValue(b, metric) - metricValue(a, metric))
@@ -691,9 +699,37 @@ export function AnalyticsDashboardPage() {
     <div className="space-y-5">
       <PageHeader
         title="דשבורד גרפים"
-        subtitle="ניתוח גמיש של אתרים, גרסאות, תקינות, גיבויים, מנהלים ונפחים לפי פילטרים ושדות grouping."
+        subtitle="תמונה רחבה שמראה איפה צריך תשומת לב, בלי לשנות נתונים"
         helpKey="analytics"
         actions={<button className="btn btn-secondary" type="button" onClick={load}><RefreshCcw size={15} />רענון</button>}
+      />
+
+      <OperationalSummary
+        title="מפה מהירה של כל האתרים"
+        purpose="המסך עוזר למצוא דפוסים: אתרים לא בריאים, גרסאות ישנות, גיבויים חסרים, נפחים גדולים ומנהלים רבים."
+        state={`${formatNumber(filteredSites.length)} אתרים מוצגים · ${formatNumber(activeFilterCount)} פילטרים פעילים · ${formatNumber(jobs.length)} פעולות במערכת`}
+        attention={attentionSites
+          ? `${formatNumber(attentionSites)} אתרים מסוננים דורשים טיפול לפי סטטוס, תקינות, גרסה או גיבוי.`
+          : failedJobs
+            ? `${formatNumber(failedJobs)} פעולות נכשלו בתור הפעולות.`
+            : "אין בעיה דחופה בתצוגה הנוכחית."}
+        attentionTone={attentionSites || failedJobs ? "warning" : "success"}
+        nextAction={attentionSites
+          ? "לחצו על תצוגת דורשים טיפול ואז פתחו אתר מהרשימה."
+          : staleBackups
+            ? "לחצו על גיבויים כדי לראות איפה חסר גיבוי עדכני."
+            : "בחרו תצוגה מהירה או קיבוץ כדי לענות על שאלה תפעולית."}
+        tone={attentionSites || failedJobs ? "warning" : "success"}
+      />
+
+      <ModeBoundary
+        title="מה בטוח לעשות כאן"
+        items={[
+          { label: "חיפוש ופילטרים", description: "קריאה בלבד. לא משנה אתרים או Jobs.", tone: "success" },
+          { label: "תצוגות מהירות", description: "מסדרות את הגרפים לפי בעיות נפוצות.", tone: "info" },
+          { label: "פתיחת אתר", description: "עוברת לדף האתר כדי לבצע בדיקה או פעולה מוגנת.", tone: "neutral" },
+          { label: "ארכיון", description: "מוצג רק אם בוחרים לכלול רשומות ארכיון.", tone: "warning" }
+        ]}
       />
 
       <div className="analytics-command-bar">

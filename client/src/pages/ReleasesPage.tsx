@@ -13,12 +13,12 @@ import {
   Info,
   ListChecks,
   PackageCheck,
+  Pencil,
   Plus,
   RefreshCw,
   Rocket,
   RotateCcw,
   Search,
-  ServerOff,
   ShieldCheck,
   X
 } from "lucide-react";
@@ -45,16 +45,19 @@ import { ErrorState } from "../components/ErrorState";
 import { KpiCard } from "../components/KpiCard";
 import { LinkRow } from "../components/LinkRow";
 import { LoadingState } from "../components/LoadingState";
+import { GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { ProtectedActionDialog } from "../components/ProtectedActionDialog";
 import { SectionCard } from "../components/SectionCard";
 import { HelpIcon } from "../components/help/HelpIcon";
 import { HelpLabel } from "../components/help/HelpLabel";
 import { formatBytes, formatDateTime, formatNumber, releaseTypeLabel, siteStatusLabel } from "../utils/format";
+import { releaseDisplayLabel, releaseOptionLabel } from "../utils/releaseLabels";
 import {
   deployArtifactToSharePointBrowser,
   requestBrowserDigest,
   type BrowserSharePointDeployResult
 } from "../utils/sharepointBrowserConnector";
+import { buildDeploymentMetadataFile, DEPLOYMENT_METADATA_FILE } from "../utils/deploymentMetadata";
 
 type ReleaseType = Release["releaseType"];
 type ParsedVersion = { major: number; minor: number; patch: number };
@@ -69,7 +72,7 @@ type RollbackPlanRow = {
   ready: boolean;
   blockers: string[];
   warnings: string[];
-  status: "planned" | "blocked" | "queued";
+  status: "planned" | "blocked" | "queued" | "running" | "succeeded" | "failed";
   jobId?: string;
 };
 
@@ -87,8 +90,7 @@ type BrowserDeploySiteResult = {
 };
 
 type DeployExecutionResult =
-  | { connectorMode: "backend-sharepoint"; jobs: Job[]; message?: string }
-  | { connectorMode: "browser-sharepoint"; results: BrowserDeploySiteResult[]; message?: string };
+  { connectorMode: "browser-sharepoint"; results: BrowserDeploySiteResult[]; message?: string };
 
 const parseVersion = (version?: string): ParsedVersion | null => {
   const match = String(version || "").trim().match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -342,7 +344,7 @@ const humanizeDeployMessage = (message: string) => {
   const translations: Record<string, string> = {
     "No target sites are ready for deploy execution.": "אין אתרי יעד מוכנים להרצת Deploy.",
     "Deploy cannot run because the release artifact is missing.": "הפריסה חסומה כי חסר Artifact לגרסה הזו.",
-    "Deploy cannot run because SharePoint write is not configured.": "הפריסה חסומה כי כתיבה ל-SharePoint אינה זמינה.",
+    "Deploy cannot run because SharePoint write is not configured.": "הפריסה צריכה לרוץ דרך הדפדפן המחובר ל-SharePoint.",
     "Digest דרך הדפדפן עשוי להיות תקין, אבל העלאה דרך הדפדפן עדיין לא יושמה.": "Digest דרך הדפדפן עשוי להיות תקין, אבל העלאה דרך הדפדפן עדיין לא יושמה.",
     "Dry-run did not pass all execution gates.": "Dry-run לא עבר את כל שערי הבטיחות."
   };
@@ -364,7 +366,6 @@ function ReleaseHeader({
   onCreate: () => void;
   onNewPlan: () => void;
 }) {
-  const writeAvailable = Boolean(capabilities?.sharePoint.writeAvailable);
   const envLabel = import.meta.env.MODE === "production" ? "production-safe" : "local";
 
   return (
@@ -375,26 +376,26 @@ function ReleaseHeader({
             <StatusChip tone="info" icon={<PackageCheck size={14} />} helpKey="release">Release & Deployment Control Center</StatusChip>
             <StatusChip tone={loading ? "neutral" : "success"} icon={<CircleDashed size={14} />}>{loading ? "טוען" : "פעיל"}</StatusChip>
           </div>
-          <h1 className="page-title">Releases & Deployments / ניהול גרסאות ופריסות</h1>
+          <h1 className="page-title">מרכז פריסה וגרסאות</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 muted">
-            צור גרסה, חבר Artifact, אמת אותה, ואז פרוס אותה לאתר אחד, לכמה אתרים, או לכל האתרים. בחר גרסה, בחר אתרים, הרץ Dry-run, ואז אשר פריסה.
+            יוצרים גרסה, מחברים Artifact, מאמתים, בוחרים יעד, מריצים Dry-run, ורק אז מאשרים פריסה דרך הדפדפן.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button className="btn btn-primary" type="button" onClick={onCreate}><Plus size={16} />Create Release</button>
-          <button className="btn btn-secondary" type="button" onClick={onNewPlan}><ClipboardList size={16} />New Deployment Plan</button>
+          <button className="btn btn-primary" type="button" onClick={onCreate}><Plus size={16} />צור Release</button>
+          <button className="btn btn-secondary" type="button" onClick={onNewPlan}><ClipboardList size={16} />תוכנית פריסה חדשה</button>
         </div>
       </div>
 
       <div className="mt-5 flex flex-wrap gap-2">
-        <StatusChip tone="success" icon={<CheckCircle2 size={14} />}>API connected</StatusChip>
+        <StatusChip tone="success" icon={<CheckCircle2 size={14} />}>API מחובר</StatusChip>
         <StatusChip tone={health?.mongo === "connected" ? "success" : "warning"} icon={<ShieldCheck size={14} />}>
           MongoDB {health?.mongo || "unknown"}
         </StatusChip>
-        <StatusChip tone={writeAvailable ? "success" : "info"} icon={writeAvailable ? <Rocket size={14} /> : <ServerOff size={14} />} helpKey={writeAvailable ? "sharepoint.write" : "sharepoint.writeBlocked"}>
-          {writeAvailable ? "Backend SharePoint available" : "Backend SharePoint לא נדרש במצב דפדפן"}
+        <StatusChip tone="success" icon={<Rocket size={14} />} helpKey="sharepoint.write">
+          SharePoint דרך הדפדפן
         </StatusChip>
-        <StatusChip tone="info" icon={<Info size={14} />} helpKey={envLabel === "production-safe" ? "mode.productionSafe" : "mode.localDevOwner"}>Environment: {envLabel}</StatusChip>
+        <StatusChip tone="info" icon={<Info size={14} />} helpKey={envLabel === "production-safe" ? "mode.productionSafe" : "mode.localDevOwner"}>סביבה: {envLabel}</StatusChip>
       </div>
     </section>
   );
@@ -444,6 +445,7 @@ function ReleaseRegistry({
   latestVersion,
   siteUsage,
   onSelect,
+  onEdit,
   onValidate,
   onDeploy
 }: {
@@ -452,18 +454,20 @@ function ReleaseRegistry({
   latestVersion: string;
   siteUsage: Map<string, number>;
   onSelect: (releaseId: string) => void;
+  onEdit: (release: Release) => void;
   onValidate: (releaseId: string) => void;
   onDeploy: (releaseId: string) => void;
 }) {
   const columns: DataTableColumn<Release>[] = [
     {
       key: "version",
-      header: "גרסה",
+      header: "Release",
       helpKey: "release",
       render: (release) => (
-        <button className="text-right" type="button" onClick={() => onSelect(release._id)}>
-          <span className="num block font-bold" style={{ color: selectedReleaseId === release._id ? "var(--accent)" : "var(--text-strong)" }}>{release.version}</span>
-          <span className="mt-1 block text-xs muted">{releaseTypeLabel(release.releaseType)}</span>
+        <button className="min-w-[180px] text-right" type="button" onClick={() => onSelect(release._id)}>
+          <span className="block font-bold" style={{ color: selectedReleaseId === release._id ? "var(--accent)" : "var(--text-strong)" }}>{release.name || `Release ${release.version}`}</span>
+          <span className="num mt-1 block text-xs muted">{release.version} · {releaseTypeLabel(release.releaseType)}</span>
+          {!release.name ? <span className="mt-1 block text-xs" style={{ color: "var(--warning)" }}>שם חסר - אפשר לתקן</span> : null}
         </button>
       )
     },
@@ -480,28 +484,28 @@ function ReleaseRegistry({
       key: "artifact",
       header: "Artifact",
       helpKey: "artifact",
+      width: 320,
       render: (release) => (
-        <div className="min-w-0">
+        <div className="release-inline-evidence">
           <StatusChip tone={release.artifactValidation?.readyForDeploy ? "success" : release.artifactRef ? "warning" : "danger"} helpKey="artifact.validation">
             {release.artifactValidation?.readyForDeploy ? "מאומת" : release.artifactRef ? "לא אומת" : "חסר"}
           </StatusChip>
-          <code className="num mt-1 block max-w-[260px] truncate text-xs muted" title={release.artifactRef || ""}>{release.artifactRef || "-"}</code>
+          <code className="num truncate text-xs muted" title={release.artifactRef || ""}>{release.artifactRef || "-"}</code>
         </div>
       )
     },
-    { key: "created", header: "נוצר", helpKey: "history", render: (release) => <span className="num text-xs">{formatDateTime(release.createdAt)}</span> },
+    { key: "created", header: "נוצר", helpKey: "history", render: (release) => <span className="num whitespace-nowrap text-xs" dir="ltr">{formatDateTime(release.createdAt)}</span> },
     { key: "sites", header: "אתרים", helpKey: "sites.registry", render: (release) => <span className="num font-bold">{formatNumber(siteUsage.get(release.version) || 0)}</span> },
-    { key: "notes", header: "הערות", helpKey: "changelog", render: (release) => <span className="line-clamp-2 text-sm muted">{release.notes || "-"}</span> },
+    { key: "notes", header: "הערות", helpKey: "changelog", width: 170, render: (release) => <span className="block max-w-[170px] truncate text-sm muted" title={release.notes || ""}>{release.notes || "-"}</span> },
     {
       key: "actions",
       header: "פעולות",
       helpKey: "deploy",
+      width: 390,
       render: (release) => {
         const readiness = releaseReadiness(release, latestVersion);
         return (
-          <div className="flex flex-wrap gap-2">
-            <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" type="button" onClick={() => onSelect(release._id)}>פרטים</button>
-            <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" type="button" onClick={() => onValidate(release._id)}>Validate</button>
+          <div className="release-action-cluster">
             <button
               className="btn btn-primary min-h-0 px-2 py-1 text-xs"
               type="button"
@@ -511,6 +515,9 @@ function ReleaseRegistry({
             >
               Deploy plan
             </button>
+            <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" type="button" onClick={() => onValidate(release._id)}>Validate</button>
+            <button className="btn btn-ghost min-h-0 px-2 py-1 text-xs" type="button" onClick={() => onEdit(release)}><Pencil size={13} />ערוך</button>
+            <button className="btn btn-ghost min-h-0 px-2 py-1 text-xs" type="button" onClick={() => onSelect(release._id)}>פרטים</button>
           </div>
         );
       }
@@ -526,7 +533,7 @@ function ReleaseRegistry({
       columns={columns}
       rows={releases}
       rowKey={(release) => release._id}
-      minWidth={1120}
+      minWidth={1380}
       mobileCard={(release) => {
         const status = releaseStatus(release, latestVersion);
         const readiness = releaseReadiness(release, latestVersion);
@@ -534,15 +541,17 @@ function ReleaseRegistry({
           <div className="space-y-3">
             <div className="flex items-start justify-between gap-3">
               <button className="min-w-0 text-right" type="button" onClick={() => onSelect(release._id)}>
-                <p className="num truncate font-bold" style={{ color: selectedReleaseId === release._id ? "var(--accent)" : "var(--text-strong)" }}>{release.version}</p>
-                <p className="text-xs muted">{releaseTypeLabel(release.releaseType)} · {formatDateTime(release.createdAt)}</p>
+                <p className="truncate font-bold" style={{ color: selectedReleaseId === release._id ? "var(--accent)" : "var(--text-strong)" }}>{release.name || `Release ${release.version}`}</p>
+                <p className="num text-xs muted">{release.version} · {releaseTypeLabel(release.releaseType)} · {formatDateTime(release.createdAt)}</p>
+                {!release.name ? <p className="text-xs" style={{ color: "var(--warning)" }}>שם חסר - אפשר לתקן</p> : null}
               </button>
               <StatusChip tone={releaseStatusTone(status)} helpKey="release">{releaseStatusLabel(status)}</StatusChip>
             </div>
             <code className="num block max-w-full truncate text-xs muted" title={release.artifactRef || ""}>{release.artifactRef || "-"}</code>
             <div className="flex flex-wrap gap-2">
-              <button className="btn btn-secondary flex-1" type="button" onClick={() => onValidate(release._id)}>Validate</button>
               <button className="btn btn-primary flex-1" type="button" onClick={() => onDeploy(release._id)} disabled={!readiness.canPlan} title={readiness.canPlan ? "פתח Deploy Center" : readiness.label}>Deploy plan</button>
+              <button className="btn btn-secondary flex-1" type="button" onClick={() => onValidate(release._id)}>Validate</button>
+              <button className="btn btn-ghost flex-1" type="button" onClick={() => onEdit(release)}><Pencil size={14} />ערוך</button>
             </div>
           </div>
         );
@@ -558,6 +567,7 @@ function ReleaseDetailsPanel({
   validation,
   validating,
   onValidate,
+  onEdit,
   onDeploy,
   shell = true
 }: {
@@ -567,12 +577,13 @@ function ReleaseDetailsPanel({
   validation: ReleaseArtifactValidation | null;
   validating: boolean;
   onValidate: () => void;
+  onEdit: (release: Release) => void;
   onDeploy: () => void;
   shell?: boolean;
 }) {
   if (!release) {
     const emptyState = (
-      <EmptyState title="אין Release נבחר" description="בחר גרסה כדי לראות Artifact, תאימות ואתרים מושפעים." />
+      <EmptyState title="אין Release נבחר" description="בחר Release לפי שם או גרסה כדי לראות Artifact, תאימות ואתרים מושפעים." />
     );
     return shell ? (
       <SectionCard title="פרטי Release" subtitle="בחר Release מהרשימה" helpKey="release">
@@ -590,11 +601,17 @@ function ReleaseDetailsPanel({
 
   const content = (
     <div className="space-y-4">
-      <div>
-        <p className="num text-2xl font-bold" style={{ color: "var(--text-strong)" }}>{release.version}</p>
-        <p className="mt-1 text-sm muted">{releaseTypeLabel(release.releaseType)} · נוצר {formatDateTime(release.createdAt)}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-2xl font-bold" style={{ color: "var(--text-strong)" }}>{release.name || `Release ${release.version}`}</p>
+          <p className="num mt-1 text-sm muted">{release.version} · {releaseTypeLabel(release.releaseType)} · נוצר {formatDateTime(release.createdAt)}</p>
+          {!release.name ? <p className="mt-1 text-sm" style={{ color: "var(--warning)" }}>שם מזהה לא שמור ל-Release הזה. אפשר לתקן בלי לשנות Artifact או גרסה.</p> : null}
+        </div>
+        <button className="btn btn-secondary" type="button" onClick={() => onEdit(release)}><Pencil size={15} />ערוך Release</button>
       </div>
       <div className="grid gap-2">
+        <LinkRow label="שם מזהה" value={release.name || "לא הוגדר"} />
+        <LinkRow label="מספר גרסה" value={release.version} />
         <LinkRow label="Artifact reference" value={release.artifactRef || "חסר Artifact"} />
         <LinkRow label="Validation" value={artifactReady ? "Artifact מוכן לפריסה" : "Artifact לא מאומת או חסר"} />
         <LinkRow label="Created by" value={release.createdBy || "system"} />
@@ -622,8 +639,6 @@ function ReleaseDetailsPanel({
           <RefreshCw size={15} />{validating ? "בודק..." : "Validate"}
         </button>
         <button className="btn btn-primary" type="button" onClick={onDeploy} disabled={!readiness.canPlan} title={readiness.canPlan ? "פתח Deploy Center" : readiness.label}><Rocket size={15} />Create Deploy Plan</button>
-        <button className="btn btn-secondary" type="button" disabled title="עריכת metadata תתווסף כאשר יהיה endpoint מתאים">Edit metadata</button>
-        <button className="btn btn-danger" type="button" disabled title="מחיקה זמינה רק אחרי בדיקת שימוש בטוחה">Delete safe only</button>
       </div>
     </div>
   );
@@ -745,7 +760,7 @@ function TargetSiteSelector({
     },
     {
       key: "blockers",
-      header: "Blockers / Warnings",
+      header: "חסמים / אזהרות",
       helpKey: "deploy.blocker",
       render: (site) => {
         const row = planRows.get(site._id);
@@ -756,8 +771,8 @@ function TargetSiteSelector({
   ];
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
+    <div className="target-site-selector space-y-4">
+      <div className="target-toolbar">
         <div>
           <p className="field-label"><HelpLabel helpKey="deploy.targetMode">Target mode</HelpLabel></p>
           <div className="segmented-control flex-wrap">
@@ -776,7 +791,7 @@ function TargetSiteSelector({
             ))}
           </div>
         </div>
-        <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto] sm:items-end">
+        <div className="target-toolbar-controls">
           <label>
             <span className="field-label">חיפוש אתר</span>
             <div className="relative">
@@ -795,13 +810,13 @@ function TargetSiteSelector({
             </select>
           </label>
           <div className="flex gap-2">
-            <button className="btn btn-secondary" type="button" disabled={targetMode === "all"} onClick={() => onSelectedSiteIdsChange(targetMode === "single" ? visibleIds.slice(0, 1) : visibleIds)}>Select all</button>
-            <button className="btn btn-secondary" type="button" disabled={targetMode === "all"} onClick={() => onSelectedSiteIdsChange([])}>Clear</button>
+            <button className="btn btn-secondary" type="button" disabled={targetMode === "all"} onClick={() => onSelectedSiteIdsChange(targetMode === "single" ? visibleIds.slice(0, 1) : visibleIds)}>בחר הכל</button>
+            <button className="btn btn-secondary" type="button" disabled={targetMode === "all"} onClick={() => onSelectedSiteIdsChange([])}>נקה</button>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-5">
+      <div className="target-scope-grid">
         <div className="soft-panel p-3">
           <p className="field-label">Blast radius</p>
           <p className="num text-xl font-bold" style={{ color: "var(--text-strong)" }}>{formatNumber(includedSites.length)}</p>
@@ -916,15 +931,11 @@ function DeploymentPlanResults({ plan }: { plan: BatchDeployPlan }) {
       </div>
       <div className="flex flex-wrap gap-2">
         <StatusChip tone={plan.connectorMode === "browser-sharepoint" ? "success" : "warning"}>
-          {plan.connectorMode === "browser-sharepoint" ? "Browser Digest: ייבדק בזמן Execute" : "Backend SharePoint"}
+          Browser Digest: ייבדק בזמן Execute
         </StatusChip>
-        {plan.connectorMode === "browser-sharepoint" ? (
-          <>
-            <StatusChip tone="success">Browser Upload: מוכן</StatusChip>
-            <StatusChip tone="info">Backend SharePoint: לא נדרש במצב דפדפן</StatusChip>
-            {plan.allowDeployWithoutBackup ? <StatusChip tone="warning">גיבוי: Override מסוכן פעיל</StatusChip> : null}
-          </>
-        ) : null}
+        <StatusChip tone="success">Browser Upload: מוכן</StatusChip>
+        <StatusChip tone="info">Server SharePoint: מושבת</StatusChip>
+        {plan.allowDeployWithoutBackup ? <StatusChip tone="warning">גיבוי: Override מסוכן פעיל</StatusChip> : null}
       </div>
       <div className="grid gap-3 md:grid-cols-4">
         <div className="soft-panel p-3">
@@ -1089,7 +1100,6 @@ function DeployWizard({
   onBuildPlan: () => void;
   onExecute: () => void;
 }) {
-  const writeAvailable = Boolean(capabilities?.sharePoint.writeAvailable);
   const readiness = releaseReadiness(selectedRelease, latestVersion);
   const planFresh = isPlanForCurrentSelection({ plan, releaseId: selectedReleaseId, deployMode, targetMode, targetSiteIds, allowDeployWithoutBackup });
   const readyRows = planFresh ? plan?.results.filter((row) => row.status === "ready" || row.status === "warning") || [] : [];
@@ -1112,8 +1122,8 @@ function DeployWizard({
         ? "Execution חסום כי ה-Release לא מוכן לתכנון פריסה."
         : readyRows.length === 0
           ? "Execution חסום כי אין אתרים מוכנים."
-          : !browserDeployMode && !writeAvailable
-            ? "Execution חסום כי SharePoint write אינו זמין."
+          : !browserDeployMode
+            ? "Execution חסום כי Dry-run לא מסומן כ־Browser SharePoint."
             : "";
 
   const selectedTargetText = targetMode === "all"
@@ -1124,17 +1134,29 @@ function DeployWizard({
 
   return (
     <SectionCard
-      title="Deploy Center"
+      title="מרכז פריסה"
       subtitle="בחר Release, בחר יעד אחד או קבוצה, הרץ Dry-run, ורק אז אשר פריסה."
       helpKey="deploy"
-      actions={<StatusChip tone={browserDeployMode || writeAvailable ? "success" : "warning"} helpKey={browserDeployMode || writeAvailable ? "sharepoint.write" : "sharepoint.writeBlocked"}>{browserDeployMode ? "Browser SharePoint" : writeAvailable ? "SharePoint write זמין" : "SharePoint locked"}</StatusChip>}
+      actions={<StatusChip tone={browserDeployMode ? "success" : "warning"} helpKey={browserDeployMode ? "sharepoint.write" : "sharepoint.writeBlocked"}>{browserDeployMode ? "דפדפן SharePoint" : "נדרש Dry-run דפדפן"}</StatusChip>}
     >
+      <div className="deploy-current-release">
+        <div>
+          <p className="field-label">מה נבחר עכשיו</p>
+          <h3>{selectedRelease ? releaseDisplayLabel(selectedRelease) : "לא נבחר Release"}</h3>
+          <p>{selectedRelease ? `${releaseTypeLabel(selectedRelease.releaseType)} · ${readiness.label}` : "בחרו Release מוכן כדי להתחיל תוכנית פריסה."}</p>
+        </div>
+        <div className="deploy-current-release-meta">
+          <StatusChip tone={readiness.canPlan ? "success" : "warning"} helpKey="release">{readiness.label}</StatusChip>
+          <span className="text-xs muted">{selectedTargetText}</span>
+        </div>
+      </div>
+
       <div className="operation-stepper">
         {[
-          ["Select Release", selectedRelease ? `${selectedRelease.version} · ${readiness.label}` : "בחר גרסה"],
-          ["Target Sites", selectedTargetText],
-          ["Dry-run & Blockers", plan ? planFresh ? `${formatNumber(plan.summary.readySites)} מוכנים` : "דורש רענון" : "לא הורץ"],
-          ["Review & Execute", executionDisabledReason || "מוכן להרצה דרך הדפדפן"]
+          ["בחירת Release", selectedRelease ? `${releaseDisplayLabel(selectedRelease)} · ${readiness.label}` : "בחר Release"],
+          ["בחירת אתרים", selectedTargetText],
+          ["Dry-run וחסמים", plan ? planFresh ? `${formatNumber(plan.summary.readySites)} מוכנים` : "דורש רענון" : "לא הורץ"],
+          ["סקירה והרצה", executionDisabledReason || "מוכן להרצה דרך הדפדפן"]
         ].map(([title, text], index) => {
           const currentStep = (index + 1) as DeployStep;
           const stateClass = step > currentStep ? "operation-step-done" : step === currentStep ? "operation-step-active" : "";
@@ -1149,11 +1171,11 @@ function DeployWizard({
       </div>
 
       {step === 1 ? (
-        <div className="space-y-4">
+        <div className="deploy-step-panel space-y-4">
           <label>
             <span className="field-label"><HelpLabel helpKey="release">Release לפריסה</HelpLabel></span>
             <select className="control" value={selectedReleaseId} onChange={(event) => onSelectRelease(event.target.value)}>
-              {releases.map((release) => <option key={release._id} value={release._id}>{release.version} · {releaseTypeLabel(release.releaseType)}</option>)}
+              {releases.map((release) => <option key={release._id} value={release._id}>{releaseOptionLabel(release, releaseTypeLabel(release.releaseType))}</option>)}
             </select>
           </label>
           <div className="grid gap-3 md:grid-cols-3">
@@ -1182,8 +1204,8 @@ function DeployWizard({
       ) : null}
 
       {step === 2 ? (
-        <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2">
+        <div className="deploy-step-panel space-y-4">
+          <div className="deploy-mode-grid">
             <label>
               <span className="field-label"><HelpLabel helpKey="deploy.mode">Deploy mode</HelpLabel></span>
               <select className="control" value={deployMode} onChange={(event) => onDeployModeChange(event.target.value as DeployMode)}>
@@ -1191,12 +1213,12 @@ function DeployWizard({
                 <option value="production-safe">Production-safe deploy</option>
               </select>
             </label>
-            <div className="rounded-md border p-3 text-sm" style={{ borderColor: "var(--border)", background: "var(--surface-muted)" }}>
+            <div className="deploy-help-card">
               <p className="font-bold" style={{ color: "var(--text-strong)" }}>הבהרה חשובה</p>
               <p className="mt-1 muted">אתרים שכבר נמצאים בגרסה הזו לא ייפרסו מחדש. אתרים חסומים יוצגו לפני Execute.</p>
             </div>
           </div>
-          <label className={`panel p-3 text-sm ${allowDeployWithoutBackup ? "panel-warning" : ""}`}>
+          <label className={`danger-override-panel ${allowDeployWithoutBackup ? "danger-override-panel-active" : ""}`}>
             <span className="flex items-start gap-3">
               <input
                 className="mt-1"
@@ -1238,7 +1260,7 @@ function DeployWizard({
       ) : null}
 
       {step === 3 ? (
-        <div className="space-y-4">
+        <div className="deploy-step-panel space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="font-bold" style={{ color: "var(--text-strong)" }}><HelpLabel helpKey="deploy.dryRun">Dry-run / Deployment plan</HelpLabel></p>
@@ -1253,7 +1275,7 @@ function DeployWizard({
               <>
                 <DeploymentPlanResults plan={plan} />
                 {planHasBackupBlocker && deployMode === "local-dev-owner" && plan.connectorMode === "browser-sharepoint" && !allowDeployWithoutBackup ? (
-                  <label className="panel panel-warning block p-3 text-sm">
+                  <label className="danger-override-panel danger-override-panel-active">
                     <span className="flex items-start gap-3">
                       <input className="mt-1" type="checkbox" checked={false} onChange={(event) => onAllowDeployWithoutBackupChange(event.target.checked)} />
                       <span>
@@ -1279,12 +1301,12 @@ function DeployWizard({
       ) : null}
 
       {step === 4 ? (
-        <div className="space-y-4">
+        <div className="deploy-step-panel space-y-4">
           <div className="grid gap-3 md:grid-cols-4">
-            <SafetyGate ok={readiness.canPlan} label="Release" detail={selectedRelease ? `${selectedRelease.version} · ${readiness.label}` : "לא נבחר Release."} helpKey="release" />
+            <SafetyGate ok={readiness.canPlan} label="Release" detail={selectedRelease ? `${releaseDisplayLabel(selectedRelease)} · ${readiness.label}` : "לא נבחר Release."} helpKey="release" />
             <SafetyGate ok={Boolean(plan && planFresh)} label="Dry-run" detail={plan ? planFresh ? `נוצר ב-${formatDateTime(plan.generatedAt)}.` : "התוכנית לא תואמת לבחירה הנוכחית." : "חסר Dry-run."} helpKey="deploy.dryRun" />
             <SafetyGate ok={readyRows.length > 0} label="Ready targets" detail={readyRows.length ? `${formatNumber(readyRows.length)} אתרים מוכנים לפריסה.` : "אין יעדים מוכנים."} helpKey="deploy.blocker" />
-            <SafetyGate ok={browserUploadReady || writeAvailable} label="Browser Upload" detail={browserUploadReady ? "הדפדפן מחובר ל־SharePoint ומוכן לפריסה." : writeAvailable ? "Backend write זמין, אך מרכז הפריסה יעדיף דפדפן כשאפשר." : "לא הצלחתי לאמת מוכנות להעלאה."} helpKey={browserUploadReady || writeAvailable ? "sharepoint.write" : "sharepoint.writeBlocked"} />
+            <SafetyGate ok={browserUploadReady} label="העלאה דרך הדפדפן" detail={browserUploadReady ? "הדפדפן מחובר ל־SharePoint ומוכן לפריסה." : "נדרש Dry-run במצב Browser SharePoint עם יעדים מוכנים."} helpKey={browserUploadReady ? "sharepoint.write" : "sharepoint.writeBlocked"} />
           </div>
           {plan && planFresh ? <DeploymentPlanResults plan={plan} /> : null}
           {executionDisabledReason ? (
@@ -1295,7 +1317,7 @@ function DeployWizard({
           <div className="flex flex-wrap justify-between gap-2">
             <button className="btn btn-secondary" type="button" onClick={() => onStepChange(3)}>חזרה</button>
             <button className="btn btn-danger" type="button" disabled={Boolean(executionDisabledReason) || busyAction === "batch-run"} onClick={onExecute}>
-              <Rocket size={16} />{busyAction === "batch-run" ? "פורס דרך הדפדפן..." : "Execute Browser Deploy"}
+              <Rocket size={16} />{busyAction === "batch-run" ? "פורס דרך הדפדפן..." : "בצע פריסה דרך הדפדפן"}
             </button>
           </div>
           {browserDeployResults.length ? (
@@ -1315,11 +1337,7 @@ function DeployWizard({
           {deployResult ? (
             <div className="panel panel-success p-3 text-sm">
               <p className="font-bold" style={{ color: "var(--success)" }}>{deployResult.message || "Browser deploy completed"}</p>
-              {deployResult.connectorMode === "browser-sharepoint" ? (
-                <p className="num mt-1 muted">{formatNumber(deployResult.results.filter((item) => item.status === "success").length)} succeeded / {formatNumber(deployResult.results.length)} sites</p>
-              ) : (
-                <p className="num mt-1 muted">{formatNumber(deployResult.jobs.length)} jobs נשלחו לתור.</p>
-              )}
+              <p className="num mt-1 muted">{formatNumber(deployResult.results.filter((item) => item.status === "success").length)} succeeded / {formatNumber(deployResult.results.length)} sites</p>
             </div>
           ) : null}
         </div>
@@ -1335,7 +1353,6 @@ function RollbackPanel({
   selectedSiteIds,
   reason,
   planRows,
-  writeAvailable,
   busyAction,
   onReleaseChange,
   onSiteIdsChange,
@@ -1349,7 +1366,6 @@ function RollbackPanel({
   selectedSiteIds: string[];
   reason: string;
   planRows: RollbackPlanRow[];
-  writeAvailable: boolean;
   busyAction: string;
   onReleaseChange: (releaseId: string) => void;
   onSiteIdsChange: (siteIds: string[]) => void;
@@ -1358,8 +1374,9 @@ function RollbackPanel({
   onOpenConfirm: () => void;
 }) {
   const activeSites = sites.filter((site) => site.status !== "archived");
+  const selectedRelease = releases.find((release) => release._id === selectedReleaseId) || null;
   const selectedSet = new Set(selectedSiteIds);
-  const ready = planRows.length > 0 && planRows.every((row) => row.ready) && writeAvailable;
+  const ready = planRows.length > 0 && planRows.every((row) => row.ready);
   const rowsBySiteId = new Map(planRows.map((row) => [row.site._id, row]));
   const columns: DataTableColumn<Site>[] = [
     {
@@ -1402,20 +1419,30 @@ function RollbackPanel({
       title="Rollback"
       subtitle="אזור מתקדם ובטוח לחזרה לגרסה ישנה. Rollback לא מתערבב עם Deploy רגיל."
       helpKey="rollback"
-      actions={<StatusChip tone={writeAvailable ? "success" : "warning"} helpKey={writeAvailable ? "sharepoint.write" : "sharepoint.writeBlocked"}>{writeAvailable ? "Execution אפשרי אחרי Plan" : "SharePoint locked"}</StatusChip>}
+      actions={<StatusChip tone="success" helpKey="sharepoint.write">Execution דרך הדפדפן</StatusChip>}
     >
       <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-2">
           <label>
             <span className="field-label"><HelpLabel helpKey="rollback">גרסת יעד ל-Rollback</HelpLabel></span>
             <select className="control" value={selectedReleaseId} onChange={(event) => onReleaseChange(event.target.value)}>
-              {releases.map((release) => <option key={release._id} value={release._id}>{release.version} · {releaseTypeLabel(release.releaseType)}</option>)}
+              {releases.map((release) => <option key={release._id} value={release._id}>{releaseOptionLabel(release, releaseTypeLabel(release.releaseType))}</option>)}
             </select>
           </label>
           <label>
             <span className="field-label"><HelpLabel helpKey="rollback">סיבת Rollback</HelpLabel></span>
             <input className="control" value={reason} onChange={(event) => onReasonChange(event.target.value)} placeholder="לדוגמה: תקלה בגרסה האחרונה, לאחר בדיקת backup" />
           </label>
+        </div>
+        <div className="deploy-current-release rollback-release-summary">
+          <div>
+            <p className="field-label">Release יעד</p>
+            <h3>{selectedRelease ? releaseDisplayLabel(selectedRelease) : "לא נבחר Release"}</h3>
+            <p>{selectedRelease ? `${releaseTypeLabel(selectedRelease.releaseType)} · ${selectedRelease.artifactValidation?.readyForDeploy ? "Artifact מאומת" : "נדרש Validate לפני הרצה"}` : "בחרו גרסה שאליה רוצים לחזור לפני תכנון Rollback."}</p>
+          </div>
+          <StatusChip tone={selectedRelease?.artifactValidation?.readyForDeploy ? "success" : "warning"} helpKey="artifact.validation">
+            {selectedRelease?.artifactValidation?.readyForDeploy ? "מוכן לתכנון" : "דורש בדיקה"}
+          </StatusChip>
         </div>
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-secondary" type="button" onClick={() => onSiteIdsChange(activeSites.map((site) => site._id))}>בחר הכל</button>
@@ -1429,7 +1456,7 @@ function RollbackPanel({
         </div>
         {!ready ? (
           <div className="panel panel-warning p-3 text-sm">
-            <p className="font-bold" style={{ color: "var(--warning)" }}>Rollback נשאר חסום עד שקיים Plan תקין לכל האתרים הנבחרים ו-SharePoint write זמין.</p>
+            <p className="font-bold" style={{ color: "var(--warning)" }}>Rollback נשאר חסום עד שקיים Plan תקין לכל האתרים הנבחרים.</p>
           </div>
         ) : null}
         <DataTable
@@ -1463,12 +1490,14 @@ function CreateReleaseModal({
   open,
   busy,
   latestVersion,
+  name,
   releaseType,
   version,
   notes,
   artifactRef,
   suggestedVersion,
   onClose,
+  onNameChange,
   onTypeChange,
   onVersionChange,
   onNotesChange,
@@ -1478,12 +1507,14 @@ function CreateReleaseModal({
   open: boolean;
   busy: boolean;
   latestVersion: string;
+  name: string;
   releaseType: ReleaseType;
   version: string;
   notes: string;
   artifactRef: string;
   suggestedVersion: string;
   onClose: () => void;
+  onNameChange: (value: string) => void;
   onTypeChange: (type: ReleaseType) => void;
   onVersionChange: (value: string) => void;
   onNotesChange: (value: string) => void;
@@ -1491,6 +1522,7 @@ function CreateReleaseModal({
   onCreate: () => void;
 }) {
   if (!open) return null;
+  const trimmedName = name.trim();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
@@ -1513,6 +1545,11 @@ function CreateReleaseModal({
               <p className="field-label"><HelpLabel helpKey="version.latest">Computed next version</HelpLabel></p>
               <p className="num text-xl font-bold" style={{ color: "var(--accent)" }}>{version || suggestedVersion}</p>
             </div>
+            <label className="md:col-span-2">
+              <span className="field-label"><HelpLabel helpKey="release">שם מזהה ל-Release</HelpLabel></span>
+              <input className="control" value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="לדוגמה: הדרכות 2026, תיקוני הרשאות, פורטל עובדים חדש" aria-invalid={!trimmedName} />
+              <span className="mt-1 block text-xs muted">זה השם שיופיע בבחירת Release בזמן יצירת אתר. מספר הגרסה נשאר לזיהוי טכני.</span>
+            </label>
             <label>
               <span className="field-label"><HelpLabel helpKey="release">Release type</HelpLabel></span>
               <select className="control" value={releaseType} onChange={(event) => onTypeChange(event.target.value as ReleaseType)}>
@@ -1534,7 +1571,8 @@ function CreateReleaseModal({
               <span className="field-label"><HelpLabel helpKey="changelog">Notes / changelog</HelpLabel></span>
               <textarea className="control min-h-28" value={notes} onChange={(event) => onNotesChange(event.target.value)} placeholder="מה השתנה בגרסה הזו? תיקונים, שינויים, סיכונים ידועים." />
             </label>
-            <div className="md:col-span-2 grid gap-3 md:grid-cols-3">
+            <div className="md:col-span-2 grid gap-3 md:grid-cols-4">
+              <SafetyGate ok={Boolean(trimmedName)} label="שם מזהה" detail={trimmedName ? "אפשר לזהות את ה-Release באשפים ובבחירה ידנית." : "חסר שם אנושי. בלי זה המשתמש יראה בעיקר מספר גרסה."} helpKey="release" />
               <SafetyGate ok={Boolean(version || suggestedVersion)} label="גרסה מחושבת" detail="המספר יישמר ב-registry בלבד." helpKey="release" />
               <SafetyGate ok={Boolean(artifactRef.trim())} label="Artifact" detail={artifactRef.trim() ? "ניתן להריץ validation אחרי היצירה." : "אפשר ליצור בלי Artifact, אבל Deploy יהיה חסום."} helpKey="artifact" />
               <SafetyGate ok label="No deploy" detail="יצירת Release לא מפעילה פריסה." helpKey="deploy" />
@@ -1544,8 +1582,131 @@ function CreateReleaseModal({
 
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t divider px-5 py-4" style={{ background: "var(--surface)" }}>
           <button className="btn btn-secondary" type="button" onClick={onClose} disabled={busy}>ביטול</button>
-          <button className="btn btn-primary" type="button" disabled={busy} onClick={onCreate}>
+          <button className="btn btn-primary" type="button" disabled={busy || !trimmedName} onClick={onCreate}>
             <Plus size={16} />{busy ? "יוצר..." : "Create Release"}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+type ReleaseEditDraft = {
+  name: string;
+  version: string;
+  releaseType: ReleaseType;
+  artifactRef: string;
+  notes: string;
+  status: Release["status"];
+};
+
+const blankReleaseEditDraft: ReleaseEditDraft = {
+  name: "",
+  version: "",
+  releaseType: "patch",
+  artifactRef: "",
+  notes: "",
+  status: "active"
+};
+
+const releaseToEditDraft = (release: Release): ReleaseEditDraft => ({
+  name: release.name || "",
+  version: release.version || "",
+  releaseType: release.releaseType,
+  artifactRef: release.artifactRef || "",
+  notes: release.notes || "",
+  status: release.status || "active"
+});
+
+function EditReleaseModal({
+  release,
+  draft,
+  busy,
+  onDraftChange,
+  onClose,
+  onSave
+}: {
+  release: Release | null;
+  draft: ReleaseEditDraft;
+  busy: boolean;
+  onDraftChange: (value: ReleaseEditDraft) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  if (!release) return null;
+  const trimmedName = draft.name.trim();
+  const trimmedVersion = draft.version.trim();
+  const artifactChanged = draft.artifactRef.trim() !== String(release.artifactRef || "").trim();
+  const versionChanged = trimmedVersion !== String(release.version || "").trim();
+  const updateDraft = <K extends keyof ReleaseEditDraft>(key: K, value: ReleaseEditDraft[K]) => onDraftChange({ ...draft, [key]: value });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+      <div className="surface-card flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden">
+        <header className="flex items-start justify-between gap-3 border-b divider px-5 py-4">
+          <div>
+            <h2 className="inline-flex items-center gap-2 text-lg font-bold" style={{ color: "var(--text-strong)" }}><Pencil size={18} />עריכת Release</h2>
+            <p className="mt-1 text-sm muted">עדכון פרטי registry בלבד. שינוי Artifact מחייב Validate מחדש לפני Deploy.</p>
+          </div>
+          <button className="icon-btn" type="button" onClick={onClose} aria-label="סגור" disabled={busy}><X size={17} /></button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-md border p-3" style={{ borderColor: "var(--border)", background: "var(--surface-muted)" }}>
+            <p className="field-label">Release לעריכה</p>
+            <p className="font-bold" style={{ color: "var(--text-strong)" }}>{releaseDisplayLabel(release)}</p>
+            <p className="num mt-1 text-xs muted">גרסה {release.version} · מזהה {release._id.slice(-8)}</p>
+          </div>
+          <div className="rounded-md border p-3" style={{ borderColor: "var(--border)", background: artifactChanged ? "var(--warning-soft)" : "var(--surface-muted)" }}>
+            <p className="field-label">השפעת שינוי</p>
+            <p className="text-sm font-bold" style={{ color: artifactChanged ? "var(--warning)" : "var(--text-strong)" }}>
+              {artifactChanged ? "Artifact השתנה - צריך Validate מחדש" : versionChanged ? "מספר גרסה ישתנה ב-registry" : "אין שינוי מסוכן מזוהה"}
+            </p>
+            <p className="mt-1 text-xs muted">הפעולה לא מריצה Deploy ולא משנה אתרים קיימים.</p>
+          </div>
+          <label className="md:col-span-2">
+            <span className="field-label"><HelpLabel helpKey="release">שם מזהה ל-Release</HelpLabel></span>
+            <input className="control" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} placeholder="לדוגמה: הדרכות יוני, תיקוני הרשאות, פורטל עובדים חדש" aria-invalid={!trimmedName} />
+            <span className="mt-1 block text-xs muted">זה השם שיופיע ביצירת אתר, Deploy Center ו-Rollback.</span>
+          </label>
+          <label>
+            <span className="field-label"><HelpLabel helpKey="version.latest">מספר גרסה</HelpLabel></span>
+            <input className="control" value={draft.version} onChange={(event) => updateDraft("version", event.target.value)} placeholder="1.1.1" aria-invalid={!trimmedVersion} />
+            <span className="mt-1 block text-xs muted">שינוי גרסה משנה את זיהוי ה־Release. ודאו שאין כפילות.</span>
+          </label>
+          <label>
+            <span className="field-label"><HelpLabel helpKey="release">סוג Release</HelpLabel></span>
+            <select className="control" value={draft.releaseType} onChange={(event) => updateDraft("releaseType", event.target.value as ReleaseType)}>
+              <option value="patch">Patch</option>
+              <option value="minor">Minor</option>
+              <option value="major">Major</option>
+              <option value="hotfix">Hotfix</option>
+            </select>
+          </label>
+          <label>
+            <span className="field-label"><HelpLabel helpKey="release">סטטוס</HelpLabel></span>
+            <select className="control" value={draft.status} onChange={(event) => updateDraft("status", event.target.value as Release["status"])}>
+              <option value="active">פעיל</option>
+              <option value="deprecated">Deprecated</option>
+            </select>
+          </label>
+          <label>
+            <span className="field-label"><HelpLabel helpKey="artifact">Artifact reference</HelpLabel></span>
+            <input className="control" value={draft.artifactRef} onChange={(event) => updateDraft("artifactRef", event.target.value)} placeholder="נתיב לתיקיית dist או sharepoint-deploy-manifest.json" />
+            <span className="mt-1 block text-xs muted">אם משנים נתיב, ה־validation הקודם יבוטל עד להרצת Validate מחדש.</span>
+          </label>
+          <label className="md:col-span-2">
+            <span className="field-label"><HelpLabel helpKey="changelog">Notes / changelog</HelpLabel></span>
+            <textarea className="control min-h-28" value={draft.notes} onChange={(event) => updateDraft("notes", event.target.value)} placeholder="מה השתנה בגרסה הזו? תיקונים, סיכונים ידועים, הקשר לפריסה." />
+          </label>
+          </div>
+        </div>
+
+        <footer className="flex flex-wrap items-center justify-between gap-3 border-t divider px-5 py-4" style={{ background: "var(--surface)" }}>
+          <button className="btn btn-secondary" type="button" onClick={onClose} disabled={busy}>ביטול</button>
+          <button className="btn btn-primary" type="button" disabled={busy || !trimmedName || !trimmedVersion} onClick={onSave}>
+            <CheckCircle2 size={16} />{busy ? "שומר..." : "שמור Release"}
           </button>
         </footer>
       </div>
@@ -1583,6 +1744,9 @@ export function ReleasesPage() {
   const [browserDeployResults, setBrowserDeployResults] = useState<BrowserDeploySiteResult[]>([]);
 
   const [createReleaseOpen, setCreateReleaseOpen] = useState(false);
+  const [releaseName, setReleaseName] = useState("");
+  const [editRelease, setEditRelease] = useState<Release | null>(null);
+  const [editReleaseDraft, setEditReleaseDraft] = useState<ReleaseEditDraft>(blankReleaseEditDraft);
   const [newVersion, setNewVersion] = useState("");
   const [versionManuallyEdited, setVersionManuallyEdited] = useState(false);
   const [releaseType, setReleaseType] = useState<ReleaseType>("patch");
@@ -1603,10 +1767,10 @@ export function ReleasesPage() {
   const latestVersion = versionStatus?.latestVersion || latestRelease?.version || "";
   const latestVersionForSuggestion = latestVersion || "0.1.0";
   const suggestedVersion = useMemo(() => suggestVersion(latestVersionForSuggestion, releaseType), [latestVersionForSuggestion, releaseType]);
-  const writeAvailable = Boolean(capabilities?.sharePoint.writeAvailable);
   const selectedValidation = selectedReleaseId ? validationByReleaseId[selectedReleaseId] || null : null;
   const currentPlanFresh = isPlanForCurrentSelection({ plan: batchPlan, releaseId: selectedReleaseId, deployMode, targetMode, targetSiteIds, allowDeployWithoutBackup });
   const executablePlanRows = currentPlanFresh ? batchPlan?.results.filter((row) => row.status === "ready" || row.status === "warning") || [] : [];
+  const rollbackRelease = releases.find((release) => release._id === rollbackReleaseId) || null;
 
   const siteUsage = useMemo(() => {
     const usage = new Map<string, number>();
@@ -1713,6 +1877,49 @@ export function ReleasesPage() {
     if (inferredType && inferredType !== releaseType) setReleaseType(inferredType);
   };
 
+  const openEditRelease = (release: Release) => {
+    setEditRelease(release);
+    setEditReleaseDraft(releaseToEditDraft(release));
+    setActionError("");
+  };
+
+  const closeEditRelease = () => {
+    setEditRelease(null);
+    setEditReleaseDraft(blankReleaseEditDraft);
+  };
+
+  const saveEditRelease = async () => {
+    if (!editRelease) return;
+    const nextName = editReleaseDraft.name.trim();
+    const nextVersion = editReleaseDraft.version.trim();
+    if (!nextName || !nextVersion) return;
+
+    await runAction("edit-release", async () => {
+      const artifactChanged = editReleaseDraft.artifactRef.trim() !== String(editRelease.artifactRef || "").trim();
+      const result = await sitesApi.updateRelease(editRelease._id, {
+        name: nextName,
+        version: nextVersion,
+        releaseType: editReleaseDraft.releaseType,
+        artifactRef: editReleaseDraft.artifactRef.trim(),
+        notes: editReleaseDraft.notes,
+        status: editReleaseDraft.status
+      });
+      setReleases((current) => current.map((release) => release._id === result.data._id ? result.data : release));
+      if (artifactChanged) {
+        setValidationByReleaseId((prev) => {
+          const next = { ...prev };
+          delete next[result.data._id];
+          return next;
+        });
+      }
+      setMessage(artifactChanged
+        ? `${releaseDisplayLabel(result.data)} נשמר. Artifact השתנה, לכן צריך להריץ Validate מחדש.`
+        : `${releaseDisplayLabel(result.data)} נשמר.`);
+      closeEditRelease();
+      await load();
+    });
+  };
+
   const validateRelease = async (releaseId: string) => {
     await runAction(`validate-${releaseId}`, async () => {
       const result = await sitesApi.validateReleaseArtifact(releaseId);
@@ -1786,7 +1993,7 @@ export function ReleasesPage() {
     displayName: site.displayName,
     status: result.finalStatus === "success" ? "success" : "failed",
     message: result.finalStatus === "success" ? "הקבצים הועלו ואומתו." : "העלאת קובץ נכשלה.",
-    filesCount: row.plan?.summary.filesCount || result.readBackEvidence.length,
+    filesCount: result.readBackEvidence.length || row.plan?.summary.filesCount || 0,
     verifiedFilesCount: result.readBackEvidence.filter((item) => item.status === "verified").length,
     failedFilesCount: result.readBackEvidence.filter((item) => item.status !== "verified").length,
     deploymentId,
@@ -1843,6 +2050,15 @@ export function ReleasesPage() {
               targetPath: file.targetPath
             };
           });
+          const deploymentMetadata = await buildDeploymentMetadataFile({
+            releaseId: selectedReleaseId,
+            releaseVersion: row.targetVersion,
+            operation: "deploy",
+            site,
+            targetSiteUrl,
+            targetDistPath,
+            finalAppUrl: row.plan.target?.finalAppUrl
+          });
           const browserDeploy = await deployArtifactToSharePointBrowser({
             releaseId: selectedReleaseId,
             siteId: site._id,
@@ -1850,8 +2066,11 @@ export function ReleasesPage() {
             targetSiteUrl,
             targetDistPath,
             finalAppUrl: row.plan.target?.finalAppUrl,
-            files: deployFiles,
-            loadArtifactFile: (relativePath) => sitesApi.releaseArtifactFile(selectedReleaseId, relativePath),
+            files: [...deployFiles, deploymentMetadata.file],
+            loadArtifactFile: (relativePath) =>
+              relativePath === DEPLOYMENT_METADATA_FILE
+                ? Promise.resolve(deploymentMetadata.response)
+                : sitesApi.releaseArtifactFile(selectedReleaseId, relativePath),
             onFileProgress: (event) => {
               updateBrowserDeployResult({
                 ...running,
@@ -1978,7 +2197,6 @@ export function ReleasesPage() {
           const blockers = [
             result.data.summary.readyForDeploy ? "" : "Artifact לא מוכן ל-Rollback",
             result.data.summary.readyForDeployExecution === false ? "Execution חסום לפי safety gates" : "",
-            !result.data.capabilities.writeAvailable ? "SharePoint write אינו זמין" : ""
           ].filter(Boolean);
           rows.push({
             site,
@@ -2007,15 +2225,136 @@ export function ReleasesPage() {
     await runAction("rollback-run", async () => {
       const readyRows = rollbackRows.filter((row) => row.ready);
       if (!readyRows.length) throw new Error("אין Rollback plans מוכנים");
+      if (!rollbackReleaseId) throw new Error("בחר Release יעד ל-Rollback");
+      const manifestResponse = await sitesApi.releaseArtifactManifest(rollbackReleaseId);
+      const manifest = manifestResponse.data;
+      if (!manifest.summary.readyForDeploy) throw new Error("ה־artifact של גרסת ה-Rollback חסר או לא תקין.");
+      const manifestFilesByPath = new Map(manifest.files.map((file) => [file.relativePath, file]));
       const nextRows = [...rollbackRows];
+      let successCount = 0;
+
       for (const row of readyRows) {
-        const result = await sitesApi.rollbackSiteVersion(row.site._id, rollbackReleaseId, reason);
         const index = nextRows.findIndex((item) => item.site._id === row.site._id);
-        nextRows[index] = { ...nextRows[index], status: "queued", jobId: result.data.job._id };
+        if (!row.plan || index === -1) continue;
+        const site = row.site;
+        const targetSiteUrl = row.plan.target?.sharePointSiteUrl || site.sharePointSiteUrl;
+        const targetDistPath = row.plan.target?.targetDistPath || row.plan.files[0]?.targetPath?.replace(/\/[^/]+$/g, "") || "";
+        const versionBefore = siteVersion(site) || row.plan.rollback.fromVersion;
+        const versionAfter = row.plan.rollback.toVersion || row.plan.releaseVersion;
+        const startedAt = new Date().toISOString();
+        const queued = await sitesApi.rollbackSiteVersion(site._id, rollbackReleaseId, reason);
+        nextRows[index] = { ...nextRows[index], status: "running", jobId: queued.data.job._id };
+        setRollbackRows([...nextRows]);
+
+        try {
+          await requestBrowserDigest(targetSiteUrl, { forceRefresh: true });
+          const deployFiles = row.plan.files.map((file) => {
+            const manifestFile = manifestFilesByPath.get(file.relativePath);
+            return {
+              relativePath: file.relativePath,
+              targetRelativePath: manifestFile?.targetRelativePath || file.relativePath,
+              sizeBytes: manifestFile?.sizeBytes || file.sizeBytes,
+              contentType: manifestFile?.contentType || "application/octet-stream",
+              sha256: manifestFile?.sha256 || file.sha256,
+              deployable: manifestFile?.deployable ?? true,
+              targetPath: file.targetPath
+            };
+          });
+          const deploymentMetadata = await buildDeploymentMetadataFile({
+            releaseId: rollbackReleaseId,
+            releaseVersion: versionAfter,
+            operation: "rollback",
+            site,
+            targetSiteUrl,
+            targetDistPath,
+            finalAppUrl: row.plan.target?.finalAppUrl
+          });
+          const browserDeploy = await deployArtifactToSharePointBrowser({
+            releaseId: rollbackReleaseId,
+            siteId: site._id,
+            siteCode: site.siteCode,
+            targetSiteUrl,
+            targetDistPath,
+            finalAppUrl: row.plan.target?.finalAppUrl,
+            files: [...deployFiles, deploymentMetadata.file],
+            loadArtifactFile: (relativePath) =>
+              relativePath === DEPLOYMENT_METADATA_FILE
+                ? Promise.resolve(deploymentMetadata.response)
+                : sitesApi.releaseArtifactFile(rollbackReleaseId, relativePath)
+          });
+          const payload: BrowserDeployEvidencePayload = {
+            releaseId: rollbackReleaseId,
+            deployMode: "local-dev-owner",
+            connectorMode: "browser-sharepoint",
+            targetSite: {
+              siteId: site._id,
+              siteCode: site.siteCode,
+              sharePointSiteUrl: targetSiteUrl
+            },
+            targetPaths: {
+              targetDistPath,
+              finalAppUrl: row.plan.target?.finalAppUrl
+            },
+            uploadedFilesEvidence: browserDeploy.uploadedFilesEvidence,
+            readBackEvidence: browserDeploy.readBackEvidence,
+            finalAppUrlVerification: browserDeploy.finalAppUrlVerification,
+            errors: browserDeploy.errors,
+            startedAt: browserDeploy.startedAt,
+            completedAt: browserDeploy.completedAt,
+            finalStatus: browserDeploy.finalStatus,
+            versionBefore,
+            versionAfter: browserDeploy.finalStatus === "success" ? versionAfter : versionBefore
+          };
+          await sitesApi.recordBrowserDeployEvidence(site._id, payload);
+          if (browserDeploy.finalStatus === "success") successCount += 1;
+          nextRows[index] = { ...nextRows[index], status: browserDeploy.finalStatus === "success" ? "succeeded" : "failed", jobId: queued.data.job._id };
+          setRollbackRows([...nextRows]);
+        } catch (error) {
+          const failedEvidence: DeploymentVerificationEvidence[] = row.plan.files.map((file) => ({
+            relativePath: file.relativePath,
+            sourcePath: `artifact:${file.relativePath}`,
+            targetPath: file.targetPath,
+            status: "failed",
+            checkedAt: new Date().toISOString(),
+            expectedSizeBytes: file.sizeBytes,
+            actualSizeBytes: 0,
+            expectedSha256: file.sha256,
+            actualSha256: "",
+            sizeMatches: false,
+            sha256Matches: false,
+            error: error instanceof Error ? error.message : String(error)
+          }));
+          await sitesApi.recordBrowserDeployEvidence(site._id, {
+            releaseId: rollbackReleaseId,
+            deployMode: "local-dev-owner",
+            connectorMode: "browser-sharepoint",
+            targetSite: {
+              siteId: site._id,
+              siteCode: site.siteCode,
+              sharePointSiteUrl: targetSiteUrl
+            },
+            targetPaths: {
+              targetDistPath,
+              finalAppUrl: row.plan.target?.finalAppUrl
+            },
+            uploadedFilesEvidence: failedEvidence,
+            readBackEvidence: failedEvidence,
+            errors: [{ error: error instanceof Error ? error.message : String(error) }],
+            startedAt,
+            completedAt: new Date().toISOString(),
+            finalStatus: "failed",
+            versionBefore,
+            versionAfter: versionBefore
+          }).catch(() => undefined);
+          nextRows[index] = { ...nextRows[index], status: "failed", jobId: queued.data.job._id, blockers: [error instanceof Error ? error.message : String(error)] };
+          setRollbackRows([...nextRows]);
+        }
       }
       setRollbackRows(nextRows);
       setRollbackConfirmOpen(false);
-      setMessage(`${formatNumber(readyRows.length)} Rollback jobs נשלחו לתור`);
+      setMessage(successCount === readyRows.length
+        ? `${formatNumber(successCount)} Rollback פעולות הושלמו דרך הדפדפן`
+        : `${formatNumber(successCount)} מתוך ${formatNumber(readyRows.length)} Rollback פעולות הושלמו; Evidence נשמר עבור הכשלים`);
       await load();
     });
   };
@@ -2042,6 +2381,48 @@ export function ReleasesPage() {
           setBrowserDeployResults([]);
         }}
       />
+
+      <OperationalSummary
+        title="פריסה בטוחה מתחילה בתוכנית"
+        purpose="המסך הזה מיועד לבחור גרסה, להבין מי יושפע, לראות חסמים, ואז לבצע רק אחרי Dry-run ואישור מוגן."
+        state={selectedRelease ? `ה-Release שנבחר: ${releaseDisplayLabel(selectedRelease)} · ${releaseReadiness(selectedRelease, latestVersion).label}` : "אין Release נבחר לפריסה"}
+        attention={!releases.some(isDeployableRelease)
+          ? "אין כרגע Release שמוכן לפריסה. צריך Artifact תקין ו־Validation."
+          : batchPlan && !currentPlanFresh
+            ? "ה־Dry-run לא תואם לבחירה הנוכחית. צריך להריץ אותו מחדש."
+            : batchPlan?.summary.blockedSites
+              ? `${formatNumber(batchPlan.summary.blockedSites)} אתרים חסומים בתוכנית.`
+              : "אין חסימת פריסה מרכזית שמוצגת כרגע."}
+        attentionTone={!releases.some(isDeployableRelease) || (batchPlan && !currentPlanFresh) || batchPlan?.summary.blockedSites ? "warning" : "success"}
+        nextAction={activeTab === "deploy"
+          ? batchPlan && currentPlanFresh
+            ? "עברו ל־Review ובדקו את היעדים המוכנים לפני Execute."
+            : "בחרו Release ויעדים, ואז הריצו Dry-run."
+          : "בחרו Release מוכן או פתחו תוכנית פריסה חדשה."}
+        blocked={!releases.some(isDeployableRelease)
+          ? "Release בלי Artifact תקין לא יכול להרגיש deployable. חברו Artifact והריצו Validate."
+          : batchPlan?.connectorMode === "browser-sharepoint"
+            ? undefined
+            : "פריסה ל־SharePoint מתבצעת דרך הדפדפן בלבד. הריצו Dry-run במסלול Browser SharePoint."}
+        tone={!releases.some(isDeployableRelease) || batchPlan?.summary.blockedSites ? "warning" : "success"}
+      >
+        <GuidedFlow
+          title="זרימת פריסה מוגנת"
+          steps={[
+            { title: "Release מוכן", description: "בחרו את הגרסה החדשה ביותר שיש לה Artifact מאומת.", status: selectedRelease && isDeployableRelease(selectedRelease) ? "done" : "active" },
+            { title: "Scope ברור", description: "בחרו אתר אחד, אתרים נבחרים, או כל האתרים הפעילים.", status: targetMode === "all" || targetSiteIds.length ? "done" : "pending" },
+            { title: "Dry-run", description: "המערכת מחלקת יעדים למוכנים, עדכניים, חסומים ודורשים בדיקה.", status: batchPlan ? currentPlanFresh ? "done" : "blocked" : "pending" },
+            { title: "אישור מוגן", description: `Execute אפשרי רק אחרי Review. כרגע ${formatNumber(executablePlanRows.length)} יעדים מוכנים.`, status: executablePlanRows.length ? "active" : "pending" }
+          ]}
+        />
+        <ModeBoundary
+          items={[
+            { label: "פריסה רגילה", description: "מיועדת לגרסה חדשה ומוכנה לפריסה.", tone: "success" },
+            { label: "Rollback", description: "חזרה לגרסה ישנה נשארת בלשונית Rollback עם אישור נפרד.", tone: "warning" },
+            { label: "Evidence", description: "קבצים, read-back ושגיאות נשמרים אחרי הפעולה ומוצגים בפרטים.", tone: "info" }
+          ]}
+        />
+      </OperationalSummary>
 
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}
       {actionError ? <div className="badge badge-danger px-3 py-2">{actionError}</div> : null}
@@ -2081,6 +2462,7 @@ export function ReleasesPage() {
                   setDeployResult(null);
                   setBrowserDeployResults([]);
                 }}
+                onEdit={openEditRelease}
                 onValidate={validateRelease}
                 onDeploy={startDeployPlan}
               />
@@ -2106,6 +2488,7 @@ export function ReleasesPage() {
                     validation={selectedValidation}
                     validating={busyAction === `validate-${selectedReleaseId}`}
                     onValidate={() => selectedReleaseId && validateRelease(selectedReleaseId)}
+                    onEdit={openEditRelease}
                     onDeploy={() => selectedReleaseId && startDeployPlan(selectedReleaseId)}
                     shell={false}
                   />
@@ -2180,7 +2563,6 @@ export function ReleasesPage() {
               selectedSiteIds={rollbackSiteIds}
               reason={rollbackReason}
               planRows={rollbackRows}
-              writeAvailable={writeAvailable}
               busyAction={busyAction}
               onReleaseChange={(releaseId) => {
                 setRollbackReleaseId(releaseId);
@@ -2248,38 +2630,76 @@ export function ReleasesPage() {
         open={createReleaseOpen}
         busy={busyAction === "create-release"}
         latestVersion={latestVersionForSuggestion}
+        name={releaseName}
         releaseType={releaseType}
         version={newVersion}
         notes={notes}
         artifactRef={artifactRef}
         suggestedVersion={suggestedVersion}
         onClose={() => setCreateReleaseOpen(false)}
+        onNameChange={setReleaseName}
         onTypeChange={handleReleaseTypeChange}
         onVersionChange={handleVersionChange}
         onNotesChange={setNotes}
         onArtifactRefChange={setArtifactRef}
         onCreate={() => runAction("create-release", async () => {
           const result = await sitesApi.createRelease({
+            name: releaseName.trim(),
             version: newVersion || suggestedVersion || undefined,
             releaseType,
             notes: notes || undefined,
             artifactRef: artifactRef || undefined
           });
-          setMessage("Release נוצר ב-Hub. הוא לא נפרס בפועל.");
+          const requestedName = releaseName.trim();
+          let createdRelease = result.data;
+          if (requestedName && !createdRelease.name) {
+            const repairResult = await sitesApi.updateRelease(createdRelease._id, {
+              name: requestedName,
+              version: createdRelease.version,
+              releaseType: createdRelease.releaseType,
+              artifactRef: createdRelease.artifactRef || "",
+              notes: createdRelease.notes || "",
+              status: createdRelease.status
+            });
+            createdRelease = repairResult.data;
+          }
           setCreateReleaseOpen(false);
-          setSelectedReleaseId(result.data._id);
+          setSelectedReleaseId(createdRelease._id);
+          setReleaseName("");
           setNewVersion("");
           setVersionManuallyEdited(false);
           setNotes("");
           setArtifactRef("");
+
+          try {
+            const validation = await sitesApi.validateReleaseArtifact(createdRelease._id);
+            setValidationByReleaseId((prev) => ({ ...prev, [createdRelease._id]: validation.data }));
+            setMessage(
+              validation.data.summary.readyForDeploy
+                ? `${releaseDisplayLabel(createdRelease)} נוצר ואומת אוטומטית. הוא עדיין לא נפרס.`
+                : `${releaseDisplayLabel(createdRelease)} נוצר ונבדק אוטומטית, אבל ה-Artifact עדיין חסום. אפשר להריץ Validate שוב אחרי תיקון.`
+            );
+          } catch (validationError) {
+            setMessage(`${releaseDisplayLabel(createdRelease)} נוצר ב-Hub. הוא לא נפרס בפועל.`);
+            setActionError(`ה-Release נוצר, אבל Validate אוטומטי נכשל: ${validationError instanceof Error ? validationError.message : "שגיאה לא ידועה"}`);
+          }
           await load();
         })}
+      />
+
+      <EditReleaseModal
+        release={editRelease}
+        draft={editReleaseDraft}
+        busy={busyAction === "edit-release"}
+        onDraftChange={setEditReleaseDraft}
+        onClose={closeEditRelease}
+        onSave={() => void saveEditRelease()}
       />
 
       <ProtectedActionDialog
         open={deployConfirmOpen}
         title="אישור Execute לפריסה"
-        description={`פריסה חיה של ${selectedRelease?.version || "release"} ל-${formatNumber(executablePlanRows.length)} אתרים מוכנים. הפעולה תרוץ דרך Browser SharePoint ותשמור evidence לאחר כל אתר.`}
+        description={`פריסה חיה של ${selectedRelease ? releaseDisplayLabel(selectedRelease) : "ה-Release הנבחר"} ל-${formatNumber(executablePlanRows.length)} אתרים מוכנים. הפעולה תרוץ דרך Browser SharePoint ותשמור evidence לאחר כל אתר.`}
         confirmWord={`Deploy ${selectedRelease?.version || ""}`.trim()}
         noteLabel="סיבת פריסה"
         notePlaceholder="לדוגמה: פריסת גרסה מאושרת אחרי Dry-run נקי"
@@ -2287,7 +2707,7 @@ export function ReleasesPage() {
         confirmLabel="Execute deploy"
         busy={busyAction === "batch-run"}
         risks={[
-          `${formatNumber(executablePlanRows.length)} אתרים יקבלו את קבצי ה-Artifact של ${selectedRelease?.version || "הגרסה הנבחרת"}.`,
+          `${formatNumber(executablePlanRows.length)} אתרים יקבלו את קבצי ה-Artifact של ${selectedRelease ? releaseDisplayLabel(selectedRelease) : "ה-Release הנבחר"}.`,
           allowDeployWithoutBackup ? "נבחר Override: הפריסה תרוץ גם אם אין גיבוי מאומת לפני דריסת הקבצים." : "",
           batchPlan ? `${formatNumber(batchPlan.summary.alreadyUpToDateSites)} אתרים כבר עדכניים וידולגו.` : "חסר Dry-run.",
           batchPlan ? `${formatNumber(batchPlan.summary.blockedSites)} אתרים חסומים לא ייפרסו.` : "חסר Dry-run.",
@@ -2301,17 +2721,17 @@ export function ReleasesPage() {
       />
 
       <ProtectedActionDialog
-        open={rollbackConfirmOpen}
-        title="הרצת Rollback"
-        description={`יצירת Rollback jobs עבור ${formatNumber(rollbackRows.filter((row) => row.ready).length)} אתרים לגרסה הנבחרת. הפעולה תבוצע רק עבור plans מוכנים.`}
+	        open={rollbackConfirmOpen}
+	        title="הרצת Rollback"
+	        description={`הרצת Rollback דרך הדפדפן עבור ${formatNumber(rollbackRows.filter((row) => row.ready).length)} אתרים אל ${rollbackRelease ? releaseDisplayLabel(rollbackRelease) : "ה-Release הנבחר"}. השרת ישמור Job ו־Evidence בלבד.`}
         confirmWord="Rollback"
         noteLabel="סיבת Rollback"
         notePlaceholder="לדוגמה: תקלה בגרסה האחרונה, חזרה לגרסה יציבה לאחר בדיקת backup"
         initialNote={rollbackReason}
-        confirmLabel="צור Rollback jobs"
+	        confirmLabel="הרץ Rollback בדפדפן"
         busy={busyAction === "rollback-run"}
         risks={[
-          "Rollback ידרוס קבצי dist חיים ב-SharePoint באמצעות artifact של גרסה אחרת.",
+          `Rollback ידרוס קבצי dist חיים ב-SharePoint באמצעות artifact של ${rollbackRelease ? releaseDisplayLabel(rollbackRelease) : "Release היעד"}.`,
           "מומלץ לוודא שקיים backup/evidence עדכני לפני ההרצה.",
           "קבצים שלא קיימים ב-artifact היעד לא בהכרח יימחקו, בהתאם למדיניות stale files."
         ]}

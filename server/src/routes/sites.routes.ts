@@ -12,12 +12,14 @@ import {
   queueSiteProvision,
   queuePermissionsSetup,
   browserSharePointHealthCheckEvidence,
+  recordBrowserSiteOperationEvidenceEndpoint,
   readOnlySharePointHealthCheck,
   runtimeConfigValidation,
   builderMongoHealthCheck,
   executeMongoSiteCreationEndpoint,
   getMongoRuntimeConfigContent,
   getMongoSiteCreationPlan,
+  migrateTxtToMongoEndpoint,
   planMongoSiteCreationFromPayload,
   recordMongoCreateBrowserEvidenceEndpoint,
   verifyMongoSiteCreationEndpoint,
@@ -41,6 +43,7 @@ import {
 import {
   addAdmin,
   browserLiveReadEvidenceEndpoint,
+  browserTxtRepairEvidenceEndpoint,
   deleteAdmin,
   getAdmins,
   getAdminsDiffEndpoint,
@@ -66,15 +69,19 @@ router.post("/:id/runtime-config/validate", requireRole("operator"), runtimeConf
 router.post("/:id/health-check/mongo-backend", requireRole("operator"), builderMongoHealthCheck);
 router.get("/:id/mongo-create/plan", requireRole("operator"), getMongoSiteCreationPlan);
 router.post("/:id/mongo-create/execute", requireRole("admin"), executeMongoSiteCreationEndpoint);
+router.post("/:id/mongo-migration/txt-to-mongo", requireRole("admin"), migrateTxtToMongoEndpoint);
 router.get("/:id/mongo-create/runtime-config-content", requireRole("admin"), getMongoRuntimeConfigContent);
 router.post("/:id/mongo-create/browser-evidence", requireRole("admin"), recordMongoCreateBrowserEvidenceEndpoint);
 router.post("/:id/mongo-create/verify", requireRole("operator"), verifyMongoSiteCreationEndpoint);
 router.get("/:id/bootstrap/plan", requireRole("operator"), getSiteBootstrapPlan);
 router.post("/:id/bootstrap", requireRole("admin"), queueSiteBootstrap);
+router.post("/:id/bootstrap/browser-evidence", requireRole("admin"), recordBrowserSiteOperationEvidenceEndpoint);
 router.get("/:id/provision/plan", requireRole("operator"), getSiteProvisionPlan);
 router.post("/:id/provision", requireRole("admin"), queueSiteProvision);
+router.post("/:id/provision/browser-evidence", requireRole("admin"), recordBrowserSiteOperationEvidenceEndpoint);
 router.get("/:id/permissions/plan", requireRole("operator"), getPermissionsSetupPlan);
 router.post("/:id/permissions/setup", requireRole("admin"), queuePermissionsSetup);
+router.post("/:id/permissions/browser-evidence", requireRole("admin"), recordBrowserSiteOperationEvidenceEndpoint);
 
 router.post("/:id/deploy-version/plan", requireRole("operator"), planSiteDeployVersion);
 router.post("/:id/deploy-version", requireRole("admin"), deploySiteVersion);
@@ -95,6 +102,7 @@ router.post("/:id/admins/browser-live-read-evidence", requireRole("operator"), b
 router.post("/:id/admins/sync", requireRole("operator"), syncAdmins);
 router.post("/:id/admins/repair-txt/plan", requireRole("operator"), planTxtAdminRepair);
 router.post("/:id/admins/repair-txt", requireRole("admin"), queueTxtAdminRepair);
+router.post("/:id/admins/repair-txt/browser-evidence", requireRole("admin"), browserTxtRepairEvidenceEndpoint);
 router.post("/:id/admins", requireRole("operator"), addAdmin);
 router.delete("/:id/admins/:adminId", requireRole("operator"), deleteAdmin);
 router.get("/:id/admins/diff", getAdminsDiffEndpoint);

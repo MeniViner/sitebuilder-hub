@@ -178,6 +178,28 @@ export const updateSiteSchema = createSiteSchema.partial();
 
 export const manualHealthSchema = z.object({ health: healthSchema });
 
+const browserOperationStepSchema = z.object({
+  step: z.string().min(1),
+  status: z.enum(["succeeded", "failed", "skipped"]),
+  path: z.string().optional(),
+  httpStatus: z.number().optional(),
+  error: z.string().optional()
+});
+
+export const browserSiteOperationEvidenceSchema = z.object({
+  connectorMode: z.literal("browser-sharepoint"),
+  jobId: z.string().optional(),
+  operation: z.enum(["site-provision", "site-bootstrap", "permissions-setup"]),
+  targetSiteUrl: z.string().trim().min(1).optional(),
+  startedAt: z.string().optional(),
+  completedAt: z.string().optional(),
+  finalStatus: z.enum(["success", "failed"]),
+  steps: z.array(browserOperationStepSchema).default([]),
+  health: healthSchema.optional(),
+  evidence: z.record(z.unknown()).optional().default({}),
+  warnings: z.array(z.string()).optional().default([])
+});
+
 export const siteBootstrapSchema = z.object({
   owner: z.string().trim().email("יש להזין אימייל בעל אתר תקין").optional().or(z.literal("")),
   lcid: z.coerce.number().int().positive().optional(),
@@ -190,8 +212,33 @@ export const siteBootstrapSchema = z.object({
   runProvisioning: z.coerce.boolean().optional(),
   runPermissionsSetup: z.coerce.boolean().optional(),
   reason: z.string().trim().optional(),
-  connectorMode: z.enum(["browser-sharepoint", "backend-sharepoint"]).optional(),
-  confirmBackendSharePoint: z.coerce.boolean().optional()
+  connectorMode: z.literal("browser-sharepoint").optional()
+});
+
+const txtToMongoMigrationFileSchema = z.object({
+  key: z.string().trim().optional(),
+  fileName: z.string().trim().optional(),
+  logicalName: z.string().trim().optional(),
+  sourcePath: z.string().trim().optional(),
+  url: z.string().trim().optional(),
+  exists: z.boolean().optional(),
+  status: z.enum(["read", "missing", "failed"]).optional(),
+  httpStatus: z.number().int().positive().optional(),
+  sizeBytes: optionalNonNegative,
+  sha256: z.string().trim().optional(),
+  text: z.string().optional(),
+  data: z.unknown().optional(),
+  parseStatus: z.enum(["json", "empty", "invalid-json", "missing", "failed"]).optional(),
+  error: z.string().optional()
+});
+
+export const txtToMongoMigrationSchema = z.object({
+  connectorMode: z.literal("browser-sharepoint"),
+  sourceSharePointSiteUrl: z.string().trim().optional(),
+  capturedAt: z.string().optional(),
+  overwriteMongo: z.boolean().optional(),
+  switchSiteToMongo: z.boolean().optional(),
+  files: z.array(txtToMongoMigrationFileSchema).min(1)
 });
 
 export const querySchema = z.object({

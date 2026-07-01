@@ -102,8 +102,7 @@ describe("browser-required backup queueing", () => {
     expect(result).toMatchObject({
       connectorMode: "browser-sharepoint",
       executionMode: "browser-required",
-      approvalStatus: "browser-required",
-      message: "ממתין להרצה דרך הדפדפן"
+      approvalStatus: "browser-required"
     });
     expect(result.browserOperationPlan).toMatchObject({
       operation: "backup",
@@ -128,7 +127,7 @@ describe("browser-required backup queueing", () => {
     expect(mocks.assertSharePointWriteAvailable).not.toHaveBeenCalled();
   });
 
-  it("marks scheduled backup as service-auth blocked when backend auth is not ready", async () => {
+  it("marks scheduled backup as browser-required instead of trying backend SharePoint", async () => {
     const { enqueueSiteBackup } = await import("../server/src/services/backups.service");
 
     const result = await enqueueSiteBackup({
@@ -138,34 +137,66 @@ describe("browser-required backup queueing", () => {
     });
 
     expect(result).toMatchObject({
-      connectorMode: "backend-sharepoint",
-      executionMode: "blocked-service-auth-required",
-      approvalStatus: "blocked-service-auth-required"
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required",
+      approvalStatus: "browser-required"
     });
     expect(mocks.createJob).toHaveBeenCalledWith(expect.objectContaining({
       type: "backup",
-      executionMode: "blocked-service-auth-required",
-      connectorMode: "backend-sharepoint",
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint",
       operationPolicy: "scheduled-backup",
-      connectorBlocker: "הפעולה לא יכולה לרוץ ברקע בלי חיבור שרת ל־SharePoint"
+      payload: expect.objectContaining({
+        connectorMode: "browser-sharepoint",
+        browserOperationPlan: expect.objectContaining({ operation: "backup" })
+      })
     }));
     expect(mocks.assertSharePointWriteAvailable).not.toHaveBeenCalled();
   });
 
-  it("blocks restore by default instead of queueing a backend digest job", async () => {
-    mocks.SiteBackup.findById.mockResolvedValue({
+  it("queues restore as browser-required with restore file payload", async () => {
+    const backup = {
       _id: idOf("backup-1"),
       siteId: idOf("site-1"),
-      backupId: "backup-ext-1"
-    });
+      backupId: "backup-ext-1",
+      status: "verified",
+      filesCount: 1,
+      verification: {
+        status: "verified",
+        evidence: [{
+          sourcePath: "/sites/schedule/siteDB/siteAssets/users_data.txt",
+          targetPath: "/sites/schedule/siteDB/siteAssets/Backups/backup-ext-1/users_data.txt",
+          status: "verified",
+          backupSizeBytes: 12,
+          backupSha256: "abc"
+        }]
+      },
+      save: vi.fn()
+    };
+    mocks.SiteBackup.findOne.mockResolvedValue(backup);
     const { enqueueBackupRestore } = await import("../server/src/services/backups.service");
 
-    await expect(enqueueBackupRestore({
+    const result = await enqueueBackupRestore({
       backupId: "backup-1",
       createdBy: "owner"
-    })).rejects.toThrow("restore-browser-sharepoint-not-implemented");
+    });
 
-    expect(mocks.createJob).not.toHaveBeenCalledWith(expect.objectContaining({ type: "restore" }));
+    expect(result).toMatchObject({
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required",
+      browserOperationPlan: expect.objectContaining({
+        operation: "restore",
+        files: [expect.objectContaining({
+          sourcePath: "/sites/schedule/siteDB/siteAssets/Backups/backup-ext-1/users_data.txt",
+          targetPath: "/sites/schedule/siteDB/siteAssets/users_data.txt"
+        })]
+      })
+    });
+    expect(mocks.createJob).toHaveBeenCalledWith(expect.objectContaining({
+      type: "restore",
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint"
+    }));
     expect(mocks.assertSharePointWriteAvailable).not.toHaveBeenCalled();
   });
 });

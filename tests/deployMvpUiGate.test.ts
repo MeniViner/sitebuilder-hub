@@ -67,7 +67,7 @@ const plan = (overrides: Partial<DeployPlan> = {}): DeployPlan => ({
 });
 
 describe("Deploy MVP UI gate", () => {
-  it("keeps Deploy disabled until release, site, artifact, plan, and write capability are ready", () => {
+  it("keeps Deploy disabled until release, site, artifact, and plan are ready", () => {
     expect(getDeployMvpMissingRequirements({
       deployMode: "local-dev-owner",
       capabilities: capabilities(false)
@@ -75,8 +75,7 @@ describe("Deploy MVP UI gate", () => {
       "Select a release before running Deploy.",
       "Select one managed site before running Deploy.",
       "Deploy cannot run because the release artifact is missing.",
-      "Generate a dry-run deploy plan before running Deploy.",
-      "Deploy cannot run because SharePoint write is not configured."
+      "Generate a dry-run deploy plan before running Deploy."
     ]));
 
     expect(canRunDeployMvp({

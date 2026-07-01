@@ -58,7 +58,7 @@ type SharePointHostingPlan = {
   distAssetsPath: string;
   runtimeConfigPath: string;
   connectorPreference: "browser-sharepoint";
-  libraryCreationFallback: "backend-service-auth-required-or-manual";
+  libraryCreationFallback: "browser-sharepoint-or-manual";
 };
 
 export type MongoCreatePlanInput = {
@@ -210,6 +210,65 @@ export type MongoCreateBrowserEvidenceInput = {
   warnings?: string[];
 };
 
+export type TxtToMongoMigrationSnapshotFile = {
+  key?: string;
+  fileName?: string;
+  logicalName?: string;
+  sourcePath?: string;
+  url?: string;
+  exists?: boolean;
+  status?: "read" | "missing" | "failed";
+  httpStatus?: number;
+  sizeBytes?: number;
+  sha256?: string;
+  text?: string;
+  data?: unknown;
+  parseStatus?: "json" | "empty" | "invalid-json" | "missing" | "failed";
+  error?: string;
+};
+
+export type TxtToMongoMigrationInput = {
+  connectorMode: "browser-sharepoint";
+  sourceSharePointSiteUrl?: string;
+  capturedAt?: string;
+  files: TxtToMongoMigrationSnapshotFile[];
+  overwriteMongo?: boolean;
+  switchSiteToMongo?: boolean;
+};
+
+export type TxtToMongoMigrationResult = {
+  operation: "txt-to-mongo-migration";
+  migratedAt: string;
+  siteId: string;
+  siteCode: string;
+  connectorMode: "browser-sharepoint";
+  sourceSharePointSiteUrl: string;
+  builderBackend: MongoSiteCreationPlan["builderBackend"];
+  registry: {
+    status: "ok" | "failed";
+    safeCollectionName: string;
+    evidence: unknown;
+  };
+  import: {
+    status: "ok" | "partial" | "failed";
+    written: string[];
+    failed: Array<{ key: string; error: string }>;
+    files: Array<{
+      key: string;
+      sourcePath: string;
+      status: "ready" | "missing" | "invalid" | "failed";
+      sizeBytes?: number;
+      sha256?: string;
+      httpStatus?: number;
+      error?: string;
+    }>;
+    evidence: unknown;
+  };
+  health: unknown;
+  finalStatus: "runtime-config-required" | "failed";
+  warnings: string[];
+};
+
 const DEFAULT_GANTT_DATA = {
   enabled: false,
   buttonLabel: "גאנט עבודה",
@@ -234,6 +293,8 @@ const LEGACY_SEED_SOURCES: Record<string, string> = {
   "external_links_data.txt": "Site Builder legacy mapping externalLinks list; same bootstrap default used by HUB siteProvisioning.service.",
   "gantt_data.txt": "Site Builder legacy mapping gantt:settings; same bootstrap default used by HUB siteProvisioning.service."
 };
+
+const REQUIRED_LEGACY_DOC_KEYS = REQUIRED_LEGACY_DOCS.map((doc) => doc.key);
 
 const normalizeAdminKey = (admin: AdminIdentity) =>
   [
@@ -433,7 +494,7 @@ export async function buildMongoSiteCreationPlanFromInput(input: MongoCreatePlan
     distAssetsPath: `${paths.finalDistRoot}/assets`,
     runtimeConfigPath: runtimePath,
     connectorPreference: "browser-sharepoint",
-    libraryCreationFallback: "backend-service-auth-required-or-manual"
+    libraryCreationFallback: "browser-sharepoint-or-manual"
   };
   const warnings = [
     String(input.safeCollectionName || "").trim()
@@ -681,6 +742,108 @@ const failedBatchItems = (payload: any) => {
     .map((item: any) => ({ key: String(item.key || ""), error: String(item.message || item.error || "failed") }));
 };
 
+const legacyFileNameFromValue = (value: string) =>
+  String(value || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean)
+    .pop() || "";
+
+const normalizeLegacySnapshotFile = (file: TxtToMongoMigrationSnapshotFile) => {
+  const key = legacyFileNameFromValue(String(file.key || file.fileName || file.sourcePath || ""));
+  let data = file.data;
+  let parseStatus = file.parseStatus || "";
+  let error = String(file.error || "");
+
+  if (data === undefined && typeof file.text === "string") {
+    const text = file.text.trim();
+    if (!text) {
+      parseStatus = "empty";
+      error = error || "empty-txt-file";
+    } else {
+      try {
+        data = JSON.parse(text);
+        parseStatus = "json";
+      } catch (parseError) {
+        parseStatus = "invalid-json";
+        error = parseError instanceof Error ? parseError.message : String(parseError);
+      }
+    }
+  }
+
+  const ready = Boolean(
+    key &&
+    file.exists !== false &&
+    file.status !== "missing" &&
+    file.status !== "failed" &&
+    parseStatus !== "empty" &&
+    parseStatus !== "invalid-json" &&
+    parseStatus !== "missing" &&
+    parseStatus !== "failed" &&
+    data !== undefined
+  );
+
+  return {
+    key,
+    sourcePath: String(file.sourcePath || ""),
+    status: ready ? "ready" as const : file.status === "missing" ? "missing" as const : parseStatus === "invalid-json" || parseStatus === "empty" ? "invalid" as const : "failed" as const,
+    data,
+    sizeBytes: file.sizeBytes,
+    sha256: file.sha256,
+    httpStatus: file.httpStatus,
+    error: ready ? "" : error || file.status || parseStatus || "txt-file-not-ready"
+  };
+};
+
+const assertValidTxtMigrationSnapshot = (files: TxtToMongoMigrationSnapshotFile[]) => {
+  const normalized = files.map(normalizeLegacySnapshotFile);
+  const byKey = new Map(normalized.map((file) => [file.key, file]));
+  const summary = REQUIRED_LEGACY_DOC_KEYS.map((key) => {
+    const file = byKey.get(key);
+    if (!file) {
+      return {
+        key,
+        sourcePath: "",
+        status: "missing" as const,
+        error: "required-txt-file-not-in-snapshot"
+      };
+    }
+    return {
+      key,
+      sourcePath: file.sourcePath,
+      status: file.status,
+      sizeBytes: file.sizeBytes,
+      sha256: file.sha256,
+      httpStatus: file.httpStatus,
+      error: file.error || undefined
+    };
+  });
+  const blockers = summary.filter((file) => file.status !== "ready");
+  if (blockers.length > 0) {
+    const error = new Error("txt-to-mongo-migration-snapshot-invalid") as Error & { details?: unknown };
+    error.details = { blockers, requiredFiles: REQUIRED_LEGACY_DOC_KEYS };
+    throw error;
+  }
+  return {
+    normalized,
+    summary,
+    docs: REQUIRED_LEGACY_DOC_KEYS.map((key) => byKey.get(key)!).filter(Boolean)
+  };
+};
+
+const batchReadVersions = (payload: any) => {
+  const versions = new Map<string, number>();
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  for (const item of results) {
+    if (!item?.ok) continue;
+    const version = Number(item.version);
+    versions.set(String(item.key || ""), Number.isFinite(version) ? version : 0);
+  }
+  return versions;
+};
+
+const registryPayloadFromResponse = (payload: any) => payload?.site || payload?.data?.site || payload?.data || payload;
+
 export async function executeMongoSiteCreation(siteId: string): Promise<MongoSiteCreationExecuteResult> {
   logger.info("sites", "Mongo-native site creation execution started", { siteId });
   const site = await Site.findById(siteId);
@@ -808,6 +971,193 @@ export async function executeMongoSiteCreation(siteId: string): Promise<MongoSit
     safeCollectionName,
     writtenSeeds: result.seed.written.length,
     skippedExistingSeeds: result.seed.skippedExisting.length
+  });
+
+  return result;
+}
+
+export async function executeTxtToMongoMigration(
+  siteId: string,
+  input: TxtToMongoMigrationInput
+): Promise<TxtToMongoMigrationResult> {
+  if (input.connectorMode !== "browser-sharepoint") throw new Error("browser-sharepoint-evidence-connector-mode-required");
+  logger.info("sites", "TXT to Mongo migration started", { siteId });
+
+  const site = await Site.findById(siteId);
+  if (!site) throw new Error("site-not-found");
+
+  const snapshot = assertValidTxtMigrationSnapshot(input.files || []);
+  const plan = await buildMongoSiteCreationPlanFromInput({
+    ...siteInputFromDoc(site),
+    storageBackend: "mongo",
+    creationMode: "migration",
+    mongoSiteId: site.mongoSiteId || site.builderSiteId || site.siteCode,
+    builderSiteId: site.builderSiteId || site.mongoSiteId || site.siteCode
+  });
+  if (!plan.summary.readyForMongoBackendExecution) {
+    const error = new Error("mongo-site-create-plan-not-ready") as Error & { details?: unknown };
+    error.details = { blockers: plan.blockers, warnings: plan.warnings };
+    throw error;
+  }
+
+  const credential = resolveBuilderApiCredential(site);
+  const startedAt = new Date();
+  const switchSiteToMongo = input.switchSiteToMongo !== false;
+
+  site.storageBackend = "mongo";
+  site.creationMode = "migration";
+  site.lifecycleStatus = "provisioning";
+  site.provisioningStatus = "running";
+  site.dataBackendStatus = "unknown";
+  site.builderSiteId = plan.builderBackend.siteId;
+  site.mongoSiteId = plan.builderBackend.siteId;
+  site.authoritativeAdminSource = "mongo";
+  site.lastError = "";
+  await site.save();
+
+  const registryCreate = await requestBuilderJson(plan.builderBackend.backendApiUrl, "/api/sites", credential.value, {
+    method: "POST",
+    body: JSON.stringify({
+      siteId: plan.builderBackend.siteId,
+      siteSlug: site.siteCode,
+      displayName: site.displayName,
+      status: "active"
+    })
+  });
+  const registryRead = registryCreate.ok
+    ? registryCreate
+    : registryCreate.status === 409 || registryCreate.status === 400
+      ? await requestBuilderJson(
+          plan.builderBackend.backendApiUrl,
+          `/api/sites/${encodeURIComponent(plan.builderBackend.siteId)}`,
+          credential.value
+        )
+      : registryCreate;
+  const registryOk = registryCreate.ok || registryRead.ok;
+  const registryPayload = registryPayloadFromResponse(registryRead.payload);
+  const safeCollectionName = String(registryPayload?.safeCollectionName || site.safeCollectionName || "").trim();
+
+  const beforeBatch = await requestBuilderJson(
+    plan.builderBackend.backendApiUrl,
+    `/api/sites/${encodeURIComponent(plan.builderBackend.siteId)}/legacy/batch-read`,
+    credential.value,
+    {
+      method: "POST",
+      body: JSON.stringify({ keys: REQUIRED_LEGACY_DOC_KEYS })
+    }
+  );
+  const currentVersions = batchReadVersions(beforeBatch.payload);
+  const overwriteMongo = input.overwriteMongo !== false;
+  const migrationItems = snapshot.docs.map((doc) => ({
+    key: doc.key,
+    data: doc.data,
+    expectedVersion: overwriteMongo ? currentVersions.get(doc.key) || 0 : 0,
+    allowEmptyOverwrite: true
+  }));
+  const seedWrite = await requestBuilderJson(
+    plan.builderBackend.backendApiUrl,
+    `/api/sites/${encodeURIComponent(plan.builderBackend.siteId)}/legacy/batch-write`,
+    credential.value,
+    {
+      method: "POST",
+      body: JSON.stringify({ items: migrationItems })
+    }
+  );
+  const failures = failedBatchItems(seedWrite.payload);
+  const importStatus = failures.length
+    ? failures.length === migrationItems.length ? "failed" as const : "partial" as const
+    : "ok" as const;
+  const health = await runBuilderMongoHealthCheck(siteId);
+
+  const saved = await Site.findById(siteId);
+  if (saved) {
+    saved.safeCollectionName = safeCollectionName || saved.safeCollectionName;
+    saved.mongoSiteId = plan.builderBackend.siteId;
+    saved.builderSiteId = plan.builderBackend.siteId;
+    saved.storageBackend = switchSiteToMongo ? "mongo" : saved.storageBackend;
+    saved.creationMode = "migration";
+    saved.authoritativeAdminSource = "mongo";
+    saved.lifecycleStatus = importStatus === "ok" && registryOk ? "partially-created" : "failed";
+    saved.provisioningStatus = importStatus === "ok" && registryOk ? "partially-created" : "failed";
+    saved.status = "draft";
+    saved.lastError = importStatus === "ok" && registryOk ? "" : "TXT to Mongo migration did not complete cleanly";
+    saved.health = {
+      ...(saved.health as Partial<SiteHealth>),
+      txtFilesExist: true,
+      dataBackendReachable: (health as any)?.backendReachable === true,
+      mongoRegistryOk: (health as any)?.registryStatus === "ok",
+      mongoCollectionOk: (health as any)?.collectionStatus === "ok",
+      mongoSeedOk: (health as any)?.seedStatus === "ok"
+    } as any;
+    saved.mongoBackendStatus = {
+      ...(saved.mongoBackendStatus as any),
+      evidence: {
+        ...((saved.mongoBackendStatus as any)?.evidence || {}),
+        txtToMongoMigration: {
+          connectorMode: "browser-sharepoint",
+          sourceSharePointSiteUrl: input.sourceSharePointSiteUrl || plan.resolvedPaths.sharePointSiteUrl,
+          capturedAt: input.capturedAt || startedAt.toISOString(),
+          migratedAt: new Date().toISOString(),
+          files: snapshot.summary,
+          beforeBatch,
+          seedWrite: {
+            ok: seedWrite.ok,
+            status: seedWrite.status,
+            statusText: seedWrite.statusText,
+            results: Array.isArray(seedWrite.payload?.results)
+              ? seedWrite.payload.results.map((item: any) => ({
+                  ok: Boolean(item.ok),
+                  key: String(item.key || ""),
+                  version: item.version,
+                  error: item.error || item.message || ""
+                }))
+              : []
+          }
+        }
+      }
+    } as any;
+    await saved.save();
+  }
+
+  const result: TxtToMongoMigrationResult = {
+    operation: "txt-to-mongo-migration",
+    migratedAt: new Date().toISOString(),
+    siteId,
+    siteCode: site.siteCode,
+    connectorMode: "browser-sharepoint",
+    sourceSharePointSiteUrl: input.sourceSharePointSiteUrl || plan.resolvedPaths.sharePointSiteUrl,
+    builderBackend: plan.builderBackend,
+    registry: {
+      status: registryOk ? "ok" : "failed",
+      safeCollectionName,
+      evidence: { registryCreate, registryRead }
+    },
+    import: {
+      status: importStatus,
+      written: migrationItems.map((item) => item.key).filter((key) => !failures.find((failure: { key: string }) => failure.key === key)),
+      failed: failures,
+      files: snapshot.summary,
+      evidence: {
+        beforeBatch,
+        seedWrite
+      }
+    },
+    health,
+    finalStatus: importStatus === "ok" && registryOk ? "runtime-config-required" : "failed",
+    warnings: [
+      ...plan.warnings,
+      "הנתונים הועתקו מ־TXT ל־Mongo דרך Snapshot שהדפדפן קרא מ־SharePoint.",
+      "כדי שהאתר החי ישתמש ב־Mongo צריך להעלות runtime config ואז לפרוס Release תואם Mongo דרך הדפדפן."
+    ]
+  };
+
+  logger.info("sites", "TXT to Mongo migration completed", {
+    siteId,
+    siteCode: site.siteCode,
+    registryStatus: result.registry.status,
+    importStatus: result.import.status,
+    importedFiles: result.import.written.length,
+    failedFiles: result.import.failed.length
   });
 
   return result;

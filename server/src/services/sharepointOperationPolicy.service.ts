@@ -1,5 +1,4 @@
 import type { JobType } from "./jobs.service";
-import { getSharePointOperationCapabilities } from "./sharepointOperationClient";
 
 export type SharePointConnectorPolicyKind = "browser-supported" | "backend-service-auth-required" | "not-implemented";
 export type SharePointConnectorMode = "browser-sharepoint" | "backend-sharepoint" | "mongo-backend" | "server-local" | "backend-service-auth-required" | "manual" | "none";
@@ -41,6 +40,15 @@ export type SharePointOperationPolicy = {
   blockerHe?: string;
 };
 
+export const SERVER_SHAREPOINT_DISABLED_HE =
+  "SharePoint מתבצע רק דרך הדפדפן המחובר; השרת לא פונה ל־SharePoint.";
+
+const BROWSER_REQUIRED_HE =
+  "הפעולה צריכה לרוץ דרך הדפדפן המחובר ל־SharePoint. השרת ישמור רק metadata/evidence.";
+
+const BROWSER_IMPLEMENTATION_MISSING_HE =
+  "אין כרגע כפתור מקומי לפעולה הזאת. פעולות SharePoint מתבצעות רק דרך הדפדפן המחובר.";
+
 export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, SharePointOperationPolicy> = {
   "browser-health-check": {
     operation: "browser-health-check",
@@ -71,13 +79,13 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     readsSharePoint: true,
     writesSharePoint: false,
     needsDigest: false,
-    policy: "backend-service-auth-required",
-    connectorMode: "backend-sharepoint",
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
     canRunFromBrowser: false,
-    backendServiceAuthOnly: true,
-    currentFailureMode: "backend SharePoint read can return 401/403 without service auth",
-    statusLabelHe: "דורש הרשאת שרת",
-    blockerHe: "הפעולה לא יכולה לרוץ ברקע בלי חיבור שרת ל־SharePoint"
+    backendServiceAuthOnly: false,
+    currentFailureMode: "server SharePoint REST is disabled by architecture",
+    statusLabelHe: "מסלול שרת מושבת",
+    blockerHe: SERVER_SHAREPOINT_DISABLED_HE
   },
   backup: {
     operation: "backup",
@@ -94,46 +102,46 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "legacy worker path called backend getRequestDigest and failed sharepoint-digest-failed:401",
+    currentFailureMode: "worker path is blocked; browser evidence endpoint is the supported execution path",
     statusLabelHe: "מופעל דרך הדפדפן"
   },
   "scheduled-backup": {
     operation: "scheduled-backup",
-    label: "Scheduled unattended backup",
+    label: "Scheduled backup awaiting browser execution",
     uiEntryPoint: "Backups schedule",
     backendRoute: "maintenance scheduler",
     controller: "maintenanceScheduler.queueScheduledBackup",
-    service: "backups.enqueueSiteBackup / realBackup.executeSharePointBackup",
+    service: "backups.enqueueSiteBackup / browser SharePoint runner",
     jobType: "backup",
     readsSharePoint: true,
     writesSharePoint: true,
     needsDigest: true,
-    policy: "backend-service-auth-required",
-    connectorMode: "backend-sharepoint",
-    canRunFromBrowser: false,
-    backendServiceAuthOnly: true,
-    currentFailureMode: "scheduled worker cannot use a browser session",
-    statusLabelHe: "דורש הרשאת שרת",
-    blockerHe: "הפעולה לא יכולה לרוץ ברקע בלי חיבור שרת ל־SharePoint"
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
+    canRunFromBrowser: true,
+    backendServiceAuthOnly: false,
+    currentFailureMode: "queued until a connected SharePoint browser executes it",
+    statusLabelHe: "ממתין לדפדפן SharePoint",
+    blockerHe: BROWSER_REQUIRED_HE
   },
   restore: {
     operation: "restore",
     label: "Restore backup",
     uiEntryPoint: "Backups restore tab",
-    backendRoute: "POST /api/backups/:id/restore",
+    backendRoute: "POST /api/backups/:id/restore and POST /api/backups/:id/browser-restore-evidence",
     controller: "backups.controller.postRestoreBackup",
-    service: "backups.enqueueBackupRestore / realBackup.executeSharePointRestore",
+    service: "backups.enqueueBackupRestore",
     jobType: "restore",
     readsSharePoint: true,
     writesSharePoint: true,
     needsDigest: true,
-    policy: "not-implemented",
-    connectorMode: "none",
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "legacy worker restore calls backend getRequestDigest",
-    statusLabelHe: "לא מוכן להפעלה",
-    blockerHe: "שחזור דורש הרשאת שרת ל־SharePoint או מימוש שחזור דרך הדפדפן."
+    currentFailureMode: "server restore is disabled; browser evidence endpoint is the supported execution path",
+    statusLabelHe: "מופעל דרך הדפדפן",
+    blockerHe: BROWSER_REQUIRED_HE
   },
   "admin-live-read": {
     operation: "admin-live-read",
@@ -164,32 +172,32 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     readsSharePoint: true,
     writesSharePoint: false,
     needsDigest: false,
-    policy: "not-implemented",
-    connectorMode: "none",
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "legacy worker reads SharePoint from backend",
-    statusLabelHe: "לא מוכן להפעלה",
-    blockerHe: "סנכרון מנהלים דרך השרת עדיין דורש הרשאת שרת ל־SharePoint או הסבה לחיבור דרך הדפדפן."
+    currentFailureMode: "none",
+    statusLabelHe: "מופעל דרך הדפדפן",
+    blockerHe: BROWSER_REQUIRED_HE
   },
   "admin-txt-repair": {
     operation: "admin-txt-repair",
     label: "Admin TXT repair",
     uiEntryPoint: "Admins page TXT repair",
-    backendRoute: "POST /api/sites/:id/admins/repair-txt",
+    backendRoute: "POST /api/sites/:id/admins/repair-txt and POST /api/sites/:id/admins/repair-txt/browser-evidence",
     controller: "admins.controller.queueTxtAdminRepair",
     service: "admins.enqueueAdminTxtRepair / executeAdminTxtRepair",
     jobType: "repair",
     readsSharePoint: true,
     writesSharePoint: true,
     needsDigest: true,
-    policy: "not-implemented",
-    connectorMode: "none",
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "legacy worker writes users_data.txt through backend digest",
-    statusLabelHe: "לא מוכן להפעלה",
-    blockerHe: "הפעולה הזאת עדיין לא הוסבה לחיבור דרך הדפדפן."
+    currentFailureMode: "worker path is blocked; browser evidence endpoint is the supported execution path",
+    statusLabelHe: "מופעל דרך הדפדפן",
+    blockerHe: BROWSER_REQUIRED_HE
   },
   "admin-sharepoint-membership": {
     operation: "admin-sharepoint-membership",
@@ -201,13 +209,13 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     readsSharePoint: true,
     writesSharePoint: true,
     needsDigest: true,
-    policy: "backend-service-auth-required",
-    connectorMode: "backend-sharepoint",
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
-    backendServiceAuthOnly: true,
-    currentFailureMode: "backend digest can fail 401 unless service auth is valid",
-    statusLabelHe: "דורש הרשאת שרת",
-    blockerHe: "הפעולה הזאת עדיין רצה דרך השרת ולכן דורשת הרשאת שרת ל־SharePoint."
+    backendServiceAuthOnly: false,
+    currentFailureMode: "legacy backend membership write is disabled",
+    statusLabelHe: "לא מוכן להפעלה",
+    blockerHe: BROWSER_IMPLEMENTATION_MISSING_HE
   },
   "permissions-setup": {
     operation: "permissions-setup",
@@ -220,51 +228,51 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     readsSharePoint: true,
     writesSharePoint: true,
     needsDigest: true,
-    policy: "not-implemented",
-    connectorMode: "none",
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "legacy worker calls backend digest",
-    statusLabelHe: "לא מוכן להפעלה",
-    blockerHe: "הפעולה הזאת עדיין לא הוסבה לחיבור דרך הדפדפן."
+    currentFailureMode: "server permissions setup is disabled; browser evidence endpoint is the supported execution path",
+    statusLabelHe: "מופעל דרך הדפדפן",
+    blockerHe: BROWSER_REQUIRED_HE
   },
   "site-bootstrap": {
     operation: "site-bootstrap",
     label: "Site bootstrap",
     uiEntryPoint: "Site details / create new site flow",
-    backendRoute: "POST /api/sites/:id/bootstrap",
+    backendRoute: "POST /api/sites/:id/bootstrap and POST /api/sites/:id/bootstrap/browser-evidence",
     controller: "sites.controller.queueSiteBootstrap",
     service: "siteBootstrap.executeSiteBootstrap",
     jobType: "site-bootstrap",
     readsSharePoint: true,
     writesSharePoint: true,
     needsDigest: true,
-    policy: "backend-service-auth-required",
-    connectorMode: "backend-sharepoint",
-    canRunFromBrowser: false,
-    backendServiceAuthOnly: true,
-    currentFailureMode: "site collection creation/provision uses backend SharePoint service auth",
-    statusLabelHe: "דורש הרשאת שרת",
-    blockerHe: "הפעולה הזאת עדיין רצה דרך השרת ולכן דורשת הרשאת שרת ל־SharePoint."
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
+    canRunFromBrowser: true,
+    backendServiceAuthOnly: false,
+    currentFailureMode: "server bootstrap is disabled; browser evidence endpoint is the supported execution path",
+    statusLabelHe: "מופעל דרך הדפדפן",
+    blockerHe: BROWSER_REQUIRED_HE
   },
   "site-provision": {
     operation: "site-provision",
     label: "Site structure provisioning",
     uiEntryPoint: "Site details / create site flow",
-    backendRoute: "POST /api/sites/:id/provision",
+    backendRoute: "POST /api/sites/:id/provision and POST /api/sites/:id/provision/browser-evidence",
     controller: "sites.controller.queueSiteProvision",
     service: "siteProvisioning.executeSiteProvisioning",
     jobType: "site-provision",
     readsSharePoint: true,
     writesSharePoint: true,
     needsDigest: true,
-    policy: "not-implemented",
-    connectorMode: "none",
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "legacy worker calls backend digest",
-    statusLabelHe: "לא מוכן להפעלה",
-    blockerHe: "הפעולה הזאת עדיין לא הוסבה לחיבור דרך הדפדפן."
+    currentFailureMode: "server provisioning is disabled; browser evidence endpoint is the supported execution path",
+    statusLabelHe: "מופעל דרך הדפדפן",
+    blockerHe: BROWSER_REQUIRED_HE
   },
   deploy: {
     operation: "deploy",
@@ -281,27 +289,27 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "browser deploy implemented; backend deploy remains service-auth only",
+    currentFailureMode: "browser deploy implemented; backend deploy is disabled",
     statusLabelHe: "מופעל דרך הדפדפן"
   },
   "scheduled-health-check": {
     operation: "scheduled-health-check",
-    label: "Scheduled health check",
+    label: "Scheduled health check awaiting browser execution",
     uiEntryPoint: "Health schedule",
     backendRoute: "maintenance scheduler",
     controller: "maintenanceScheduler.queueScheduledHealthCheck",
-    service: "sharepointHealth.runReadOnlySharePointHealthCheck",
+    service: "browser SharePoint health runner",
     jobType: "health-check",
     readsSharePoint: true,
     writesSharePoint: false,
     needsDigest: false,
-    policy: "backend-service-auth-required",
-    connectorMode: "backend-sharepoint",
-    canRunFromBrowser: false,
-    backendServiceAuthOnly: true,
-    currentFailureMode: "scheduled read cannot use browser session",
-    statusLabelHe: "דורש הרשאת שרת",
-    blockerHe: "הפעולה לא יכולה לרוץ ברקע בלי חיבור שרת ל־SharePoint"
+    policy: "browser-supported",
+    connectorMode: "browser-sharepoint",
+    canRunFromBrowser: true,
+    backendServiceAuthOnly: false,
+    currentFailureMode: "queued until a connected SharePoint browser executes it",
+    statusLabelHe: "ממתין לדפדפן SharePoint",
+    blockerHe: BROWSER_REQUIRED_HE
   }
 };
 
@@ -312,33 +320,30 @@ export const getSharePointOperationInventory = () => Object.values(SHAREPOINT_OP
 
 export const getBrowserRequiredJobMessage = (operation: SharePointOperationName) => {
   const policy = getSharePointOperationPolicy(operation);
-  return `${policy.statusLabelHe}: החיבור דרך הדפדפן תקין. הפעולה תרוץ דרך הדפדפן.`;
+  return `${policy.statusLabelHe}: ${BROWSER_REQUIRED_HE}`;
 };
 
 export const getBackendServiceAuthBlocker = (operation: SharePointOperationName) => {
   const policy = getSharePointOperationPolicy(operation);
-  return policy.blockerHe || "הפעולה הזאת עדיין רצה דרך השרת ולכן דורשת הרשאת שרת ל־SharePoint.";
+  return policy.blockerHe || SERVER_SHAREPOINT_DISABLED_HE;
 };
 
-export const backendServiceAuthReady = () => {
-  const capabilities = getSharePointOperationCapabilities();
-  return Boolean(capabilities.writeAvailable && capabilities.digest.canRequest);
-};
+export const backendServiceAuthReady = () => false;
 
 export const shouldBlockBackendSharePointByDefault = (operation: SharePointOperationName, input: {
   connectorMode?: string;
-  confirmBackendSharePoint?: boolean;
 } = {}) => {
+  void input;
   const policy = getSharePointOperationPolicy(operation);
   if (policy.policy === "browser-supported") return false;
-  if (input.connectorMode === "backend-sharepoint" && input.confirmBackendSharePoint === true) return false;
   return true;
 };
 
-export const isBrowserRequiredJob = (job: { executionMode?: string; payload?: any; status?: string }) =>
+export const isBrowserRequiredJob = (job: { executionMode?: string; payload?: any; status?: string; connectorMode?: string }) =>
   job.executionMode === "browser-required" ||
   job.executionMode === "browser-in-progress" ||
   job.status === "browser-required" ||
   job.status === "browser-in-progress" ||
+  job.connectorMode === "browser-sharepoint" ||
   job.payload?.connectorMode === "browser-sharepoint" ||
   job.payload?.executionMode === "browser-required";

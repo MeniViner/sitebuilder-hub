@@ -4,7 +4,7 @@ import { env, getClientOrigins, ownerDirectModeEnabled } from "../config/env";
 import { Site } from "../models/Site";
 import { resolveSiteBuilderPaths, SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
 import { getMongoStatus } from "../db/mongo";
-import { getSharePointOperationCapabilities, getSharePointReadHeaders } from "./sharepointOperationClient";
+import { getSharePointOperationCapabilities } from "./sharepointOperationClient";
 import { getActiveDangerousValidationBypasses } from "./dangerousBackupBypass.service";
 import { getBuilderBackendRuntimeSettings } from "./builderMongoHealth.service";
 
@@ -62,60 +62,6 @@ const listEndpoint = (paths: SiteBuilderResolvedPaths, title: string) =>
 
 const folderEndpoint = (paths: SiteBuilderResolvedPaths, serverRelativePath: string) =>
   siteApiUrl(paths, `/_api/web/GetFolderByServerRelativeUrl('${escapeODataString(serverRelativePath)}')?$select=Name,ServerRelativeUrl`);
-
-const explainFailure = (status?: number, error?: string) => {
-  if (status === 401) {
-    return {
-      errorCode: "SHAREPOINT_401",
-      humanExplanation: "SharePoint rejected the backend request. The browser may be logged into SharePoint, but the backend does not automatically inherit that login.",
-      suggestedFix: "Check SharePoint auth cookie / bearer token / current-user mode / target site URL."
-    };
-  }
-  if (status === 403) {
-    return {
-      errorCode: "SHAREPOINT_403",
-      humanExplanation: "SharePoint accepted the request identity but it does not have permission for this path.",
-      suggestedFix: "Check the configured account permissions for the target SharePoint site/library/folder."
-    };
-  }
-  if (status === 404) {
-    return {
-      errorCode: "SHAREPOINT_404",
-      humanExplanation: "The SharePoint URL or server-relative path was not found.",
-      suggestedFix: "Check the site URL, library name, folder path, and encoded/unencoded path forms."
-    };
-  }
-  return {
-    errorCode: error ? "SHAREPOINT_REQUEST_FAILED" : undefined,
-    humanExplanation: error ? "The SharePoint request failed before a successful response was received." : undefined,
-    suggestedFix: error ? "Check network access, target site URL, and backend SharePoint credentials." : undefined
-  };
-};
-
-const probe = async (url: string, init: RequestInit): Promise<ProbeResult> => {
-  const method = init.method || "GET";
-  try {
-    const response = await fetch(url, init);
-    const explanation = response.ok ? {} : explainFailure(response.status);
-    return {
-      ok: response.ok,
-      url,
-      method,
-      status: response.status,
-      statusText: response.statusText,
-      ...explanation
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      ok: false,
-      url,
-      method,
-      error: message,
-      ...explainFailure(undefined, message)
-    };
-  }
-};
 
 const chooseSite = async (siteId?: string) => {
   if (siteId && Types.ObjectId.isValid(siteId)) return Site.findById(siteId).lean();
@@ -235,7 +181,8 @@ export async function getDiagnostics(req: Request) {
     },
     sharePoint: {
       targetSiteUrl: resolvedPaths?.sharePointSiteUrl || selectedSite?.sharePointSiteUrl || "",
-      preferredConnectorMode: appModeFor(req) === "SharePoint-hosted" ? "browser-sharepoint" : "backend-sharepoint",
+      preferredConnectorMode: "browser-sharepoint",
+      serverSharePointDisabled: true,
       writeEnabled: env.SHAREPOINT_WRITE_ENABLED,
       authCookieConfigured: Boolean(env.SHAREPOINT_AUTH_COOKIE),
       authCookieNames: configuredCookieNames(),
@@ -294,8 +241,8 @@ export async function getDiagnostics(req: Request) {
       checks: pathDiagnostics(resolvedPaths)
     } : null,
     envWarnings: [
-      env.SHAREPOINT_WRITE_ENABLED && env.SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE && !env.SHAREPOINT_AUTH_COOKIE && !env.SHAREPOINT_BEARER_TOKEN
-        ? "SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE=true does not mean SharePoint will accept writes. Configure cookie or bearer token and verify contextinfo."
+      env.SHAREPOINT_WRITE_ENABLED || env.SHAREPOINT_AUTH_COOKIE || env.SHAREPOINT_BEARER_TOKEN
+        ? "Server-side SharePoint REST is disabled. SHAREPOINT_WRITE/auth env vars are ignored for SharePoint execution."
         : "",
       env.AUTH_ENABLED === false ? "AUTH_ENABLED=false: owner-direct/local fallback is active unless SharePoint current user headers are present." : "",
       ...dangerousOverrides.map((override) => `${override.envVar}=true: ${override.description}`)
@@ -326,39 +273,29 @@ export async function runSharePointDiagnostics(req: Request) {
     widgetsDbTarget: selectedSite.widgetsDbTarget
   });
 
-  const currentUser = await probe(siteApiUrl(paths, "/_api/web/currentuser"), {
-    method: "GET",
-    headers: getSharePointReadHeaders("application/json;odata=verbose"),
-    redirect: "follow"
+  const skippedProbe = (url: string, method: string): ProbeResult => ({
+    ok: false,
+    url,
+    method,
+    errorCode: "SERVER_SHAREPOINT_DISABLED",
+    humanExplanation: "השרת לא מבצע בקשות SharePoint. הבדיקה צריכה לרוץ דרך הדפדפן המחובר.",
+    suggestedFix: "הריצו Browser SharePoint diagnostics מתוך אתר SharePoint מחובר."
   });
-  const readTest = await probe(listEndpoint(paths, paths.siteDbLibrary), {
-    method: "GET",
-    headers: getSharePointReadHeaders("application/json;odata=verbose"),
-    redirect: "follow"
-  });
-  const digestTest = await probe(siteApiUrl(paths, "/_api/contextinfo"), {
-    method: "POST",
-    headers: {
-      ...getSharePointReadHeaders("application/json;odata=verbose"),
-      "Content-Type": "application/json;odata=verbose"
-    }
-  });
+  const currentUser = skippedProbe(siteApiUrl(paths, "/_api/web/currentuser"), "GET");
+  const readTest = skippedProbe(listEndpoint(paths, paths.siteDbLibrary), "GET");
+  const digestTest = skippedProbe(siteApiUrl(paths, "/_api/contextinfo"), "POST");
   const writeCapability = {
-    connectorMode: "backend-sharepoint",
-    configured: env.SHAREPOINT_WRITE_ENABLED,
-    authenticated: Boolean(env.SHAREPOINT_AUTH_COOKIE || env.SHAREPOINT_BEARER_TOKEN),
-    digestWorks: digestTest.ok,
-    writeVerified: env.SHAREPOINT_WRITE_ENABLED && digestTest.ok,
-    message: env.SHAREPOINT_WRITE_ENABLED && !digestTest.ok
-      ? "כתיבה ל-SharePoint מוגדרת אבל ההתחברות נכשלה."
-      : digestTest.ok
-        ? "Digest/contextinfo succeeded; backend identity can request SharePoint write tokens."
-        : "SharePoint write is not verified."
+    connectorMode: "browser-sharepoint",
+    configured: false,
+    authenticated: false,
+    digestWorks: false,
+    writeVerified: false,
+    message: "חיבור שרת ל־SharePoint מושבת בכוונה. Digest וכתיבה נבדקים רק בדפדפן."
   };
 
   return {
     generatedAt: new Date().toISOString(),
-    connectorMode: "backend-sharepoint",
+    connectorMode: "browser-sharepoint",
     site: {
       id: selectedSite._id.toString(),
       siteCode: selectedSite.siteCode,
@@ -369,7 +306,8 @@ export async function runSharePointDiagnostics(req: Request) {
     appMode: appModeFor(req),
     targetSharePointSiteUrl: paths.sharePointSiteUrl,
     configured: {
-      sharePointWriteEnabled: env.SHAREPOINT_WRITE_ENABLED,
+      serverSharePointDisabled: true,
+      sharePointWriteEnabled: false,
       sharePointAuthCookieConfigured: Boolean(env.SHAREPOINT_AUTH_COOKIE),
       sharePointAuthCookieNames: configuredCookieNames(),
       sharePointBearerTokenConfigured: Boolean(env.SHAREPOINT_BEARER_TOKEN),
@@ -384,15 +322,15 @@ export async function runSharePointDiagnostics(req: Request) {
       checks: pathDiagnostics(paths)
     },
     overall: {
-      reachable: currentUser.ok || readTest.ok || digestTest.ok,
-      authenticated: currentUser.ok || readTest.ok || digestTest.ok,
-      digestWorks: digestTest.ok,
-      writeVerified: writeCapability.writeVerified,
+      reachable: false,
+      authenticated: false,
+      digestWorks: false,
+      writeVerified: false,
       failedUrl: [currentUser, readTest, digestTest].find((item) => !item.ok)?.url || "",
       failedStatus: [currentUser, readTest, digestTest].find((item) => !item.ok)?.status,
       failedBackendErrorCode: [currentUser, readTest, digestTest].find((item) => !item.ok)?.errorCode || "",
-      humanExplanation: [currentUser, readTest, digestTest].find((item) => !item.ok)?.humanExplanation || "SharePoint checks passed.",
-      suggestedFix: [currentUser, readTest, digestTest].find((item) => !item.ok)?.suggestedFix || "No immediate fix needed."
+      humanExplanation: "חיבור SharePoint מהשרת אינו חלק מהארכיטקטורה. זה לא כשל שצריך לתקן עם cookie/token.",
+      suggestedFix: "השתמשו בבדיקות ובפעולות Browser SharePoint מתוך המשתמש המחובר."
     }
   };
 }

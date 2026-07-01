@@ -2,9 +2,11 @@ import { Request, Response } from "express";
 import { ZodError } from "zod";
 import {
   createSiteSchema,
+  browserSiteOperationEvidenceSchema,
   manualHealthSchema,
   querySchema,
   siteBootstrapSchema,
+  txtToMongoMigrationSchema,
   updateSiteSchema
 } from "../validators/site.schema";
 import * as sitesService from "../services/sites.service";
@@ -18,14 +20,16 @@ import { buildSiteProvisionPlan } from "../services/siteProvisioning.service";
 import { getSharePointOperationCapabilities } from "../services/sharepointOperationClient";
 import { buildPermissionsSetupPlan } from "../services/permissionsSetup.service";
 import { buildSiteBootstrapPlan, normalizeSiteBootstrapOptions } from "../services/siteBootstrap.service";
+import { recordBrowserSiteOperationEvidence } from "../services/browserSharePointEvidence.service";
 import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "../services/dangerousBackupBypass.service";
-import { shouldBlockBackendSharePointByDefault } from "../services/sharepointOperationPolicy.service";
+import { getBrowserRequiredJobMessage, getSharePointOperationPolicy, shouldBlockBackendSharePointByDefault } from "../services/sharepointOperationPolicy.service";
 import { validateRuntimeConfig } from "../services/runtimeConfig.service";
 import { runBuilderMongoHealthCheck } from "../services/builderMongoHealth.service";
 import {
   buildMongoRuntimeConfigContent,
   buildMongoSiteCreationPlan,
   buildMongoSiteCreationPlanFromInput,
+  executeTxtToMongoMigration,
   executeMongoSiteCreation,
   recordMongoCreateBrowserEvidence
 } from "../services/mongoSiteCreation.service";
@@ -358,6 +362,36 @@ export const executeMongoSiteCreationEndpoint = async (req: Request, res: Respon
   }
 };
 
+export const migrateTxtToMongoEndpoint = async (req: Request, res: Response) => {
+  try {
+    const payload = txtToMongoMigrationSchema.parse(req.body || {});
+    const result = await executeTxtToMongoMigration(req.params.id, payload);
+
+    await writeAuditLog({
+      req,
+      action: "sites.txt-to-mongo.migrate",
+      entityType: "Site",
+      entityId: result.siteId,
+      result: result.finalStatus === "failed" ? "failure" : "success",
+      metadata: {
+        siteCode: result.siteCode,
+        connectorMode: "browser-sharepoint",
+        sourceSharePointSiteUrl: result.sourceSharePointSiteUrl,
+        builderSiteId: result.builderBackend.siteId,
+        registryStatus: result.registry.status,
+        importStatus: result.import.status,
+        importedFiles: result.import.written,
+        failedFiles: result.import.failed,
+        warnings: result.warnings
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
 export const getMongoRuntimeConfigContent = async (req: Request, res: Response) => {
   try {
     const content = await buildMongoRuntimeConfigContent(req.params.id);
@@ -484,145 +518,31 @@ export const getSiteBootstrapPlan = async (req: Request, res: Response) => {
 
 export const queueSiteBootstrap = async (req: Request, res: Response) => {
   try {
-    const rawOptions = siteBootstrapSchema.parse(req.body || {});
-    if (shouldBlockBackendSharePointByDefault("site-bootstrap", {
-      connectorMode: rawOptions.connectorMode,
-      confirmBackendSharePoint: rawOptions.confirmBackendSharePoint
-    })) {
-      throw new Error("backend-sharepoint-service-auth-required");
-    }
-    const capabilities = getSharePointOperationCapabilities();
-    if (!capabilities.writeAvailable) {
-      return fail(res, "SHAREPOINT_WRITE_NOT_CONFIGURED", capabilities.reason || "SharePoint write is not configured", capabilities, 409);
-    }
-
-    const site = await sitesService.getSiteById(req.params.id);
-    if (!site) return fail(res, "NOT_FOUND", "האתר לא נמצא", undefined, 404);
-
-    const options = normalizeSiteBootstrapOptions(rawOptions);
-    const plan = await buildSiteBootstrapPlan(site._id.toString(), options);
-    if (!plan.summary.readyForBootstrapExecution && !isDangerousValidationBypassEnabled("deploy-plan-blockers")) {
-      return fail(res, "SITE_BOOTSTRAP_PLAN_NOT_READY", "SharePoint site bootstrap plan is not ready for execution", plan, 409);
-    }
-    if (!plan.summary.readyForBootstrapExecution) {
-      logger.warn("sites", "Site bootstrap plan readiness bypassed by dangerous env", {
-        siteId: site._id.toString(),
-        siteCode: site.siteCode,
-        envVar: getDangerousValidationBypassEnvVar("deploy-plan-blockers"),
-        blockers: plan.blockers
-      });
-    }
-
-    const createdBy = req.user?.name || "system";
-    const approvalSummary = {
-      title: `Create and bootstrap SharePoint site for ${site.displayName || site.siteCode}`,
-      message: SITE_BOOTSTRAP_APPROVAL_MESSAGE,
-      operation: "site-bootstrap",
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      sharePointSiteUrl: plan.targetWeb.sharePointSiteUrl,
-      owner: plan.targetWeb.owner,
-      totalSteps: plan.summary.totalSteps,
-      requestedBy: createdBy,
-      reason: options.reason || ""
-    };
-    const approvalSnapshot = {
-      capturedAt: new Date().toISOString(),
-      operation: "site-bootstrap",
-      site: {
-        id: site._id.toString(),
-        siteCode: site.siteCode,
-        displayName: site.displayName,
-        sharePointSiteUrl: plan.targetWeb.sharePointSiteUrl
-      },
-      planGeneratedAt: plan.generatedAt,
-      capabilities: plan.capabilities,
-      targetWeb: plan.targetWeb,
-      summary: plan.summary,
-      blockers: plan.blockers,
-      risks: plan.risks,
-      resolvedPaths: plan.resolvedPaths,
-      steps: plan.steps.map((step) => ({
-        key: step.key,
-        label: step.label,
-        mode: step.mode,
-        phase: step.phase,
-        target: step.target
-      })),
-      writeOperations: [
-        "Create or reuse the SharePoint site collection at the target URL",
-        "Create or ensure Site Builder document libraries, folders, default TXT files, backup folder, and bootstrap manifest",
-        options.runPermissionsSetup === false
-          ? "Skip siteUsersDb permissions setup by request"
-          : "Configure siteUsersDb permissions after provisioning"
-      ],
-      requestedBy: createdBy,
-      reason: options.reason || ""
-    };
-    const jobInput: ApprovalGatedJobInput = {
+    const options = siteBootstrapSchema.parse(req.body || {});
+    const plan = await buildSiteBootstrapPlan(req.params.id, normalizeSiteBootstrapOptions(options));
+    const policy = getSharePointOperationPolicy("site-bootstrap");
+    const job = await createJob({
       type: "site-bootstrap",
-      siteId: site._id.toString(),
-      createdBy,
-      requiresApproval: true,
-      approvalSummary,
-      approvalSnapshot,
+      siteId: req.params.id,
+      createdBy: req.user?.name || "system",
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint",
+      operationPolicy: policy.operation,
+      connectorStatusLabel: policy.statusLabelHe,
+      connectorBlocker: policy.blockerHe || getBrowserRequiredJobMessage("site-bootstrap"),
       payload: {
-        ...options,
-        owner: plan.targetWeb.owner,
-        lcid: plan.targetWeb.lcid,
-        webTemplate: plan.targetWeb.webTemplate,
-        mode: "sharepoint-site-bootstrap"
+        connectorMode: "browser-sharepoint",
+        executionMode: "browser-required",
+        browserOperationPlan: plan
       }
-    };
-
-    logger.info("jobs", "SharePoint site bootstrap job queued", {
-      type: jobInput.type,
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      sharePointSiteUrl: plan.targetWeb.sharePointSiteUrl,
-      totalSteps: plan.summary.totalSteps
     });
-
-    const job = await createJob(jobInput);
-    logger.info("sites", "SharePoint site bootstrap job queued", {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      jobId: job._id.toString(),
-      totalSteps: plan.summary.totalSteps,
+    return ok(res, {
+      job,
+      plan,
       requiresApproval: job.requiresApproval,
-      approvalStatus: job.requiresApproval ? "pending" : "not-required"
-    });
-
-    await writeAuditLog({
-      req,
-      action: "sites.bootstrap.queue",
-      entityType: "Site",
-      entityId: site._id.toString(),
-      metadata: {
-        jobId: job._id.toString(),
-        siteCode: site.siteCode,
-        sharePointSiteUrl: plan.targetWeb.sharePointSiteUrl,
-        requiresApproval: job.requiresApproval,
-        approvalStatus: job.requiresApproval ? "pending" : "not-required"
-      }
-    });
-
-    return ok(
-      res,
-      {
-        job,
-        plan,
-        requiresApproval: job.requiresApproval,
-        approvalStatus: job.requiresApproval ? "pending" : "not-required",
-        message: job.requiresApproval ? SITE_BOOTSTRAP_APPROVAL_MESSAGE : ownerDirectMessage("Site bootstrap")
-      },
-      {
-        requiresApproval: job.requiresApproval,
-        approvalStatus: job.requiresApproval ? "pending" : "not-required",
-        message: job.requiresApproval ? SITE_BOOTSTRAP_APPROVAL_MESSAGE : ownerDirectMessage("Site bootstrap")
-      },
-      202
-    );
+      approvalStatus: job.requiresApproval ? "pending" : "browser-required",
+      message: "Bootstrap ממתין להרצה דרך הדפדפן המחובר ל־SharePoint."
+    }, undefined, 202);
   } catch (error) {
     return handleError(error, req, res);
   }
@@ -639,116 +559,29 @@ export const getSiteProvisionPlan = async (req: Request, res: Response) => {
 
 export const queueSiteProvision = async (req: Request, res: Response) => {
   try {
-    if (shouldBlockBackendSharePointByDefault("site-provision", {
-      connectorMode: req.body?.connectorMode,
-      confirmBackendSharePoint: req.body?.confirmBackendSharePoint
-    })) {
-      throw new Error("browser-sharepoint-operation-not-implemented");
-    }
-    const capabilities = getSharePointOperationCapabilities();
-    if (!capabilities.writeAvailable) {
-      return fail(res, "SHAREPOINT_WRITE_NOT_CONFIGURED", capabilities.reason || "SharePoint write is not configured", capabilities, 409);
-    }
-
-    const site = await sitesService.getSiteById(req.params.id);
-    if (!site) return fail(res, "NOT_FOUND", "האתר לא נמצא", undefined, 404);
-
-    const plan = await buildSiteProvisionPlan(site._id.toString());
-    const createdBy = req.user?.name || "system";
-    const approvalSummary = {
-      title: `Provision Site Builder structure for ${site.displayName || site.siteCode}`,
-      message: SITE_PROVISION_APPROVAL_MESSAGE,
-      operation: "site-provision",
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      totalSteps: plan.summary.totalSteps,
-      requestedBy: createdBy
-    };
-    const approvalSnapshot = {
-      capturedAt: new Date().toISOString(),
-      operation: "site-provision",
-      site: {
-        id: site._id.toString(),
-        siteCode: site.siteCode,
-        displayName: site.displayName,
-        sharePointSiteUrl: site.sharePointSiteUrl
-      },
-      planGeneratedAt: plan.generatedAt,
-      capabilities: plan.capabilities,
-      summary: plan.summary,
-      blockers: plan.blockers,
-      resolvedPaths: plan.resolvedPaths,
-      steps: plan.steps.map((step) => ({
-        key: step.key,
-        label: step.label,
-        mode: step.mode,
-        target: step.target
-      })),
-      writeOperations: [
-        "Create or ensure Site Builder document libraries",
-        "Create or ensure Site Builder SharePoint folders",
-        "Create or ensure default TXT/JSON configuration files",
-        "Update site health and resolved path metadata after successful execution"
-      ]
-    };
-    const jobInput: ApprovalGatedJobInput = {
+    void req.body;
+    const plan = await buildSiteProvisionPlan(req.params.id);
+    const policy = getSharePointOperationPolicy("site-provision");
+    const job = await createJob({
       type: "site-provision",
-      siteId: site._id.toString(),
-      createdBy,
-      requiresApproval: true,
-      approvalSummary,
-      approvalSnapshot,
+      siteId: req.params.id,
+      createdBy: req.user?.name || "system",
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint",
+      operationPolicy: policy.operation,
+      connectorStatusLabel: policy.statusLabelHe,
+      connectorBlocker: policy.blockerHe || getBrowserRequiredJobMessage("site-provision"),
       payload: {
-        mode: "sharepoint-structure",
-        description: "Create/ensure Site Builder document libraries, folders, and default TXT files"
-      }
-    };
-
-    logger.info("jobs", "Site provisioning job queued", {
-      type: jobInput.type,
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      totalSteps: plan.summary.totalSteps
-    });
-
-    const job = await createJob(jobInput);
-    logger.info("sites", "Site provisioning job queued", {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      jobId: job._id.toString(),
-      totalSteps: plan.summary.totalSteps,
-      requiresApproval: job.requiresApproval,
-      approvalStatus: job.requiresApproval ? "pending" : "not-required"
-    });
-
-    await writeAuditLog({
-      req,
-      action: "sites.provision.queue",
-      entityType: "Site",
-      entityId: site._id.toString(),
-      metadata: {
-        jobId: job._id.toString(),
-        siteCode: site.siteCode,
-        requiresApproval: job.requiresApproval,
-        approvalStatus: job.requiresApproval ? "pending" : "not-required"
+        connectorMode: "browser-sharepoint",
+        executionMode: "browser-required",
+        browserOperationPlan: plan
       }
     });
-
-    return ok(
-      res,
-      {
-        job,
-        requiresApproval: job.requiresApproval,
-        approvalStatus: job.requiresApproval ? "pending" : "not-required",
-        message: job.requiresApproval ? SITE_PROVISION_APPROVAL_MESSAGE : ownerDirectMessage("Site provisioning")
-      },
-      {
-        requiresApproval: job.requiresApproval,
-        approvalStatus: job.requiresApproval ? "pending" : "not-required",
-        message: job.requiresApproval ? SITE_PROVISION_APPROVAL_MESSAGE : ownerDirectMessage("Site provisioning")
-      },
-      202
-    );
+    return ok(res, {
+      job,
+      plan,
+      message: "Provision ממתין להרצה דרך הדפדפן המחובר ל־SharePoint."
+    }, undefined, 202);
   } catch (error) {
     return handleError(error, req, res);
   }
@@ -765,116 +598,57 @@ export const getPermissionsSetupPlan = async (req: Request, res: Response) => {
 
 export const queuePermissionsSetup = async (req: Request, res: Response) => {
   try {
-    if (shouldBlockBackendSharePointByDefault("permissions-setup", {
-      connectorMode: req.body?.connectorMode,
-      confirmBackendSharePoint: req.body?.confirmBackendSharePoint
-    })) {
-      throw new Error("browser-sharepoint-operation-not-implemented");
-    }
-    const capabilities = getSharePointOperationCapabilities();
-    if (!capabilities.writeAvailable) {
-      return fail(res, "SHAREPOINT_WRITE_NOT_CONFIGURED", capabilities.reason || "SharePoint write is not configured", capabilities, 409);
-    }
-
-    const site = await sitesService.getSiteById(req.params.id);
-    if (!site) return fail(res, "NOT_FOUND", "האתר לא נמצא", undefined, 404);
-
-    const plan = await buildPermissionsSetupPlan(site._id.toString());
-    const createdBy = req.user?.name || "system";
-    const approvalSummary = {
-      title: `Configure siteUsersDb permissions for ${site.displayName || site.siteCode}`,
-      message: PERMISSIONS_APPROVAL_MESSAGE,
-      operation: "permissions-setup",
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      steps: plan.steps.length,
-      roleDefId: 1073741827,
-      requestedBy: createdBy
-    };
-    const approvalSnapshot = {
-      capturedAt: new Date().toISOString(),
-      operation: "permissions-setup",
-      site: {
-        id: site._id.toString(),
-        siteCode: site.siteCode,
-        displayName: site.displayName,
-        sharePointSiteUrl: site.sharePointSiteUrl
-      },
-      planGeneratedAt: plan.generatedAt,
-      capabilities: plan.capabilities,
-      resolvedPaths: plan.resolvedPaths,
-      steps: plan.steps.map((step) => ({
-        key: step.key,
-        label: step.label,
-        target: step.target
-      })),
-      roleDefId: 1073741827,
-      writeOperations: [
-        "Break role inheritance on the siteUsersDb root item",
-        "Grant Contribute to the associated members group",
-        "Write the permissions marker file",
-        "Update site permissions health metadata after successful execution"
-      ]
-    };
-    const jobInput: ApprovalGatedJobInput = {
+    void req.body;
+    const plan = await buildPermissionsSetupPlan(req.params.id);
+    const policy = getSharePointOperationPolicy("permissions-setup");
+    const job = await createJob({
       type: "permissions-setup",
-      siteId: site._id.toString(),
-      createdBy,
-      requiresApproval: true,
-      approvalSummary,
-      approvalSnapshot,
+      siteId: req.params.id,
+      createdBy: req.user?.name || "system",
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint",
+      operationPolicy: policy.operation,
+      connectorStatusLabel: policy.statusLabelHe,
+      connectorBlocker: policy.blockerHe || getBrowserRequiredJobMessage("permissions-setup"),
       payload: {
-        mode: "siteUsersDb-permissions",
-        roleDefId: 1073741827
+        connectorMode: "browser-sharepoint",
+        executionMode: "browser-required",
+        browserOperationPlan: plan
       }
-    };
-
-    logger.info("jobs", "Permissions setup job queued", {
-      type: jobInput.type,
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      steps: plan.steps.length,
-      roleDefId: 1073741827
     });
+    return ok(res, {
+      job,
+      plan,
+      message: "Permissions setup ממתין להרצה דרך הדפדפן המחובר ל־SharePoint."
+    }, undefined, 202);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
 
-    const job = await createJob(jobInput);
-    logger.info("sites", "Permissions setup job queued", {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      jobId: job._id.toString(),
-      steps: plan.steps.length,
-      requiresApproval: job.requiresApproval,
-      approvalStatus: job.requiresApproval ? "pending" : "not-required"
-    });
+export const recordBrowserSiteOperationEvidenceEndpoint = async (req: Request, res: Response) => {
+  try {
+    const payload = browserSiteOperationEvidenceSchema.parse(req.body || {});
+    const result = await recordBrowserSiteOperationEvidence(req.params.id, payload, req.user?.name || "browser-sharepoint");
 
     await writeAuditLog({
       req,
-      action: "sites.permissions-setup.queue",
+      action: `sites.${payload.operation}.browser-evidence`,
       entityType: "Site",
-      entityId: site._id.toString(),
+      entityId: req.params.id,
       metadata: {
-        jobId: job._id.toString(),
-        siteCode: site.siteCode,
-        requiresApproval: job.requiresApproval,
-        approvalStatus: job.requiresApproval ? "pending" : "not-required"
+        connectorMode: "browser-sharepoint",
+        operation: payload.operation,
+        finalStatus: payload.finalStatus,
+        stepsCount: result.summary.stepsCount,
+        failedStepsCount: result.summary.failedStepsCount
       }
     });
 
-    return ok(
-      res,
-      {
-        job,
-        requiresApproval: job.requiresApproval,
-        approvalStatus: job.requiresApproval ? "pending" : "not-required",
-        message: job.requiresApproval ? PERMISSIONS_APPROVAL_MESSAGE : ownerDirectMessage("Permissions setup")
-      },
-      {
-        requiresApproval: job.requiresApproval,
-        approvalStatus: job.requiresApproval ? "pending" : "not-required",
-        message: job.requiresApproval ? PERMISSIONS_APPROVAL_MESSAGE : ownerDirectMessage("Permissions setup")
-      },
-      202
-    );
+    return ok(res, {
+      site: sitesService.withDerivedHealth(result.site.toObject()),
+      summary: result.summary
+    });
   } catch (error) {
     return handleError(error, req, res);
   }

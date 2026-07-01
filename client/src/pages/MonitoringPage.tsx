@@ -10,6 +10,7 @@ import { HelpLabel } from "../components/help/HelpLabel";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { AdvancedDetails, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { formatDateTime, formatNumber } from "../utils/format";
@@ -40,9 +41,9 @@ const statusClass: Record<string, string> = {
 };
 
 const categoryLabel: Record<OperationalAlert["category"], string> = {
-  failed_job: "Job failure",
-  stale_backup: "Backup stale",
-  failed_health_check: "Health failed"
+  failed_job: "פעולה שנכשלה",
+  stale_backup: "גיבוי שהתיישן",
+  failed_health_check: "בדיקת תקינות נכשלה"
 };
 
 const firstEntity = (alert: OperationalAlert, type?: string) =>
@@ -65,28 +66,28 @@ const incidentAgeLabel = (alert: OperationalAlert) => {
 };
 
 const incidentSlaState = (alert: OperationalAlert) => {
-  if (alert.status === "resolved") return { label: "Closed", className: "badge-success" };
+  if (alert.status === "resolved") return { label: "נסגר", className: "badge-success" };
   const detectedAt = alertDetectedAt(alert);
   const detectedTime = detectedAt ? new Date(detectedAt).getTime() : Number.NaN;
   const ageHours = Number.isFinite(detectedTime) ? (Date.now() - detectedTime) / 3600000 : 0;
-  if (alert.severity === "critical" && alert.status === "active" && ageHours >= 1) return { label: "SLA risk", className: "badge-danger" };
-  if (alert.status === "acknowledged") return { label: "Owned", className: "badge-warning" };
-  return { label: "Needs triage", className: alert.severity === "critical" ? "badge-danger" : "badge-warning" };
+  if (alert.severity === "critical" && alert.status === "active" && ageHours >= 1) return { label: "סיכון SLA", className: "badge-danger" };
+  if (alert.status === "acknowledged") return { label: "יש אחראי", className: "badge-warning" };
+  return { label: "דורש מיון", className: alert.severity === "critical" ? "badge-danger" : "badge-warning" };
 };
 
 const incidentOwner = (alert: OperationalAlert) => {
   if (alert.acknowledgedBy) return alert.acknowledgedBy;
-  if (alert.category === "failed_job") return "Operations";
-  if (alert.category === "stale_backup") return "Recovery owner";
-  if (alert.category === "failed_health_check") return "Site reliability";
-  return "Platform admin";
+  if (alert.category === "failed_job") return "אחראי תפעול";
+  if (alert.category === "stale_backup") return "אחראי שחזור";
+  if (alert.category === "failed_health_check") return "אחראי תקינות";
+  return "מנהל מערכת";
 };
 
 const incidentTarget = (alert: OperationalAlert) => {
-  if (alert.category === "failed_job") return { href: "#/jobs", label: "Open Operations Queue" };
-  if (alert.category === "stale_backup") return { href: "#/backups?tab=plan", label: "Open Recovery Center" };
-  if (alert.category === "failed_health_check") return { href: "#/health", label: "Open Health checks" };
-  return { href: "#/diagnostics", label: "Open Diagnostics" };
+  if (alert.category === "failed_job") return { href: "#/jobs", label: "פתח תור פעולות" };
+  if (alert.category === "stale_backup") return { href: "#/backups?tab=plan", label: "פתח מרכז גיבוי ושחזור" };
+  if (alert.category === "failed_health_check") return { href: "#/health", label: "פתח בדיקות תקינות" };
+  return { href: "#/diagnostics", label: "פתח אבחון" };
 };
 
 const suggestedAlertAction = (alert: OperationalAlert) => {
@@ -200,7 +201,7 @@ export function MonitoringPage() {
   const alertColumns: DataTableColumn<OperationalAlert>[] = [
     {
       key: "impact",
-      header: "Impact",
+      header: "חומרה",
       helpKey: "alert.severity",
       render: (alert) => (
         <div className="space-y-1">
@@ -211,7 +212,7 @@ export function MonitoringPage() {
     },
     {
       key: "ownership",
-      header: "Owner / State",
+      header: "אחראי / מצב",
       helpKey: "alert.status",
       render: (alert) => {
         const sla = incidentSlaState(alert);
@@ -226,7 +227,7 @@ export function MonitoringPage() {
     },
     {
       key: "message",
-      header: "Incident / Next step",
+      header: "אירוע / צעד הבא",
       helpKey: "monitoring.alert",
       render: (alert) => {
         const target = incidentTarget(alert);
@@ -244,7 +245,7 @@ export function MonitoringPage() {
     },
     {
       key: "entity",
-      header: "Entity",
+      header: "על מה",
       helpKey: "audit.evidence",
       render: (alert) => {
         const siteRef = firstEntity(alert, "Site");
@@ -259,7 +260,7 @@ export function MonitoringPage() {
     },
     {
       key: "age",
-      header: "Age",
+      header: "גיל",
       helpKey: "history",
       render: (alert) => (
         <div className="space-y-1">
@@ -324,10 +325,41 @@ export function MonitoringPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Incident Inbox"
-        subtitle="תור תפעולי להתראות שדורשות triage: כשלי Jobs, גיבויים שהתיישנו ובדיקות תקינות שנכשלו. כל incident צריך owner, next step וסגירה ברורה."
+        title="תיבת אירועים"
+        subtitle="מה דורש טיפול עכשיו, מי אחראי, ומה המסך הבא לפתרון"
         helpKey="monitoring.alert"
         actions={<MetadataOnlyBadge mode="readonly" />}
+      />
+
+      <OperationalSummary
+        title="מה צריך טיפול עכשיו"
+        purpose="המסך מרכז התראות פתוחות מכשלי פעולות, גיבויים שהתיישנו ובדיקות תקינות שנכשלו. מכאן מסמנים בעלות ועוברים למסך התיקון."
+        state={`${formatNumber(activeAlerts)} פתוחות · ${formatNumber(acknowledgedAlerts)} בטיפול · ${formatNumber(criticalAlerts)} קריטיות`}
+        attention={criticalAlerts
+          ? `${formatNumber(criticalAlerts)} אירועים קריטיים צריכים טיפול ראשון.`
+          : activeAlerts
+            ? `${formatNumber(activeAlerts)} אירועים פתוחים עדיין בלי סימון טיפול.`
+            : "אין אירועים פתוחים שדורשים טיפול מידי."}
+        attentionTone={criticalAlerts ? "danger" : activeAlerts ? "warning" : "success"}
+        nextAction={failedJobs
+          ? "פתחו תור פעולות ובדקו את הכשל הראשון."
+          : staleBackups
+            ? "פתחו מרכז גיבוי ושחזור ובדקו אילו גיבויים התיישנו."
+            : activeAlerts
+              ? "סמנו אירוע בטיפול, ואז עברו למסך שהמערכת ממליצה עליו."
+              : "אפשר להריץ סריקה ידנית או להמשיך לעבוד כרגיל."}
+        blocked={error ? "טעינת התראות נכשלה. רעננו או בדקו את חיבור ה־backend." : undefined}
+        tone={criticalAlerts ? "danger" : activeAlerts ? "warning" : "success"}
+      />
+
+      <ModeBoundary
+        title="מה קורה בלחיצה"
+        items={[
+          { label: "סרוק עכשיו", description: "מרענן התראות לפי נתוני המערכת. לא מתקן אתרים בעצמו.", tone: "info" },
+          { label: "בטיפול", description: "מסמן ownership בלבד כדי שאחרים ידעו שמישהו מטפל.", tone: "success" },
+          { label: "פתח מסך", description: "מעביר למסך שבו מתקנים: Jobs, Backups, Health או Diagnostics.", tone: "neutral" },
+          { label: "סגירה", description: "תקרה אחרי שהסריקה מזהה שהבעיה נפתרה או עודכנה.", tone: "warning" }
+        ]}
       />
 
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}
@@ -343,30 +375,30 @@ export function MonitoringPage() {
             <KpiCard variant="inline" title="Jobs שנכשלו" value={formatNumber(failedJobs)} icon={<AlertTriangle size={18} />} description={`${formatNumber(staleBackups)} stale backups`} tone={failedJobs || staleBackups ? "warning" : "success"} helpKey="job.failed" />
           </div>
 
-          <SectionCard title="Triage Summary" subtitle="החלטה מהירה לפני כניסה לפרטים" helpKey="monitoring.alert">
+          <SectionCard title="סיכום טיפול" subtitle="החלטה מהירה לפני כניסה לפרטים" helpKey="monitoring.alert">
             <div className="grid gap-3 md:grid-cols-3">
               <div className="soft-panel p-4">
-                <p className="field-label">Priority</p>
+                <p className="field-label">עדיפות</p>
                 <p className="font-bold" style={{ color: criticalAlerts || activeAlerts ? "var(--danger)" : "var(--success)" }}>
-                  {criticalAlerts ? "Critical incidents first" : activeAlerts ? "Assign owners" : "No immediate triage"}
+                  {criticalAlerts ? "לטפל קודם בקריטיים" : activeAlerts ? "לסמן אחראי" : "אין טיפול מידי"}
                 </p>
               </div>
               <div className="soft-panel p-4">
-                <p className="field-label">Recommended first action</p>
+                <p className="field-label">פעולה מומלצת ראשונה</p>
                 <p className="font-bold" style={{ color: "var(--text-strong)" }}>
-                  {failedJobs ? "Open Operations Queue" : staleBackups ? "Open Recovery Center" : criticalAlerts ? "Open Health checks" : "Scan now or continue monitoring"}
+                  {failedJobs ? "פתח תור פעולות" : staleBackups ? "פתח מרכז גיבוי ושחזור" : criticalAlerts ? "פתח בדיקות תקינות" : "סרוק או המשך מעקב"}
                 </p>
               </div>
               <div className="soft-panel p-4">
-                <p className="field-label">Last generated</p>
+                <p className="field-label">עודכן לאחרונה</p>
                 <p className="num font-bold" style={{ color: "var(--text-strong)" }}>{formatDateTime(summary?.generatedAt)}</p>
               </div>
             </div>
           </SectionCard>
 
           <SectionCard
-            title="Incident Queue"
-            subtitle={summary?.generatedAt ? `עודכן: ${formatDateTime(summary.generatedAt)} · ${formatNumber(summary.counts.open)} open incidents` : "רשימת incidents תפעוליים"}
+            title="תור אירועים"
+            subtitle={summary?.generatedAt ? `עודכן: ${formatDateTime(summary.generatedAt)} · ${formatNumber(summary.counts.open)} אירועים פתוחים` : "רשימת אירועים תפעוליים"}
             helpKey="monitoring.alert"
             actions={
               <button className="btn btn-primary" type="button" onClick={refreshAlerts} disabled={refreshing}>
@@ -487,10 +519,9 @@ export function MonitoringPage() {
                 </div>
               </div>
             ) : null}
-            <details className="rounded-lg border p-3" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
-              <summary className="cursor-pointer text-sm font-bold" style={{ color: "var(--text-strong)" }}>Advanced raw alert payload</summary>
+            <AdvancedDetails title="Raw alert payload" description="JSON מלא לצוות טכני">
               <pre className="mt-3 overflow-x-auto text-xs">{JSON.stringify(selectedAlert, null, 2)}</pre>
-            </details>
+            </AdvancedDetails>
           </div>
         ) : null}
       </DetailsDrawer>

@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -11,7 +12,8 @@ const mocks = vi.hoisted(() => ({
     findById: vi.fn()
   },
   SiteVersionDeployment: {
-    findById: vi.fn()
+    findById: vi.fn(),
+    create: vi.fn()
   },
   getRequestDigest: vi.fn(),
   getSharePointOperationCapabilities: vi.fn(),
@@ -19,8 +21,6 @@ const mocks = vi.hoisted(() => ({
   listSharePointFolders: vi.fn(),
   readSharePointFileEvidence: vi.fn(),
   uploadSharePointFile: vi.fn(),
-  getFinalAppUrlHealthEvidence: vi.fn(),
-  runReadOnlySharePointHealthCheck: vi.fn(),
   logger: {
     debug: vi.fn(),
     info: vi.fn(),
@@ -43,15 +43,24 @@ vi.mock("../server/src/services/sharepointOperationClient", () => ({
   readSharePointFileEvidence: mocks.readSharePointFileEvidence,
   uploadSharePointFile: mocks.uploadSharePointFile
 }));
-vi.mock("../server/src/services/sharepointHealth.service", () => ({
-  getFinalAppUrlHealthEvidence: mocks.getFinalAppUrlHealthEvidence,
-  runReadOnlySharePointHealthCheck: mocks.runReadOnlySharePointHealthCheck
-}));
 vi.mock("../server/src/utils/logger", () => ({ logger: mocks.logger }));
 
 const idOf = (value: string) => ({ toString: () => value });
+const sha256 = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+const finalAppUrl = "https://portal.army.idf/sites/alpha/siteDB/dist/index.html";
 
-const makeSite = (overrides: Record<string, unknown> = {}) => ({
+let artifactRoot = "";
+
+const writeArtifact = async () => {
+  artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sitebuilder-post-health-"));
+  await fs.mkdir(path.join(artifactRoot, "assets"), { recursive: true });
+  await fs.writeFile(path.join(artifactRoot, "index.html"), "index");
+  await fs.writeFile(path.join(artifactRoot, "assets", "app.js"), "app");
+  await fs.writeFile(path.join(artifactRoot, "sharepoint-deploy-manifest.json"), JSON.stringify(["index.html", "assets/app.js"]));
+  return artifactRoot;
+};
+
+const makeSite = () => ({
   _id: idOf("site-1"),
   siteCode: "alpha",
   currentVersion: "1.2.3",
@@ -59,8 +68,7 @@ const makeSite = (overrides: Record<string, unknown> = {}) => ({
   sharePointHost: "portal.army.idf",
   sharePointSiteUrl: "https://portal.army.idf/sites/alpha",
   sharePointStatus: { deployStatus: "idle" },
-  save: vi.fn().mockResolvedValue(undefined),
-  ...overrides
+  save: vi.fn().mockResolvedValue(undefined)
 });
 
 const makeRelease = (artifactRef: string) => ({
@@ -71,106 +79,27 @@ const makeRelease = (artifactRef: string) => ({
   save: vi.fn().mockResolvedValue(undefined)
 });
 
-const makeDeployment = () => ({
-  _id: idOf("deployment-1"),
-  status: "queued",
-  logLines: [] as Array<Record<string, unknown>>,
-  save: vi.fn().mockResolvedValue(undefined),
-  verification: undefined as unknown
-});
-
-const finalAppUrl = "https://portal.army.idf/sites/alpha/siteDB/dist/index.html";
-
-const makePostHealth = (indexOk: boolean) => ({
-  checkedAt: "2026-05-14T10:00:00.000Z",
-  siteId: "site-1",
-  siteCode: "alpha",
-  derivedHealthStatus: indexOk ? "healthy" : "degraded",
-  health: {
-    distExists: true,
-    indexExists: indexOk,
-    assetsExists: true
-  },
-  resolvedPaths: {
-    finalDistRoot: "/sites/alpha/siteDB/dist",
-    finalAppUrl
-  },
-  capabilities: {
-    writeAvailable: true,
-    digest: { canRequest: true }
-  },
-  evidence: [
-    {
-      key: "distExists",
-      label: "Final dist folder",
-      url: "https://portal.army.idf/sites/alpha/_api/web/GetFolderByServerRelativeUrl('/sites/alpha/siteDB/dist')",
-      ok: true,
-      status: 200
-    },
-    {
-      key: "indexExists",
-      label: "Final index.html",
-      url: finalAppUrl,
-      ok: indexOk,
-      status: indexOk ? 200 : 404,
-      statusText: indexOk ? "OK" : "Not Found"
-    }
-  ]
-});
-
-let artifactRoot = "";
-
-const writeArtifact = async () => {
-  artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sitebuilder-post-health-"));
-  await fs.writeFile(path.join(artifactRoot, "index.html"), "<html><script src=\"app.js\"></script></html>");
-  await fs.writeFile(path.join(artifactRoot, "app.js"), "console.log('ok');");
-  await fs.writeFile(path.join(artifactRoot, "sharepoint-deploy-manifest.json"), JSON.stringify(["index.html", "app.js"]));
-  return artifactRoot;
-};
-
 beforeEach(() => {
+  vi.resetModules();
   artifactRoot = "";
-  mocks.Site.findById.mockReset();
-  mocks.Release.findById.mockReset();
-  mocks.SiteVersionDeployment.findById.mockReset();
-  mocks.getRequestDigest.mockReset();
-  mocks.getSharePointOperationCapabilities.mockReset();
-  mocks.listSharePointFiles.mockReset();
-  mocks.listSharePointFolders.mockReset();
-  mocks.readSharePointFileEvidence.mockReset();
-  mocks.uploadSharePointFile.mockReset();
-  mocks.getFinalAppUrlHealthEvidence.mockReset();
-  mocks.runReadOnlySharePointHealthCheck.mockReset();
-  mocks.logger.isPayloadLoggingEnabled.mockReturnValue(false);
-
+  Object.values(mocks).forEach((group) => {
+    if (vi.isMockFunction(group)) {
+      group.mockReset();
+      return;
+    }
+    Object.values(group as Record<string, unknown>).forEach((value) => {
+      if (vi.isMockFunction(value)) value.mockReset();
+    });
+  });
   mocks.getSharePointOperationCapabilities.mockReturnValue({
-    writeAvailable: true,
-    digest: { canRequest: true }
+    writeAvailable: false,
+    digest: { canRequest: false, reason: "server-sharepoint-disabled" },
+    reason: "server-sharepoint-disabled"
   });
-  mocks.listSharePointFiles.mockResolvedValue({
-    exists: true,
-    files: []
-  });
-  mocks.listSharePointFolders.mockResolvedValue({
-    exists: true,
-    folders: []
-  });
-  mocks.getRequestDigest.mockResolvedValue("digest-1");
-  mocks.uploadSharePointFile.mockResolvedValue(undefined);
-  mocks.getFinalAppUrlHealthEvidence.mockImplementation((health) => {
-    const evidence = health.evidence.find((item: { key: string }) => item.key === "indexExists");
-    return evidence ? { ...evidence, checkedAt: health.checkedAt } : undefined;
-  });
-  mocks.readSharePointFileEvidence.mockImplementation(async (_paths, targetPath, expected) => ({
-    status: "verified",
-    checkedAt: "2026-05-14T10:00:00.000Z",
-    sizeBytes: expected.sizeBytes,
-    sha256: expected.sha256,
-    sizeMatches: true,
-    sha256Matches: true,
-    httpStatus: 200,
-    targetPath
-  }));
+  mocks.listSharePointFiles.mockResolvedValue({ exists: false, files: [], authBlocked: true, status: 401 });
+  mocks.listSharePointFolders.mockResolvedValue({ exists: false, folders: [], authBlocked: true, status: 401 });
+  mocks.SiteVersionDeployment.create.mockImplementation(async (payload) => ({ _id: idOf("deployment-1"), ...payload }));
+  mocks.logger.isPayloadLoggingEnabled.mockReturnValue(false);
 });
 
 afterEach(async () => {
@@ -179,73 +108,8 @@ afterEach(async () => {
   }
 });
 
-describe("post-deploy SharePoint health evidence", () => {
-  it("runs read-only health after file verification and persists final app URL/index evidence", async () => {
-    const release = makeRelease(await writeArtifact());
-    const site = makeSite();
-    const deployment = makeDeployment();
-    const postHealth = makePostHealth(true);
-
-    mocks.Site.findById.mockResolvedValue(site);
-    mocks.Release.findById.mockResolvedValue(release);
-    mocks.SiteVersionDeployment.findById.mockResolvedValue(deployment);
-    mocks.runReadOnlySharePointHealthCheck.mockResolvedValue(postHealth);
-
-    const { executeSharePointDeploy } = await import("../server/src/services/deployArtifact.service");
-    const result = await executeSharePointDeploy({
-      siteId: "site-1",
-      releaseId: "release-1",
-      deploymentId: "deployment-1"
-    });
-
-    expect(result.deployment).toBe(deployment);
-    expect(mocks.readSharePointFileEvidence).toHaveBeenCalledTimes(2);
-    expect(mocks.runReadOnlySharePointHealthCheck).toHaveBeenCalledWith("site-1");
-    expect(mocks.runReadOnlySharePointHealthCheck.mock.invocationCallOrder[0]).toBeGreaterThan(
-      mocks.readSharePointFileEvidence.mock.invocationCallOrder[1]
-    );
-    expect(deployment.status).toBe("succeeded");
-    expect(site.currentVersion).toBe("1.2.4");
-    expect(site.version).toBe("1.2.4");
-    expect(deployment.verification).toMatchObject({
-      status: "verified",
-      filesCount: 2,
-      verifiedFilesCount: 2,
-      finalAppUrlVerification: {
-        key: "indexExists",
-        label: "Final index.html",
-        url: finalAppUrl,
-        ok: true,
-        status: 200
-      },
-      postHealth: {
-        checkedAt: "2026-05-14T10:00:00.000Z",
-        derivedHealthStatus: "healthy",
-        health: {
-          indexExists: true
-        },
-        evidence: expect.arrayContaining([
-          expect.objectContaining({
-            key: "indexExists",
-            url: finalAppUrl,
-            ok: true
-          })
-        ])
-      }
-    });
-  });
-
-  it("fails deployment when final app URL/index post-health evidence is not ok", async () => {
-    const release = makeRelease(await writeArtifact());
-    const site = makeSite();
-    const deployment = makeDeployment();
-    const postHealth = makePostHealth(false);
-
-    mocks.Site.findById.mockResolvedValue(site);
-    mocks.Release.findById.mockResolvedValue(release);
-    mocks.SiteVersionDeployment.findById.mockResolvedValue(deployment);
-    mocks.runReadOnlySharePointHealthCheck.mockResolvedValue(postHealth);
-
+describe("post-deploy browser evidence", () => {
+  it("refuses server-side SharePoint deploy execution", async () => {
     const { executeSharePointDeploy } = await import("../server/src/services/deployArtifact.service");
 
     await expect(
@@ -254,30 +118,85 @@ describe("post-deploy SharePoint health evidence", () => {
         releaseId: "release-1",
         deploymentId: "deployment-1"
       })
-    ).rejects.toThrow("deploy-final-app-url-verification-failed");
+    ).rejects.toThrow("sharepoint-browser-execution-required");
 
-    expect(mocks.readSharePointFileEvidence).toHaveBeenCalledTimes(2);
-    expect(mocks.runReadOnlySharePointHealthCheck).toHaveBeenCalledWith("site-1");
-    expect(deployment.status).toBe("failed");
-    expect(site.currentVersion).toBe("1.2.3");
-    expect(site.version).toBe("1.2.3");
-    expect(deployment.error).toBe(`deploy-final-app-url-verification-failed:${finalAppUrl}`);
-    expect(deployment.verification).toMatchObject({
-      status: "failed",
-      filesCount: 2,
-      verifiedFilesCount: 2,
-      finalAppUrlVerification: {
-        key: "indexExists",
-        url: finalAppUrl,
-        ok: false,
-        status: 404
-      },
-      postHealth: {
-        derivedHealthStatus: "degraded",
-        health: {
-          indexExists: false
-        }
+    expect(mocks.getRequestDigest).not.toHaveBeenCalled();
+    expect(mocks.uploadSharePointFile).not.toHaveBeenCalled();
+    expect(mocks.readSharePointFileEvidence).not.toHaveBeenCalled();
+  });
+
+  it("persists final app URL evidence supplied by the browser without server SharePoint reads", async () => {
+    const release = makeRelease(await writeArtifact());
+    const site = makeSite();
+    mocks.Release.findById.mockResolvedValue(release);
+    mocks.Site.findById.mockResolvedValue(site);
+
+    const { recordBrowserSharePointDeploymentEvidence } = await import("../server/src/services/deployArtifact.service");
+    const result = await recordBrowserSharePointDeploymentEvidence({
+      siteId: "site-1",
+      actor: "operator",
+      input: {
+        releaseId: "release-1",
+        connectorMode: "browser-sharepoint",
+        finalStatus: "success",
+        versionBefore: "1.2.3",
+        versionAfter: "1.2.4",
+        finalAppUrlVerification: {
+          key: "indexExists",
+          label: "Final index.html",
+          url: finalAppUrl,
+          ok: true,
+          status: 200,
+          checkedAt: "2026-06-30T10:00:00.000Z"
+        },
+        readBackEvidence: [
+          {
+            relativePath: "index.html",
+            targetPath: "/sites/alpha/siteDB/dist/index.html",
+            status: "verified",
+            expectedSizeBytes: 5,
+            actualSizeBytes: 5,
+            expectedSha256: sha256("index"),
+            actualSha256: sha256("index"),
+            sizeMatches: true,
+            sha256Matches: true,
+            httpStatus: 200
+          },
+          {
+            relativePath: "assets/app.js",
+            targetPath: "/sites/alpha/siteDB/dist/assets/app.js",
+            status: "verified",
+            expectedSizeBytes: 3,
+            actualSizeBytes: 3,
+            expectedSha256: sha256("app"),
+            actualSha256: sha256("app"),
+            sizeMatches: true,
+            sha256Matches: true,
+            httpStatus: 200
+          }
+        ]
       }
     });
+
+    expect(result.summary).toMatchObject({
+      connectorMode: "browser-sharepoint",
+      finalStatus: "success",
+      verifiedFilesCount: 2,
+      failedFilesCount: 0,
+      siteVersionUpdated: true
+    });
+    expect(mocks.SiteVersionDeployment.create).toHaveBeenCalledWith(expect.objectContaining({
+      status: "succeeded",
+      verification: expect.objectContaining({
+        finalAppUrlVerification: expect.objectContaining({
+          ok: true,
+          status: 200,
+          url: finalAppUrl
+        })
+      })
+    }));
+    expect(mocks.getRequestDigest).not.toHaveBeenCalled();
+    expect(mocks.uploadSharePointFile).not.toHaveBeenCalled();
+    expect(mocks.readSharePointFileEvidence).not.toHaveBeenCalled();
   });
 });

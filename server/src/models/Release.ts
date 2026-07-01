@@ -31,6 +31,7 @@ const releaseArtifactValidationSchema = new Schema(
 
 const releaseSchema = new Schema(
   {
+    name: { type: String, default: "", trim: true },
     version: { type: String, required: true, unique: true, trim: true },
     releaseType: {
       type: String,

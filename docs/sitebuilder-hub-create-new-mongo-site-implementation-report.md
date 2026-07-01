@@ -250,3 +250,6 @@ Remaining gaps before a true one-click ready site:
 - Initial frontend deploy is not run inside the create wizard.
 - Full Mongo backup creation execution is still not implemented; backup capability is verified.
 - Revisions/audit backend route discovery remains unsupported unless the Builder backend exposes a confirmed API.
+# Legacy Historical Report
+
+This report was written before the SharePoint browser-only migration was completed. The current source of truth is `docs/sharepoint-browser-only-status-report.md`.

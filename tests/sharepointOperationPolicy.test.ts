@@ -41,14 +41,20 @@ describe("SharePoint operation connector policy", () => {
       canRunFromBrowser: true
     });
     expect(byOperation.get("scheduled-backup")).toMatchObject({
-      policy: "backend-service-auth-required",
-      connectorMode: "backend-sharepoint",
-      backendServiceAuthOnly: true
+      policy: "browser-supported",
+      connectorMode: "browser-sharepoint",
+      backendServiceAuthOnly: false,
+      canRunFromBrowser: true
     });
     expect(byOperation.get("restore")).toMatchObject({
-      policy: "not-implemented",
-      connectorMode: "none",
-      blockerHe: "שחזור דורש הרשאת שרת ל־SharePoint או מימוש שחזור דרך הדפדפן."
+      policy: "browser-supported",
+      connectorMode: "browser-sharepoint",
+      canRunFromBrowser: true
+    });
+    expect(byOperation.get("permissions-setup")).toMatchObject({
+      policy: "browser-supported",
+      connectorMode: "browser-sharepoint",
+      canRunFromBrowser: true
     });
   });
 });

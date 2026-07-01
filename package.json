@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "seed": "npm --prefix server run seed",
+    "migrate:sharepoint-browser-only": "npm --prefix server run migrate:sharepoint-browser-only --",
     "closed-network:check": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/Test-ClosedNetworkBundle.ps1",
     "closed-network:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/Test-ClosedNetworkBundle.ps1 -CreateArchive"
   },

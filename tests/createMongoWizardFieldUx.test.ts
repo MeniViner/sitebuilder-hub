@@ -63,12 +63,22 @@ describe("Create New Mongo Site wizard field UX", () => {
 
     expect(preview).toContain("ערכים שהמערכת מחשבת עבורך");
     expect(preview).toContain("קישור סופי לאתר");
-    expect(preview).toContain("ספריית siteDB");
-    expect(preview).toContain("ספריית siteUsersDb");
+    expect(preview).toContain("נתיב siteDB מחושב");
+    expect(preview).toContain("נתיב siteUsersDb מחושב");
     expect(preview).toContain("נתיב runtime config");
     expect(preview).toContain("שם Collection במונגו");
     expect(preview).toContain("GENERATED_SAFE_COLLECTION_LABEL");
     expect(read("client/src/utils/mongoCreateUx.ts")).toContain("ייווצר אוטומטית");
+  });
+
+  it("keeps TXT SharePoint library fields in the visible location step", () => {
+    const modal = read("client/src/components/SiteFormModal.tsx");
+    const connection = between(modal, "const renderConnectionFields", "const renderOwners");
+
+    expect(connection).toContain("showTxtLibraryFields");
+    expect(connection).toContain("Field label=\"ספריית siteDB\"");
+    expect(connection).toContain("Field label=\"ספריית siteUsersDb\"");
+    expect(connection).toContain("createMode && form.storageBackend === \"txt\"");
   });
 
   it("uses human Hebrew validation and duplicate-site explanations", () => {

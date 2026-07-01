@@ -150,59 +150,13 @@ describe("SharePoint site bootstrap planning", () => {
 });
 
 describe("SharePoint site bootstrap execution", () => {
-  it("creates or reuses the site collection, provisions structure, configures permissions, and activates draft site records", async () => {
-    const site = makeSite();
-    const saved = makeSite();
-    mocks.Site.findById.mockResolvedValueOnce(site).mockResolvedValueOnce(saved);
-    mocks.ensureSharePointSiteCollection.mockResolvedValue({
-      action: "created",
-      targetUrl: "https://portal.army.idf/sites/alpha",
-      statusBefore: { statusName: "not-found" },
-      statusAfter: { statusName: "ready" },
-      polls: [{ statusName: "ready" }]
-    });
-    mocks.executeSiteProvisioning.mockResolvedValue({
-      completedSteps: [
-        { key: "library-site-db", label: "Ensure siteDB Document Library", target: "siteDB" }
-      ]
-    });
-    mocks.executePermissionsSetup.mockResolvedValue({
-      completedSteps: [
-        { key: "write-marker", label: "Write permissions marker", target: "/sites/alpha/siteUsersDb/.permissions-setup.json" }
-      ]
-    });
-
+  it("refuses server execution because bootstrap must run through the browser", async () => {
     const { executeSiteBootstrap } = await import("../server/src/services/siteBootstrap.service");
-    const result = await executeSiteBootstrap("site-1");
 
-    expect(mocks.ensureSharePointSiteCollection).toHaveBeenCalledWith(
-      expect.objectContaining({
-        siteCode: "alpha",
-        sharePointSiteUrl: "https://portal.army.idf/sites/alpha"
-      }),
-      expect.objectContaining({
-        title: "Alpha Site",
-        description: "Alpha description",
-        owner: "owner@example.test",
-        lcid: 1033,
-        webTemplate: "STS#3"
-      })
-    );
-    expect(mocks.executeSiteProvisioning).toHaveBeenCalledWith("site-1");
-    expect(mocks.executePermissionsSetup).toHaveBeenCalledWith("site-1");
-    expect(saved.status).toBe("active");
-    expect(saved.save).toHaveBeenCalled();
-    expect(result).toMatchObject({
-      siteId: "site-1",
-      siteCode: "alpha",
-      siteCollection: { action: "created" }
-    });
-    expect(result.completedSteps.map((step) => step.phase)).toEqual([
-      "site-create",
-      "site-create",
-      "site-create",
-      "provision",
-      "permissions"
-    ]);
+    await expect(executeSiteBootstrap("site-1")).rejects.toThrow("browser-sharepoint-required");
+
+    expect(mocks.ensureSharePointSiteCollection).not.toHaveBeenCalled();
+    expect(mocks.executeSiteProvisioning).not.toHaveBeenCalled();
+    expect(mocks.executePermissionsSetup).not.toHaveBeenCalled();
   });
 });

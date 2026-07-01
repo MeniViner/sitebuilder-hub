@@ -11,6 +11,7 @@ import { FilterBar } from "../components/FilterBar";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { SiteFormModal, SiteFormSaveOptions } from "../components/SiteFormModal";
@@ -29,6 +30,7 @@ import {
   deriveRequiredFoldersFromArtifactFilePaths,
   manifestFilesForPlan
 } from "../utils/artifactCompatibility";
+import { buildDeploymentMetadataFile, DEPLOYMENT_METADATA_FILE } from "../utils/deploymentMetadata";
 
 type AuthUser = NonNullable<WhoAmIResult["user"]>;
 
@@ -209,6 +211,7 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
   };
 
   const activeFilterCount = [statusFilter !== "all", healthFilter !== "all", versionFilter !== "all", sortBy !== "updatedAt"].filter(Boolean).length;
+  const hasVisibleFilters = Boolean(search.trim()) || activeFilterCount > 0;
 
   const resolveBrowserPaths = (site: Site, runtimeConfigPath?: string) => {
     const paths = resolveSiteBuilderPaths({
@@ -593,6 +596,15 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
     const startedAt = new Date().toISOString();
     let deployEvidenceRecorded = false;
     try {
+      const deploymentMetadata = await buildDeploymentMetadataFile({
+        releaseId,
+        releaseVersion: plan.releaseVersion,
+        operation: "deploy",
+        site,
+        targetSiteUrl,
+        targetDistPath,
+        finalAppUrl: plan.target?.finalAppUrl || paths.finalAppUrl
+      });
       const browserDeploy = await deployArtifactToSharePointBrowser({
         releaseId,
         siteId: site._id,
@@ -600,8 +612,13 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
         targetSiteUrl,
         targetDistPath,
         finalAppUrl: plan.target?.finalAppUrl || paths.finalAppUrl,
-        files: deployFiles,
-        loadArtifactFile: (relativePath) => sitesApi.releaseArtifactFile(releaseId, relativePath)
+        files: [...deployFiles, deploymentMetadata.file],
+        loadArtifactFile: async (relativePath) => {
+          if (relativePath === DEPLOYMENT_METADATA_FILE) {
+            return deploymentMetadata.response;
+          }
+          return sitesApi.releaseArtifactFile(releaseId, relativePath);
+        }
       });
       const versionBefore = site.currentVersion || site.version || "";
       const finalAppUrlVerified = browserDeploy.finalAppUrlVerification ? browserDeploy.finalAppUrlVerification.ok === true : true;
@@ -891,6 +908,37 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
         }
       />
 
+      <OperationalSummary
+        title="Registry אנושי לאתרים"
+        purpose="כאן מוצאים אתר, מבינים אם הוא בריא, ורואים מה הפעולה הבטוחה הבאה בלי להיכנס מיד לנתיבי SharePoint."
+        state={`${formatNumber(activeTab === "archive" ? stats.archived : stats.active)} אתרים ${activeTab === "archive" ? "בארכיון" : "פעילים"}`}
+        attention={stats.failed
+          ? `${formatNumber(stats.failed)} אתרים בכשל. פתחו אתר אחד ובדקו Health לפני פריסה או שחזור.`
+          : stats.warning
+            ? `${formatNumber(stats.warning)} אתרים באזהרה. מומלץ לסנן ולבדוק את הסיבה.`
+            : "אין כרגע כשל רוחבי ברשימת האתרים."}
+        attentionTone={stats.failed ? "danger" : stats.warning ? "warning" : "success"}
+        nextAction={sites.length ? "חפשו אתר לפי שם, קוד, בעלים או יחידה. פעולה ראשית: פתיחת פרטי אתר." : "הוסיפו אתר קיים למעקב או צרו אתר חדש דרך האשף."}
+        blocked={operationCapabilities?.sharePoint.writeAvailable ? undefined : "פעולות שמחייבות כתיבה ל־SharePoint יוסברו וייחסמו עד שהמסלול המתאים זמין. שמירת metadata עדיין מותרת."}
+        tone={stats.failed ? "danger" : stats.warning ? "warning" : "success"}
+      >
+        <GuidedFlow
+          title="זרימת עבודה מומלצת"
+          steps={[
+            { title: "מצא אתר", description: "חפש לפי שם, קוד, בעלים או יחידה.", status: "active" },
+            { title: "בדוק מצב", description: "פתח את האתר כדי לראות תקינות, גרסה, גיבוי והרשאות.", status: "pending" },
+            { title: "בחר פעולה", description: "פריסה, גיבוי, שחזור או הרשאות רצים במסכים ייעודיים עם Review.", status: "pending" }
+          ]}
+        />
+        <ModeBoundary
+          items={[
+            { label: "הוספת אתר קיים", description: "שומרת רשומה ב־Hub ומריצה בדיקות קריאה בלבד. לא יוצרת קבצים.", tone: "info" },
+            { label: "יצירת אתר חדש", description: "אשף תכנון והקמה. רק Review סופי מפעיל כתיבה.", tone: "warning" },
+            { label: "ארכיון", description: "סימון ניהולי ב־Hub בלבד. לא מוחק קבצי SharePoint.", tone: "success" }
+          ]}
+        />
+      </OperationalSummary>
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard title="סה״כ רשומות" value={formatNumber(stats.total)} icon={<SlidersHorizontal size={18} />} description="אתרים רשומים ב־Hub" tone="info" variant="inline" helpKey="sites.registry" />
         <KpiCard title="פעילים" value={formatNumber(stats.active)} icon={<SlidersHorizontal size={18} />} description="סטטוס פעיל" tone="success" variant="inline" helpKey="site.active" />
@@ -918,7 +966,7 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
         <FilterBar actions={
           <>
             <button className="btn btn-secondary" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal size={15} />סינון מתקדם {activeFilterCount ? `(${activeFilterCount})` : ""}</button>
-            <button className="btn btn-ghost" onClick={clearFilters} type="button">נקה סינונים</button>
+            {hasVisibleFilters ? <button className="btn btn-ghost" onClick={clearFilters} type="button">נקה סינונים</button> : null}
           </>
         }>
           <label className="block">
@@ -928,11 +976,11 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
               <input className="control pr-9" placeholder="שם, קוד, בעלים או יחידה" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
           </label>
-          <div className="flex flex-wrap items-end gap-2">
+          <div className="sites-filter-summary">
             {statusFilter !== "all" ? <span className="badge badge-info">סטטוס: {statusFilter}</span> : null}
             {healthFilter !== "all" ? <span className="badge badge-info">תקינות: {healthFilter}</span> : null}
             {versionFilter !== "all" ? <span className="badge badge-info">גרסה: {versionFilter}</span> : null}
-            <span className="badge badge-neutral">מציג {formatNumber(sites.length)} מתוך {formatNumber(activeTab === "archive" ? stats.archived : allSites.length - stats.archived)}</span>
+            <span className="filter-result-count">מציג {formatNumber(sites.length)} מתוך {formatNumber(activeTab === "archive" ? stats.archived : allSites.length - stats.archived)}</span>
           </div>
         </FilterBar>
 

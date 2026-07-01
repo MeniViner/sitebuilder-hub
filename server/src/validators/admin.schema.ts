@@ -27,6 +27,39 @@ export const adminTxtRepairSchema = z.object({
   reason: z.string().trim().max(4000).optional()
 });
 
+const browserTxtRepairEvidenceSchema = z.object({
+  targetPath: z.string().min(1),
+  backupPath: z.string().optional(),
+  status: z.enum(["verified", "failed"]).optional(),
+  checkedAt: z.string().optional(),
+  expectedSizeBytes: z.number().optional(),
+  actualSizeBytes: z.number().optional(),
+  expectedSha256: z.string().optional(),
+  actualSha256: z.string().optional(),
+  sizeMatches: z.boolean().optional(),
+  sha256Matches: z.boolean().optional(),
+  httpStatus: z.number().optional(),
+  httpStatusText: z.string().optional(),
+  contentType: z.string().optional(),
+  etag: z.string().optional(),
+  lastModified: z.string().optional(),
+  error: z.string().optional()
+});
+
+export const browserAdminTxtRepairEvidenceSchema = z.object({
+  connectorMode: z.literal("browser-sharepoint"),
+  jobId: z.string().optional(),
+  targetSiteUrl: z.string().optional(),
+  targetPath: z.string().min(1),
+  mergedTxtAdmins: z.array(adminIdentitySchema).default([]),
+  repairEvidence: browserTxtRepairEvidenceSchema.optional(),
+  errors: z.array(z.union([z.string(), z.object({ error: z.string(), status: z.number().optional() })])).optional(),
+  startedAt: z.string().optional(),
+  completedAt: z.string().optional(),
+  finalStatus: z.enum(["success", "failed"]),
+  reason: z.string().trim().max(4000).optional()
+});
+
 const adminSourceNameSchema = z.enum(["txt", "siteCollection", "ownersGroup"]);
 
 const browserAdminSourceStatusSchema = z.object({

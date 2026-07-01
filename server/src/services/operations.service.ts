@@ -9,13 +9,9 @@ import { getActiveDangerousValidationBypasses } from "./dangerousBackupBypass.se
 import { getSharePointOperationInventory } from "./sharepointOperationPolicy.service";
 import { getBuilderBackendRuntimeSettings } from "./builderMongoHealth.service";
 
-const writeBlockers = (sharePoint: ReturnType<typeof getSharePointOperationCapabilities>) => [
-  !sharePoint.writeEnabled ? "sharepoint-write-disabled" : "",
-  sharePoint.writeEnabled && !sharePoint.hasAuthMaterial && !sharePoint.unauthenticatedWriteAllowed
-    ? "sharepoint-auth-material-missing"
-    : "",
-  !sharePoint.digest.canRequest ? "sharepoint-request-digest-not-available" : ""
-].filter(Boolean);
+const writeBlockers = (_sharePoint: ReturnType<typeof getSharePointOperationCapabilities>) => [
+  "server-sharepoint-disabled-use-browser"
+];
 
 export async function getOperationsCapabilities() {
   logger.info("operations", "Building operations capabilities");
@@ -56,55 +52,56 @@ export async function getOperationsCapabilities() {
       gates: dangerousOverrides
     },
     operations: {
-      healthReadOnly: { available: sharePoint.readAvailable, writeRequired: false },
-      backupPlan: { available: sharePoint.readAvailable, writeRequired: false },
-      liveAdminRead: { available: sharePoint.readAvailable, writeRequired: false },
-      adminTxtRepairPlan: { available: sharePoint.readAvailable, writeRequired: false },
+      healthReadOnly: { available: true, writeRequired: false, connectorMode: "browser-sharepoint" },
+      backupPlan: { available: true, writeRequired: false, connectorMode: "browser-sharepoint" },
+      liveAdminRead: { available: true, writeRequired: false, connectorMode: "browser-sharepoint" },
+      adminTxtRepairPlan: { available: true, writeRequired: false, connectorMode: "browser-sharepoint" },
       siteBootstrapPlan: { available: true, writeRequired: false },
       siteProvisionPlan: { available: true, writeRequired: false },
       permissionsSetupPlan: { available: true, writeRequired: false },
       deployPlan: { available: true, writeRequired: false },
-      requestDigest: { available: sharePoint.digest.canRequest, writeRequired: false, reason: sharePoint.digest.reason },
-      backupExecute: { available: sharePoint.writeAvailable, writeRequired: true, reason: sharePoint.reason },
-      adminTxtRepairExecute: { available: sharePoint.writeAvailable, writeRequired: true, reason: sharePoint.reason },
-      siteBootstrap: { available: sharePoint.siteCreation.canCreate, writeRequired: true, reason: sharePoint.siteCreation.reason },
-      siteProvision: { available: sharePoint.writeAvailable, writeRequired: true, reason: sharePoint.reason },
-      permissionsSetup: { available: sharePoint.writeAvailable, writeRequired: true, reason: sharePoint.reason },
-      deployExecute: { available: sharePoint.writeAvailable, writeRequired: true, reason: sharePoint.reason }
+      requestDigest: { available: true, writeRequired: false, connectorMode: "browser-sharepoint", reason: "Digest is requested in the browser." },
+      backupExecute: { available: true, writeRequired: true, connectorMode: "browser-sharepoint", reason: "Backup executes in the connected browser." },
+      restoreExecute: { available: true, writeRequired: true, connectorMode: "browser-sharepoint", reason: "Restore executes in the connected browser and the server records evidence only." },
+      adminTxtRepairExecute: { available: true, writeRequired: true, connectorMode: "browser-sharepoint", reason: "Admin TXT repair executes in the connected browser." },
+      siteBootstrap: { available: true, writeRequired: true, connectorMode: "browser-sharepoint", reason: "Site bootstrap executes in the connected browser." },
+      siteProvision: { available: true, writeRequired: true, connectorMode: "browser-sharepoint", reason: "Site provisioning executes in the connected browser." },
+      permissionsSetup: { available: true, writeRequired: true, connectorMode: "browser-sharepoint", reason: "Permissions setup executes in the connected browser." },
+      deployExecute: { available: true, writeRequired: true, connectorMode: "browser-sharepoint", reason: "Deploy executes in the connected browser." }
     },
     readiness: {
       readOnlyPreflight: {
-        ready: sharePoint.readAvailable,
+        ready: true,
         blockers: [] as string[]
       },
       writePreflight: {
-        ready: sharePoint.writeAvailable && sharePoint.digest.canRequest,
-        blockers
+        ready: true,
+        blockers: [] as string[]
       },
       initProvision: {
         readyForPlan: true,
-        readyForExecution: sharePoint.writeAvailable && sharePoint.digest.canRequest,
-        blockers
+        readyForExecution: true,
+        blockers: [] as string[]
       },
       siteBootstrap: {
         readyForPlan: true,
-        readyForExecution: sharePoint.siteCreation.canCreate && sharePoint.digest.canRequest,
-        blockers
+        readyForExecution: true,
+        blockers: [] as string[]
       },
       backup: {
-        readyForPlan: sharePoint.readAvailable,
-        readyForExecution: sharePoint.writeAvailable && sharePoint.digest.canRequest,
-        blockers
+        readyForPlan: true,
+        readyForExecution: true,
+        blockers: [] as string[]
       },
       adminTxtRepair: {
-        readyForPlan: sharePoint.readAvailable,
-        readyForExecution: sharePoint.writeAvailable && sharePoint.digest.canRequest,
-        blockers
+        readyForPlan: true,
+        readyForExecution: true,
+        blockers: [] as string[]
       },
       deploy: {
         readyForPlan: true,
-        readyForExecution: sharePoint.writeAvailable && sharePoint.digest.canRequest,
-        blockers
+        readyForExecution: true,
+        blockers: [] as string[]
       }
     }
   };
@@ -177,7 +174,7 @@ export async function getSiteOperationsSummary(siteId: string) {
         blockers: capabilities.readiness.siteBootstrap.blockers
       },
       backup: {
-        readyForPlan: capabilities.sharePoint.readAvailable,
+        readyForPlan: true,
         readyForExecution: isMongoSite
           ? site.health?.mongoBackupsOk === true
           : writeReady && site.health?.txtFilesExist !== false,
@@ -193,7 +190,7 @@ export async function getSiteOperationsSummary(siteId: string) {
         blockers: capabilities.readiness.deploy.blockers
       },
       adminTxtRepair: {
-        readyForPlan: capabilities.sharePoint.readAvailable,
+        readyForPlan: true,
         readyForExecution: writeReady,
         blockers: capabilities.readiness.adminTxtRepair.blockers
       }

@@ -98,7 +98,7 @@ function SidebarContent({
               <MetadataOnlyBadge mode="readonly" />
               <MetadataOnlyBadge mode="notConnected" />
             </div>
-            <p className="mt-2 text-xs muted">פעולות כתיבה ל־SharePoint מוצגות רק כאשר השרת מדווח שהיכולת מוגדרת.</p>
+            <p className="mt-2 text-xs muted">פעולות SharePoint רצות דרך הדפדפן המחובר; השרת שומר סטטוס ו־Evidence.</p>
           </>
         ) : (
           <div className="sidebar-status-dots" aria-hidden="true">

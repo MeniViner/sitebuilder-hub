@@ -1,22 +1,10 @@
 import { Types } from "mongoose";
 import { Site } from "../models/Site";
 import { SiteAdminSnapshot } from "../models/SiteAdminSnapshot";
-import { createJob } from "./jobs.service";
-import type { LiveAdminSourcesResult } from "./liveAdminSources.service";
+import { createJob, setJobEvidence, setJobFailed, setJobResult, setJobStatus, setJobSucceeded, setJobTargetPaths } from "./jobs.service";
 import { logger } from "../utils/logger";
 import { resolveSiteBuilderPaths } from "../utils/sitebuilderPaths";
-import {
-  addSharePointUserToGroup,
-  assertSharePointWriteAvailable,
-  ensureSharePointUser,
-  getAssociatedOwnerGroupId,
-  getRequestDigest,
-  removeSharePointUserFromGroup,
-  setSharePointSiteCollectionAdmin,
-  writeSharePointTextFile
-} from "./sharepointOperationClient";
-import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
-import { shouldBlockBackendSharePointByDefault } from "./sharepointOperationPolicy.service";
+import { getBrowserRequiredJobMessage, getSharePointOperationPolicy } from "./sharepointOperationPolicy.service";
 
 export type AdminIdentity = {
   displayName?: string;
@@ -73,6 +61,20 @@ type BrowserAdminEvidenceInput = {
   sourceStatus: AdminSourceStatus[];
   warnings?: string[];
   evidence?: Record<string, unknown>;
+};
+
+type BrowserAdminTxtRepairEvidenceInput = {
+  connectorMode: "browser-sharepoint";
+  jobId?: string;
+  targetSiteUrl?: string;
+  targetPath: string;
+  mergedTxtAdmins: AdminIdentity[];
+  repairEvidence?: Record<string, any>;
+  errors?: unknown[];
+  startedAt?: string;
+  completedAt?: string;
+  finalStatus: "success" | "failed";
+  reason?: string;
 };
 
 export type AdminTxtRepairPlan = {
@@ -212,39 +214,6 @@ const resolveAdminForRemoval = (site: any, source: AdminSource | undefined, admi
   };
 };
 
-const verifySharePointAdminMembership = (
-  liveRead: LiveAdminSourcesResult,
-  source: SharePointAdminSource,
-  expectedAdmin: AdminIdentity,
-  operation: "add" | "remove"
-) => {
-  const sourceStatus = liveRead.sourceStatus.find((item) => item.source === source);
-  if (sourceStatus?.ok !== true) throw new Error(`admin-${source}-verification-source-failed`);
-
-  const tokens = new Set(adminIdentityTokens(expectedAdmin));
-  const rows = source === "siteCollection" ? liveRead.siteCollectionAdmins : liveRead.ownersGroupAdmins;
-  const present = rows.some((admin) => adminMatchesAnyToken(admin, tokens));
-
-  if (operation === "add" && !present) throw new Error(`admin-${source}-add-verification-failed`);
-  if (operation === "remove" && present) throw new Error(`admin-${source}-remove-verification-failed`);
-};
-
-async function refreshLiveAdminsAfterSharePointWrite(params: {
-  siteId: string;
-  source: SharePointAdminSource;
-  expectedAdmin: AdminIdentity;
-  operation: "add" | "remove";
-  capturedBy?: string;
-}) {
-  const readLiveAdminSources = await getLiveAdminReader();
-  const liveRead = await readLiveAdminSources(params.siteId, {
-    persist: true,
-    capturedBy: params.capturedBy || "system"
-  });
-  verifySharePointAdminMembership(liveRead, params.source, params.expectedAdmin, params.operation);
-  return liveRead;
-}
-
 const dedupeAdminsForRepair = (admins: AdminIdentity[]) => {
   const seen = new Set<string>();
   const result: AdminIdentity[] = [];
@@ -257,29 +226,6 @@ const dedupeAdminsForRepair = (admins: AdminIdentity[]) => {
   }
 
   return result;
-};
-
-const findAdminsByKeys = (keys: string[], ...sources: AdminIdentity[][]) => {
-  const wanted = new Set(keys);
-  const found: AdminIdentity[] = [];
-  const seen = new Set<string>();
-
-  for (const admin of sources.flat().map(normalizeRepairAdmin).filter(isMeaningfulAdmin)) {
-    const key = normalizeAdminKey(admin);
-    if (!wanted.has(key) || seen.has(key)) continue;
-    seen.add(key);
-    found.push(admin);
-  }
-
-  return found;
-};
-
-const sourceCount = (status: AdminSourceStatus[], source: AdminSourceStatus["source"], fallback: number) =>
-  status.find((item) => item.source === source)?.count ?? fallback;
-
-const getLiveAdminReader = async () => {
-  const mod = await import("./liveAdminSources.service");
-  return mod.readLiveAdminSources;
 };
 
 const browserAdminSources = ["txt", "siteCollection", "ownersGroup"] as const;
@@ -343,6 +289,74 @@ const toSourceCountMap = (sourceStatus: AdminSourceStatus[]) =>
     acc[source.source] = source.ok ? source.count ?? source.normalizedCount ?? 0 : null;
     return acc;
   }, {});
+
+const mapMissingAdminTokens = (admins: AdminIdentity[], tokens: string[]) => {
+  const tokenSet = new Set(tokens);
+  return admins.map(normalizeRepairAdmin).filter((admin) => adminMatchesAnyToken(admin, tokenSet));
+};
+
+const buildTxtRepairPlanFromSite = (site: any, options: AdminTxtRepairOptions = {}): AdminTxtRepairPlan => {
+  const paths = buildPathsForSite(site);
+  const txtAdmins = dedupeAdminsForRepair(site.txtAdmins || []);
+  const siteCollectionAdmins = dedupeAdminsForRepair(site.siteCollectionAdmins || []);
+  const ownersGroupAdmins = dedupeAdminsForRepair(site.ownersGroupAdmins || []);
+  const diff = buildAdminDiff(txtAdmins, siteCollectionAdmins, ownersGroupAdmins);
+  const hostingAdmins = buildUniqueAdmins(siteCollectionAdmins, ownersGroupAdmins);
+  const missingAdmins = mapMissingAdminTokens(hostingAdmins, diff.missingInTxt);
+  const mergedTxtAdmins = buildUniqueAdmins(txtAdmins, missingAdmins);
+  const additions = mergedTxtAdmins.filter((admin) => !adminMatchesAnyToken(admin, new Set(txtAdmins.flatMap(adminIdentityTokens))));
+  const unchanged = mergedTxtAdmins.filter((admin) => adminMatchesAnyToken(admin, new Set(txtAdmins.flatMap(adminIdentityTokens))));
+  const sourceStatus = (site.adminSourceStatus || []) as AdminSourceStatus[];
+  const capturedAt = dateFromEvidence(site.lastAdminLiveReadAt?.toISOString?.(), site.lastAdminSyncAt?.toISOString?.());
+
+  return {
+    operation: "admin-txt-repair",
+    generatedAt: new Date().toISOString(),
+    siteId: getSiteId(site),
+    siteCode: site.siteCode,
+    siteDisplayName: site.displayName,
+    targetPath: paths.txtFiles.users,
+    sourceStatus,
+    sourceCounts: {
+      txt: txtAdmins.length,
+      siteCollection: siteCollectionAdmins.length,
+      ownersGroup: ownersGroupAdmins.length
+    },
+    missingInTxt: diff.missingInTxt,
+    missingAdmins,
+    mergedTxtAdmins,
+    additions,
+    toAdd: additions,
+    unchanged,
+    diff: {
+      additions,
+      missingInTxt: missingAdmins,
+      removals: [],
+      unchanged
+    },
+    summary: {
+      readyForRepair: missingAdmins.length > 0,
+      targetPath: paths.txtFiles.users,
+      currentTxtAdminsCount: txtAdmins.length,
+      targetTxtAdminsCount: mergedTxtAdmins.length,
+      missingInTxtCount: diff.missingInTxt.length,
+      additionsCount: additions.length,
+      removalsCount: 0,
+      unchangedCount: unchanged.length
+    },
+    liveRead: {
+      capturedAt: capturedAt.toISOString(),
+      adminsCount: buildUniqueAdmins(txtAdmins, siteCollectionAdmins, ownersGroupAdmins).length,
+      sourceStatus,
+      adminDifferences: diff
+    },
+    notes: [
+      "תוכנית זו נבנתה מ־browser live-read שנשמר ב־Mongo.",
+      "הכתיבה עצמה ל־users_data.txt תתבצע בדפדפן בלבד.",
+      options.reason ? `Reason: ${options.reason}` : ""
+    ].filter(Boolean)
+  };
+};
 
 export async function recordBrowserAdminLiveReadEvidence(params: {
   siteId: string;
@@ -517,80 +531,13 @@ export async function buildAdminTxtRepairPlan(siteId: string, options: AdminTxtR
     throw new Error("mongo-admin-txt-repair-not-applicable");
   }
 
-  const paths = buildPathsForSite(site);
-  const readLiveAdminSources = await getLiveAdminReader();
-  const liveRead = await readLiveAdminSources(siteId, {
-    persist: false,
-    capturedBy: options.capturedBy || "system"
-  });
-
-  const sourceStatus = liveRead.sourceStatus as AdminSourceStatus[];
-  const missingInTxt = [...new Set(liveRead.adminDifferences.missingInTxt || [])];
-  const missingAdmins = findAdminsByKeys(missingInTxt, liveRead.siteCollectionAdmins, liveRead.ownersGroupAdmins);
-  const mergedTxtAdmins = dedupeAdminsForRepair([...(liveRead.txtAdmins || []), ...missingAdmins]);
-  const txtOk = sourceStatus.find((source) => source.source === "txt")?.ok === true;
-  const liveSourceOk = sourceStatus.some((source) => source.source !== "txt" && source.ok);
-  const readyForRepair = txtOk && liveSourceOk && missingInTxt.length > 0 && missingAdmins.length > 0;
-  const notes = [
-    txtOk ? "" : "TXT admin source could not be read.",
-    liveSourceOk ? "" : "At least one live SharePoint admin source must be readable before TXT repair.",
-    missingInTxt.length > 0 ? "" : "No admins are missing from TXT.",
-    missingInTxt.length === missingAdmins.length ? "" : "Some missing TXT keys could not be resolved to admin identities."
-  ].filter(Boolean);
-
-  const plan: AdminTxtRepairPlan = {
-    operation: "admin-txt-repair",
-    generatedAt: new Date().toISOString(),
+  const plan = buildTxtRepairPlanFromSite(site, options);
+  logger.info("admins", "TXT admin repair plan built for browser execution", {
     siteId: getSiteId(site),
     siteCode: site.siteCode,
-    siteDisplayName: site.displayName,
-    targetPath: paths.txtFiles.users,
-    sourceStatus,
-    sourceCounts: {
-      txt: sourceCount(sourceStatus, "txt", liveRead.txtAdmins.length),
-      siteCollection: sourceCount(sourceStatus, "siteCollection", liveRead.siteCollectionAdmins.length),
-      ownersGroup: sourceCount(sourceStatus, "ownersGroup", liveRead.ownersGroupAdmins.length)
-    },
-    missingInTxt,
-    missingAdmins,
-    mergedTxtAdmins,
-    additions: missingAdmins,
-    toAdd: missingAdmins,
-    unchanged: dedupeAdminsForRepair(liveRead.txtAdmins || []),
-    diff: {
-      additions: missingAdmins,
-      missingInTxt: missingAdmins,
-      removals: [],
-      unchanged: dedupeAdminsForRepair(liveRead.txtAdmins || [])
-    },
-    summary: {
-      readyForRepair,
-      targetPath: paths.txtFiles.users,
-      currentTxtAdminsCount: liveRead.txtAdmins.length,
-      targetTxtAdminsCount: mergedTxtAdmins.length,
-      missingInTxtCount: missingInTxt.length,
-      additionsCount: missingAdmins.length,
-      removalsCount: 0,
-      unchangedCount: liveRead.txtAdmins.length
-    },
-    liveRead: {
-      capturedAt: liveRead.capturedAt,
-      adminsCount: liveRead.adminsCount,
-      sourceStatus,
-      adminDifferences: liveRead.adminDifferences
-    },
-    notes
-  };
-
-  logger.info("admins", "TXT admin repair plan built", {
-    siteId: plan.siteId,
-    siteCode: plan.siteCode,
-    targetPath: plan.targetPath,
-    readyForRepair,
-    missingInTxtCount: missingInTxt.length,
-    additionsCount: missingAdmins.length
+    missingInTxtCount: plan.summary.missingInTxtCount,
+    targetTxtAdminsCount: plan.summary.targetTxtAdminsCount
   });
-
   return plan;
 }
 
@@ -608,109 +555,41 @@ export async function enqueueAdminTxtRepair(params: {
     reason
   });
 
-  if (shouldBlockBackendSharePointByDefault("admin-txt-repair")) {
-    throw new Error("browser-sharepoint-operation-not-implemented");
-  }
-  assertSharePointWriteAvailable();
-
-  const plan = await buildAdminTxtRepairPlan(params.siteId, {
-    capturedBy: requestedBy,
-    reason
-  });
-
-  if (!plan.summary.readyForRepair) {
-    const errorCode = plan.missingInTxt.length === 0 ? "admin-txt-repair-not-needed" : "admin-txt-repair-plan-not-ready";
-    logger.warn("admins", "TXT admin repair queue blocked by plan readiness", {
-      siteId: plan.siteId,
-      siteCode: plan.siteCode,
-      errorCode,
-      notes: plan.notes
-    });
-    throw new Error(errorCode);
-  }
-
+  const site = await Site.findById(params.siteId);
+  if (!site) throw new Error("site-not-found");
+  if (site.storageBackend === "mongo") throw new Error("mongo-admin-txt-repair-not-applicable");
+  const plan = buildTxtRepairPlanFromSite(site, { capturedBy: requestedBy, reason });
+  const policy = getSharePointOperationPolicy("admin-txt-repair");
   const job = await createJob({
     type: "repair",
-    siteId: plan.siteId,
+    siteId: site._id.toString(),
     createdBy: requestedBy,
-    requiresApproval: true,
-    approvalSummary: {
-      title: `Repair ${plan.siteDisplayName} admin TXT source`,
-      operation: "admin-txt-repair",
-      siteId: plan.siteId,
-      siteCode: plan.siteCode,
-      targetPath: plan.targetPath,
-      missingInTxtCount: plan.missingInTxt.length,
-      requestedBy,
-      reason
-    },
-    approvalSnapshot: {
-      operation: "admin-txt-repair",
-      site: {
-        id: plan.siteId,
-        siteCode: plan.siteCode,
-        displayName: plan.siteDisplayName,
-        sharePointSiteUrl: (await Site.findById(plan.siteId))?.sharePointSiteUrl || ""
-      },
-      targetPath: plan.targetPath,
-      missingInTxt: plan.missingInTxt,
-      missingAdmins: plan.missingAdmins,
-      mergedTxtAdmins: plan.mergedTxtAdmins,
-      liveRead: {
-        capturedAt: plan.liveRead.capturedAt,
-        adminsCount: plan.liveRead.adminsCount,
-        sourceStatus: plan.liveRead.sourceStatus,
-        adminDifferences: plan.liveRead.adminDifferences,
-        sourceCounts: plan.sourceCounts
-      },
-      summary: plan.summary,
-      writeOperations: [
-        "Overwrite users_data.txt with the merged TXT, Site Collection admin, and Owners Group admin list",
-        "Read live admin sources after the write and persist the refreshed snapshot"
-      ],
-      risks: [
-        "Overwrites the TXT admin source file.",
-        "Does not change Site Collection Admins or Owners Group membership."
-      ],
-      requestedBy,
-      reason
-    },
+    executionMode: "browser-required",
+    connectorMode: "browser-sharepoint",
+    operationPolicy: policy.operation,
+    connectorStatusLabel: policy.statusLabelHe,
+    connectorBlocker: policy.blockerHe || getBrowserRequiredJobMessage("admin-txt-repair"),
     payload: {
-      operation: "admin-txt-repair",
       repairType: "admin-txt",
-      targetPath: plan.targetPath,
-      missingInTxt: plan.missingInTxt,
-      missingAdmins: plan.missingAdmins,
-      mergedTxtAdmins: plan.mergedTxtAdmins,
-      reason
+      reason,
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required",
+      browserOperationPlan: plan
     }
   });
 
-  logger.info("admins", "TXT admin repair job queued", {
-    siteId: plan.siteId,
-    siteCode: plan.siteCode,
+  logger.info("admins", "TXT admin repair job queued for browser execution", {
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
     jobId: job._id.toString(),
-    targetPath: plan.targetPath,
-    missingInTxtCount: plan.missingInTxt.length
+    targetPath: plan.targetPath
   });
-
-  logger.info("jobs", "Admin TXT repair job created", {
-    jobId: job._id.toString(),
-    siteId: plan.siteId,
-    type: "repair",
-    operation: "admin-txt-repair"
-  });
-
-  const requiresApproval = Boolean(job.requiresApproval || job.status === "awaiting-approval");
-
   return {
     job,
     plan,
-    requiresApproval,
-    approvalStatus: requiresApproval ? "pending" : "not-required",
-    message: requiresApproval
-      ? "TXT admin repair job queued and requires approval because advanced approvals are enabled"
-      : "TXT admin repair job queued in owner-direct mode"
+    requiresApproval: job.requiresApproval,
+    approvalStatus: job.requiresApproval ? "pending" : "browser-required",
+    message: "תיקון users_data.txt ממתין להרצה דרך הדפדפן."
   };
 }
 
@@ -722,7 +601,7 @@ export async function executeAdminTxtRepair(params: {
   missingInTxt?: string[];
   mergedTxtAdmins?: AdminIdentity[];
   reason?: string;
-}) {
+}): Promise<any> {
   const requestedBy = params.requestedBy || "system";
   logger.info("admins", "Executing approved TXT admin repair", {
     siteId: params.siteId,
@@ -731,103 +610,132 @@ export async function executeAdminTxtRepair(params: {
     targetPath: params.targetPath
   });
 
-  assertSharePointWriteAvailable();
-
   const site = await Site.findById(params.siteId);
   if (!site) throw new Error("site-not-found");
+  throw new Error("browser-sharepoint-required");
+}
+
+export async function recordBrowserAdminTxtRepairEvidence(params: {
+  siteId: string;
+  actor?: string;
+  input: BrowserAdminTxtRepairEvidenceInput;
+}) {
+  const actor = params.actor || "browser-sharepoint";
+  const input = params.input;
+  if (input.connectorMode !== "browser-sharepoint") throw new Error("browser-admin-txt-repair-connector-mode-required");
+  const site = await Site.findById(params.siteId);
+  if (!site) throw new Error("site-not-found");
+  if (site.storageBackend === "mongo") throw new Error("mongo-admin-txt-repair-not-applicable");
 
   const paths = buildPathsForSite(site);
-  const targetPath = params.targetPath || paths.txtFiles.users;
-  const missingInTxt = [...new Set(params.missingInTxt || [])];
-  const mergedTxtAdmins = dedupeAdminsForRepair(params.mergedTxtAdmins || []);
+  if (input.targetPath !== paths.txtFiles.users) throw new Error("browser-admin-txt-repair-target-mismatch");
 
-  if (mergedTxtAdmins.length === 0 && !isDangerousValidationBypassEnabled("admin-repair-gates")) {
-    logger.warn("admins", "TXT admin repair execution missing approved merged payload", {
-      siteId: params.siteId,
-      jobId: params.jobId
-    });
-    throw new Error("admin-txt-repair-plan-not-ready");
+  const checkedAt = dateFromEvidence(input.completedAt);
+  const mergedTxtAdmins = dedupeAdminsForRepair(input.mergedTxtAdmins || []);
+  const success = input.finalStatus === "success" && input.repairEvidence?.status !== "failed";
+  const errorMessage = success
+    ? ""
+    : Array.isArray(input.errors)
+      ? input.errors.map((item) => typeof item === "string" ? item : String((item as any)?.error || "")).filter(Boolean).join("; ").slice(0, 1000)
+      : input.repairEvidence?.error || "browser-admin-txt-repair-failed";
+
+  if (success) {
+    site.txtAdmins = mergedTxtAdmins as any;
   }
-
-  const text = JSON.stringify(mergedTxtAdmins, null, 2);
-  await writeSharePointTextFile(paths, targetPath, text);
-
-  const readLiveAdminSources = await getLiveAdminReader();
-  const liveRead = await readLiveAdminSources(params.siteId, {
-    persist: true,
-    jobId: params.jobId,
-    capturedBy: requestedBy
-  });
-
-  const sourceStatus = liveRead.sourceStatus as AdminSourceStatus[];
-  const txtSource = sourceStatus.find((source) => source.source === "txt");
-  const stillMissingApprovedKeys = missingInTxt.filter((key) => liveRead.adminDifferences.missingInTxt.includes(key));
-  const sourceCounts = {
-    txt: sourceCount(sourceStatus, "txt", liveRead.txtAdmins.length),
-    siteCollection: sourceCount(sourceStatus, "siteCollection", liveRead.siteCollectionAdmins.length),
-    ownersGroup: sourceCount(sourceStatus, "ownersGroup", liveRead.ownersGroupAdmins.length)
-  };
-  const evidence = {
-    write: {
-      targetPath,
-      repairedMissingInTxtCount: missingInTxt.length,
-      writtenAdminsCount: mergedTxtAdmins.length,
-      sizeBytes: new TextEncoder().encode(text).length
+  const txtAdmins = success ? mergedTxtAdmins : dedupeAdminsForRepair(site.txtAdmins || []);
+  const siteCollectionAdmins = dedupeAdminsForRepair(site.siteCollectionAdmins || []);
+  const ownersGroupAdmins = dedupeAdminsForRepair(site.ownersGroupAdmins || []);
+  const uniqueAdmins = buildUniqueAdmins(txtAdmins, siteCollectionAdmins, ownersGroupAdmins);
+  const diff = buildAdminDiff(txtAdmins, siteCollectionAdmins, ownersGroupAdmins);
+  const sourceStatus: AdminSourceStatus[] = [
+    {
+      source: "txt",
+      status: success ? "success" : "failed",
+      ok: success,
+      count: success ? txtAdmins.length : undefined,
+      rawCount: txtAdmins.length,
+      normalizedCount: txtAdmins.length,
+      sourceUrl: input.targetPath,
+      readAt: checkedAt.toISOString(),
+      errorMessage
     },
-    liveRead: {
-      capturedAt: liveRead.capturedAt,
-      adminsCount: liveRead.adminsCount,
-      sourceStatus,
-      adminDifferences: liveRead.adminDifferences,
-      sourceCounts
-    },
-    verification: {
-      txtReadBackOk: txtSource?.ok === true,
-      missingInTxtAfterRepair: liveRead.adminDifferences.missingInTxt,
-      stillMissingApprovedKeys
+    ...(((site as any).adminSourceStatus || []) as AdminSourceStatus[]).filter((source) => source.source !== "txt")
+  ];
+
+  site.adminDifferences = diff as any;
+  site.adminsCount = uniqueAdmins.length;
+  site.lastAdminSyncAt = checkedAt;
+  site.adminSyncStatus = success ? "succeeded" : "failed";
+  site.lastError = errorMessage;
+  (site as any).adminSourceStatus = sourceStatus;
+  (site as any).adminSourceCounts = toSourceCountMap(sourceStatus);
+  await site.save();
+
+  const snapshot = await SiteAdminSnapshot.create({
+    siteId: site._id,
+    jobId: input.jobId && Types.ObjectId.isValid(input.jobId) ? new Types.ObjectId(input.jobId) : undefined,
+    capturedBy: actor,
+    capturedAt: checkedAt,
+    connectorMode: "browser-sharepoint",
+    targetSiteUrl: input.targetSiteUrl || site.sharePointSiteUrl,
+    txtAdmins,
+    siteCollectionAdmins,
+    ownersGroupAdmins,
+    uniqueAdmins,
+    syncStatus: success ? "succeeded" : "failed",
+    syncError: errorMessage,
+    adminDifferences: diff,
+    sourceStatus,
+    rawCounts: { txt: txtAdmins.length, siteCollection: siteCollectionAdmins.length, ownersGroup: ownersGroupAdmins.length },
+    normalizedCounts: { txt: txtAdmins.length, siteCollection: siteCollectionAdmins.length, ownersGroup: ownersGroupAdmins.length },
+    warnings: [],
+    evidence: {
+      connectorMode: "browser-sharepoint",
+      operation: "admin-txt-repair",
+      targetPath: input.targetPath,
+      repairEvidence: input.repairEvidence || {},
+      reason: input.reason || ""
     }
-  };
-
-  if ((txtSource?.ok !== true || stillMissingApprovedKeys.length > 0) && !isDangerousValidationBypassEnabled("admin-repair-gates")) {
-    logger.error("admins", "TXT admin repair verification failed", {
-      siteId: params.siteId,
-      jobId: params.jobId,
-      txtReadBackOk: txtSource?.ok === true,
-      stillMissingApprovedKeys
-    });
-    throw new Error("admin-txt-repair-verification-failed");
-  }
-  if (txtSource?.ok !== true || stillMissingApprovedKeys.length > 0) {
-    logger.warn("admins", "TXT admin repair verification gate bypassed by dangerous env", {
-      siteId: params.siteId,
-      jobId: params.jobId,
-      envVar: getDangerousValidationBypassEnvVar("admin-repair-gates"),
-      txtReadBackOk: txtSource?.ok === true,
-      stillMissingApprovedKeys
-    });
-  }
-
-  const result = {
-    siteId: getSiteId(site),
-    siteCode: site.siteCode,
-    targetPath,
-    repairedMissingInTxtCount: missingInTxt.length,
-    adminsCount: liveRead.adminsCount,
-    adminDifferences: liveRead.adminDifferences,
-    sourceCounts,
-    capturedAt: liveRead.capturedAt
-  };
-
-  logger.info("admins", "TXT admin repair executed and verified", {
-    siteId: result.siteId,
-    siteCode: result.siteCode,
-    jobId: params.jobId,
-    targetPath,
-    repairedMissingInTxtCount: missingInTxt.length,
-    adminsCount: liveRead.adminsCount
   });
 
-  return { ...result, evidence };
+  const jobId = String(input.jobId || "").trim();
+  if (jobId) {
+    await setJobStatus(jobId, "browser-in-progress", { progressPercent: 80, message: "Browser admin TXT repair evidence received" });
+    await setJobTargetPaths(jobId, [input.targetPath], "Browser admin TXT repair target path recorded");
+    await setJobEvidence(jobId, input.repairEvidence || {}, "Browser admin TXT repair evidence recorded");
+    await setJobResult(jobId, {
+      connectorMode: "browser-sharepoint",
+      targetPath: input.targetPath,
+      status: success ? "succeeded" : "failed",
+      txtAdminsCount: txtAdmins.length,
+      snapshotId: snapshot._id.toString()
+    }, "Browser admin TXT repair result recorded");
+    if (success) await setJobSucceeded(jobId, "Browser admin TXT repair completed and verified");
+    else await setJobFailed(jobId, errorMessage);
+  }
+
+  logger[success ? "info" : "warn"]("admins", "Browser admin TXT repair evidence recorded", {
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    targetPath: input.targetPath,
+    success,
+    txtAdminsCount: txtAdmins.length
+  });
+
+  return {
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    connectorMode: "browser-sharepoint" as const,
+    targetPath: input.targetPath,
+    summary: {
+      status: success ? "succeeded" : "failed",
+      txtAdminsCount: txtAdmins.length,
+      adminsCount: uniqueAdmins.length,
+      adminDifferences: diff,
+      snapshotId: snapshot._id.toString()
+    },
+    snapshot
+  };
 }
 
 export async function getSiteAdmins(siteId: string) {
@@ -889,15 +797,28 @@ export async function enqueueAdminSync(params: {
   });
   const site = await Site.findById(params.siteId);
   if (!site) throw new Error("site-not-found");
-  if (shouldBlockBackendSharePointByDefault("admin-sync")) {
-    throw new Error("admin-sync-backend-service-auth-or-browser-required");
-  }
-
+  const policy = getSharePointOperationPolicy("admin-sync");
   const job = await createJob({
     type: "admin-sync",
     siteId: site._id.toString(),
     createdBy: params.createdBy,
-    payload: { mode: params.mode }
+    executionMode: "browser-required",
+    connectorMode: "browser-sharepoint",
+    operationPolicy: policy.operation,
+    connectorStatusLabel: policy.statusLabelHe,
+    connectorBlocker: policy.blockerHe || getBrowserRequiredJobMessage("admin-sync"),
+    payload: {
+      mode: params.mode,
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required",
+      browserOperationPlan: {
+        operation: "admin-live-read",
+        siteId: site._id.toString(),
+        siteCode: site.siteCode,
+        targetSiteUrl: site.sharePointSiteUrl,
+        message: "קריאת מנהלים חיה מתבצעת דרך הדפדפן; השרת שומר Evidence בלבד."
+      }
+    }
   });
 
   if (params.mode === "sync") {
@@ -943,53 +864,7 @@ export async function addSiteAdmin(params: {
   };
 
   if (sharePointAdminSources.has(source)) {
-    throw new Error("backend-sharepoint-service-auth-required");
-  }
-
-  if (sharePointAdminSources.has(source)) {
-    assertSharePointWriteAvailable();
-    const loginName = resolveSharePointLoginName(normalized);
-    if (!loginName) throw new Error("sharepoint-admin-login-required");
-
-    const paths = buildPathsForSite(site);
-    const digest = await getRequestDigest(paths);
-    const ensuredUser = await ensureSharePointUser(paths, loginName, digest);
-    const expectedAdmin = {
-      displayName: normalized.displayName || ensuredUser.displayName,
-      personalNumber: normalized.personalNumber,
-      email: normalized.email || ensuredUser.email,
-      loginName: ensuredUser.loginName || normalized.loginName || loginName
-    };
-
-    logger.info("admins", `Adding admin to ${sourceLabel(source as SharePointAdminSource)} in SharePoint`, {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      source,
-      userId: ensuredUser.id,
-      hasLoginName: Boolean(expectedAdmin.loginName)
-    });
-
-    if (source === "siteCollection") {
-      await setSharePointSiteCollectionAdmin(paths, ensuredUser, true, digest);
-    } else {
-      const group = await getAssociatedOwnerGroupId(paths);
-      await addSharePointUserToGroup(paths, group.id, ensuredUser.loginName, digest);
-    }
-
-    const liveRead = await refreshLiveAdminsAfterSharePointWrite({
-      siteId: site._id.toString(),
-      source: source as SharePointAdminSource,
-      expectedAdmin,
-      operation: "add"
-    });
-
-    logger.info("admins", "SharePoint admin add verified and persisted to Hub snapshot", {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      source,
-      adminsCount: liveRead.adminsCount
-    });
-    return await Site.findById(site._id) || site;
+    throw new Error("browser-sharepoint-required");
   }
 
   const key = normalizeAdminKey(normalized);
@@ -1032,50 +907,7 @@ export async function removeSiteAdmin(params: {
 
   const source = params.source as AdminSource | undefined;
   if (source && sharePointAdminSources.has(source)) {
-    throw new Error("backend-sharepoint-service-auth-required");
-  }
-
-  if (source && sharePointAdminSources.has(source)) {
-    assertSharePointWriteAvailable();
-    const targetAdmin = resolveAdminForRemoval(site, source, params.adminId);
-    const loginName = resolveSharePointLoginName(targetAdmin);
-    if (!loginName) throw new Error("sharepoint-admin-login-required");
-
-    const paths = buildPathsForSite(site);
-    const digest = await getRequestDigest(paths);
-    const expectedAdmin = {
-      ...targetAdmin,
-      loginName
-    };
-
-    logger.warn("admins", `Removing admin from ${sourceLabel(source as SharePointAdminSource)} in SharePoint`, {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      source,
-      hasLoginName: Boolean(loginName)
-    });
-
-    if (source === "siteCollection") {
-      await setSharePointSiteCollectionAdmin(paths, loginName, false, digest);
-    } else {
-      const group = await getAssociatedOwnerGroupId(paths);
-      await removeSharePointUserFromGroup(paths, group.id, loginName, digest);
-    }
-
-    const liveRead = await refreshLiveAdminsAfterSharePointWrite({
-      siteId: site._id.toString(),
-      source: source as SharePointAdminSource,
-      expectedAdmin,
-      operation: "remove"
-    });
-
-    logger.info("admins", "SharePoint admin removal verified and persisted to Hub snapshot", {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      source,
-      adminsCount: liveRead.adminsCount
-    });
-    return await Site.findById(site._id) || site;
+    throw new Error("browser-sharepoint-required");
   }
 
   const token = String(params.adminId || "").trim().toLowerCase();

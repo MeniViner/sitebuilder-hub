@@ -18,7 +18,7 @@ import type {
 import type { Site, SiteHealth } from "../types/site";
 import { resolveSiteBuilderPaths, type SiteBuilderResolvedPaths } from "./sitebuilderPaths";
 
-export type SharePointConnectorMode = "browser-sharepoint" | "backend-sharepoint";
+export type SharePointConnectorMode = "browser-sharepoint";
 
 export type BrowserSharePointProbe = {
   connectorMode: "browser-sharepoint";
@@ -1481,7 +1481,7 @@ export async function runBrowserSharePointDiagnostics(site: Site): Promise<Brows
       authenticated: browserHealthy,
       digestWorks,
       writeVerified: digestWorks,
-      preferredConnectorMode: digestWorks ? "browser-sharepoint" : "backend-sharepoint",
+      preferredConnectorMode: "browser-sharepoint",
       failedUrl: failed?.url,
       failedStatus: failed?.status,
       humanExplanation: digestWorks
@@ -1591,19 +1591,17 @@ export function combineSharePointConnectorDiagnostics(
   backend?: SharePointDiagnosticsCheck | null
 ): CombinedSharePointConnectorDiagnostics {
   const browserHealthy = Boolean(browser?.overall?.digestWorks || browser?.currentUser?.ok || browser?.readTest?.ok);
-  const backendHealthy = Boolean(backend?.overall?.digestWorks || backend?.currentUser?.ok || backend?.readTest?.ok || backend?.digestTest?.ok);
+  const backendHealthy = false;
   const backendFailedStatus = backend?.overall?.failedStatus || Number(backend?.digestTest?.status || backend?.currentUser?.status || backend?.readTest?.status || 0);
   const backendBlockedBy401 = backendFailedStatus === 401;
-  const digestWorks = Boolean(browser?.overall?.digestWorks || backend?.overall?.digestWorks);
-  const preferredConnectorMode: SharePointConnectorMode = browser?.overall?.digestWorks ? "browser-sharepoint" : "backend-sharepoint";
+  const digestWorks = Boolean(browser?.overall?.digestWorks);
+  const preferredConnectorMode: SharePointConnectorMode = "browser-sharepoint";
   const globalBlocked = !browserHealthy && !backendHealthy;
   const message = browser?.overall?.digestWorks && backendBlockedBy401
-    ? "הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. השרת המקומי לא מחובר ל־SharePoint. במצב SharePoint-hosted המערכת תשתמש בחיבור דרך הדפדפן."
+    ? "הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. אין SharePoint בשרת; המערכת תשתמש בחיבור דרך הדפדפן."
     : browser?.overall?.digestWorks
       ? "הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. המערכת תעדיף browser-sharepoint עבור אתר היעד."
-      : backendHealthy
-        ? "חיבור השרת ל־SharePoint תקין. אפשר להשתמש ב־backend-sharepoint."
-        : "לא נמצא חיבור SharePoint תקין דרך הדפדפן או דרך השרת.";
+      : "לא נמצא חיבור SharePoint תקין דרך הדפדפן. השרת לא משמש כחיבור חלופי ל־SharePoint.";
 
   return {
     preferredConnectorMode,

@@ -1,4 +1,5 @@
 import { HelpCircle } from "lucide-react";
+import { GuidedFlow, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { getHelpContent, helpPageSections } from "../help/helpContent";
@@ -28,9 +29,29 @@ export function HelpPage() {
     <div className="space-y-5">
       <PageHeader
         title="מרכז הסברים"
-        subtitle="הסבר מקצועי ופשוט על המושגים, המסכים והפעולות המרכזיים ב־Site Builder Hub."
+        subtitle="מקום להתחיל ממנו כשלא בטוחים מה המסך אומר או מה בטוח לעשות"
         actions={<span className="badge badge-info"><HelpCircle size={13} />תיעוד פנימי</span>}
         helpKey="hub.overview"
+      />
+
+      <OperationalSummary
+        title="איך לא ללכת לאיבוד"
+        purpose="העמוד הזה מתרגם מונחים כמו SharePoint, Mongo, Jobs ו־Deploy לשפה תפעולית פשוטה."
+        state="כל ההסברים הם לקריאה בלבד ואינם משנים אתרים, הרשאות או Jobs."
+        attention="אם פעולה נראית מפחידה, התחילו מהסבר המושג ואז חזרו למסך הפעולה."
+        attentionTone="info"
+        nextAction="מצאו את המושג או המסך שמבלבל אתכם וקראו קודם את המשמעות והבדיקה המומלצת."
+        tone="info"
+      />
+
+      <GuidedFlow
+        title="מסלול למשתמש חדש"
+        steps={[
+          { title: "התחילו במסך אתרים", description: "מצאו אתר והבינו האם הוא בריא או דורש טיפול.", status: "active" },
+          { title: "בדקו חסמים במסך בעיות וחיבורים", description: "הפרידו בין דפדפן מחובר לבין backend מחובר.", status: "pending" },
+          { title: "עברו לפעולה המוגנת", description: "פריסה, שחזור, גיבוי והרשאות עובדים עם אישור או תוכנית.", status: "pending" },
+          { title: "פתחו Advanced רק כשצריך", description: "Raw evidence מיועד לתחקור, לא להחלטה הראשונה.", status: "pending" }
+        ]}
       />
 
       <div className="help-page-intro">

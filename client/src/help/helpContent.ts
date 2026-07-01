@@ -296,8 +296,8 @@ export const helpContent = {
   "create.sharePointConnector": {
     key: "create.sharePointConnector",
     title: "מחבר SharePoint",
-    description: "מציג האם פעולה מול SharePoint תרוץ כקריאה בלבד, דרך Backend SharePoint job או דרך דפדפן מחובר.",
-    fix: "אם פעולה חסומה, בדקו האם היא דורשת SSO בדפדפן או הרשאת שרת ל־SharePoint.",
+    description: "מציג האם פעולה מול SharePoint תרוץ דרך הדפדפן המחובר או שהיא עדיין לא הוסבה.",
+    fix: "אם פעולה חסומה, בדקו שהדפדפן מחובר ל־SharePoint או שהפעולה כבר ממומשת במסלול דפדפן.",
     anchor: "create-mongo-site"
   },
   "site.bootstrap": {
@@ -330,7 +330,7 @@ export const helpContent = {
     key: "site.siteCollectionAdmins",
     title: "Site Collection Admins",
     description: "מנהלי SharePoint ברמת האתר כולו. שינוי שלהם הוא פעולה שמשנה הרשאות ב־SharePoint.",
-    fix: "אם כתיבה נכשלת, בדקו ש־SharePoint write זמין ושיש Digest תקין.",
+    fix: "אם כתיבה נכשלת, הריצו את הפעולה בדפדפן פעיל מול SharePoint ובדקו ש־Digest תקין.",
     anchor: "admins"
   },
   "site.ownersGroup": {
@@ -444,8 +444,8 @@ export const helpContent = {
   rollback: {
     key: "rollback",
     title: "Rollback",
-    description: "חזרה לגרסה קודמת. זו פעולה מתקדמת שמשנה אתר ולכן צריכה Plan, סיבה ברורה ויכולת כתיבה.",
-    fix: "אם Rollback חסום, ודאו שיש Plan תקין לכל האתרים הנבחרים וש־SharePoint write זמין.",
+    description: "חזרה לגרסה קודמת. זו פעולה מתקדמת שמשנה אתר ולכן צריכה Plan, סיבה ברורה והרצה דרך הדפדפן הפעיל.",
+    fix: "אם Rollback חסום, ודאו שיש Plan תקין לכל האתרים הנבחרים ושה־Dry-run מסומן כ־Browser SharePoint.",
     anchor: "deploy"
   },
   "sharepoint.browserConnector": {
@@ -457,9 +457,9 @@ export const helpContent = {
   },
   "sharepoint.backendConnector": {
     key: "sharepoint.backendConnector",
-    title: "Backend SharePoint connector",
-    description: "השרת המקומי שמבצע קריאות SharePoint עבור בדיקות, גיבויים ופריסות. הוא לא מקבל אוטומטית את ההתחברות של הדפדפן.",
-    fix: "אם מתקבל 401, הדפדפן מחובר ל־SharePoint, אבל השרת המקומי לא מחובר.",
+    title: "Server SharePoint connector",
+    description: "מסלול שרת ל־SharePoint מושבת בכוונה. השרת שומר metadata/evidence בלבד ולא קורא או כותב SharePoint.",
+    fix: "אין צורך לתקן את השרת. השתמשו ב־Browser SharePoint.",
     anchor: "sharepoint"
   },
   "sharepoint.currentUser": {
@@ -479,29 +479,29 @@ export const helpContent = {
   "sharepoint.digest": {
     key: "sharepoint.digest",
     title: "Digest / contextinfo",
-    description: "אישור זמני ש־SharePoint דורש לפני פעולה שמשנה קבצים או הרשאות.",
-    fix: "אם זה נכשל ב־401, הדפדפן אולי מחובר ל־SharePoint אבל השרת המקומי לא מחובר.",
+    description: "אישור זמני ש־SharePoint דורש לפני פעולה שמשנה קבצים או הרשאות. אצלנו הוא נבדק בדפדפן המחובר.",
+    fix: "אם זה נכשל, פתחו את SharePoint באותו דפדפן ובדקו הרשאות לאתר היעד.",
     anchor: "sharepoint"
   },
   "sharepoint.write": {
     key: "sharepoint.write",
     title: "SharePoint write",
     description: "יכולת לבצע פעולה שמשנה אתר SharePoint: העלאת קבצים, שחזור, הרשאות או תיקון TXT.",
-    fix: "נדרש SHAREPOINT_WRITE_ENABLED וגם auth מתאים. לאחר מכן בדקו Digest ו־Write verified.",
+    fix: "כתיבה ל־SharePoint מתבצעת דרך הדפדפן המחובר. השרת שומר סטטוס ו־Evidence בלבד.",
     anchor: "sharepoint"
   },
   "sharepoint.writeBlocked": {
     key: "sharepoint.writeBlocked",
     title: "חסר חיבור ל־SharePoint",
-    description: "ה־Hub יכול להציג ולתכנן, אבל פעולה שמשנה אתר חסומה כי השרת לא מאומת או כתיבה לא מופעלת.",
-    fix: "פתחו בעיות וחיבורים ובדקו Backend connector, Digest ו־Write verified.",
+    description: "ה־Hub יכול להציג ולתכנן, אבל פעולה שמשנה SharePoint חייבת לרוץ דרך הדפדפן המחובר.",
+    fix: "פתחו את הפעולה דרך Browser SharePoint. אין צורך בהגדרות SharePoint בצד השרת.",
     anchor: "common-problems"
   },
   "sharepoint.401": {
     key: "sharepoint.401",
     title: "401 מ־SharePoint",
-    description: "SharePoint דחה בקשה בגלל זיהוי חסר או לא מתאים. מצב נפוץ: הדפדפן מחובר ל־SharePoint, אבל השרת המקומי לא מחובר.",
-    fix: "בדקו cookie או bearer token בצד השרת, current user, API base URL ו־origin.",
+    description: "SharePoint דחה בקשה כי היא לא רצה מתוך הדפדפן המחובר של המשתמש.",
+    fix: "הריצו את הפעולה דרך Browser SharePoint. השרת שומר רק Evidence.",
     anchor: "common-problems"
   },
   job: {
@@ -943,10 +943,10 @@ export const helpPageSections: readonly HelpPageSection[] = [
     id: "common-problems",
     title: "בעיות נפוצות",
     bullets: [
-      "401 מ־SharePoint: הדפדפן מחובר ל־SharePoint, אבל השרת המקומי לא מחובר.",
-      "Browser current user עובד אבל Backend נכשל: בדקו auth cookie או bearer token בצד השרת.",
+      "401 מ־SharePoint בדפדפן: בדקו שהמשתמש מחובר ושיש הרשאה לאתר היעד.",
+      "Server SharePoint מושבת: זה מצב תקין; פעולות SharePoint רצות דרך הדפדפן.",
       "Artifact חסר: חברו dist אמיתי או manifest והריצו Validate.",
-      "SharePoint write לא מאומת: בדקו Digest/contextinfo ו־SHAREPOINT_WRITE_ENABLED.",
+      "Digest בדפדפן נכשל: בדקו contextinfo דרך הדפדפן המחובר.",
       "API backend port שגוי: בדקו API base URL במסך בעיות וחיבורים.",
       "CORS/origin: ודאו ש־CLIENT_ORIGIN/CLIENT_ORIGINS כוללים את ה־origin הנוכחי.",
       "אתר בארכיון לא נכלל בפריסה: שחזרו אותו או בחרו יעד פעיל אחר.",

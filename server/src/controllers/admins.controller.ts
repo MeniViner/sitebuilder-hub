@@ -6,14 +6,16 @@ import { logger } from "../utils/logger";
 import { writeAuditLog } from "../services/audit.service";
 import {
   addSiteAdmin,
+  buildAdminTxtRepairPlan,
   enqueueAdminSync,
   enqueueAdminTxtRepair,
   getAdminsDiff,
   getSiteAdmins,
+  recordBrowserAdminTxtRepairEvidence,
   recordBrowserAdminLiveReadEvidence,
   removeSiteAdmin
 } from "../services/admins.service";
-import { addAdminSchema, adminTxtRepairSchema, browserAdminLiveReadEvidenceSchema, removeAdminSchema, syncAdminsSchema } from "../validators/admin.schema";
+import { addAdminSchema, adminTxtRepairSchema, browserAdminLiveReadEvidenceSchema, browserAdminTxtRepairEvidenceSchema, removeAdminSchema, syncAdminsSchema } from "../validators/admin.schema";
 
 const handleError = (error: unknown, res: Response) => {
   if (error instanceof ZodError) {
@@ -119,7 +121,13 @@ export const getAdminsDiffEndpoint = async (req: Request, res: Response) => {
 
 export const readLiveAdminsEndpoint = async (req: Request, res: Response) => {
   try {
-    return handleError(new Error("browser-sharepoint-operation-not-implemented"), res);
+    return ok(res, {
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required",
+      operation: "admin-live-read",
+      siteId: req.params.id,
+      message: "קריאת מנהלים מ־SharePoint מתבצעת דרך הדפדפן הפעיל. השרת שומר Evidence בלבד."
+    }, undefined, 202);
   } catch (error) {
     return handleError(error, res);
   }
@@ -157,7 +165,12 @@ export const browserLiveReadEvidenceEndpoint = async (req: Request, res: Respons
 
 export const planTxtAdminRepair = async (req: Request, res: Response) => {
   try {
-    return handleError(new Error("browser-sharepoint-operation-not-implemented"), res);
+    const payload = adminTxtRepairSchema.parse(req.body || {});
+    const plan = await buildAdminTxtRepairPlan(req.params.id, {
+      capturedBy: req.user?.name || "system",
+      reason: payload.reason || payload.notes || ""
+    });
+    return ok(res, plan);
   } catch (error) {
     return handleError(error, res);
   }
@@ -175,20 +188,46 @@ export const queueTxtAdminRepair = async (req: Request, res: Response) => {
 
     await writeAuditLog({
       req,
-      action: "admins.repair-txt-queue",
+      action: "admins.repair-txt.browser-required",
       entityType: "Site",
       entityId: req.params.id,
       metadata: {
         jobId: result.job._id.toString(),
         targetPath: result.plan.targetPath,
-        missingInTxtCount: result.plan.summary.missingInTxtCount,
-        requiresApproval: result.requiresApproval,
-        approvalStatus: result.approvalStatus,
-        reason
+        connectorMode: "browser-sharepoint"
       }
     });
 
     return ok(res, result, undefined, 202);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const browserTxtRepairEvidenceEndpoint = async (req: Request, res: Response) => {
+  try {
+    const payload = browserAdminTxtRepairEvidenceSchema.parse(req.body || {});
+    const result = await recordBrowserAdminTxtRepairEvidence({
+      siteId: req.params.id,
+      actor: req.user?.name || "browser-sharepoint",
+      input: payload
+    });
+
+    await writeAuditLog({
+      req,
+      action: "admins.repair-txt.browser-evidence",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: {
+        connectorMode: "browser-sharepoint",
+        targetPath: payload.targetPath,
+        finalStatus: payload.finalStatus,
+        jobId: payload.jobId || "",
+        snapshotId: result.summary.snapshotId
+      }
+    });
+
+    return ok(res, result);
   } catch (error) {
     return handleError(error, res);
   }

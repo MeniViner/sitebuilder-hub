@@ -15,7 +15,9 @@ import {
   enqueueRollbackSite,
   buildRollbackSitePlan,
   listSiteDeployments,
-  buildVersionStatus
+  buildVersionStatus,
+  updateRelease,
+  updateReleaseName
 } from "../services/releases.service";
 import {
   buildSiteDeployPlan,
@@ -31,7 +33,9 @@ import {
   deployAllSchema,
   deploySiteSchema,
   rollbackSiteSchema,
-  nextVersionSchema
+  nextVersionSchema,
+  updateReleaseSchema,
+  updateReleaseNameSchema
 } from "../validators/release.schema";
 import { bumpVersion } from "../utils/version";
 
@@ -144,6 +148,44 @@ export const postRelease = async (req: Request, res: Response) => {
     });
 
     return ok(res, release, undefined, 201);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const patchReleaseName = async (req: Request, res: Response) => {
+  try {
+    const payload = updateReleaseNameSchema.parse(req.body);
+    const release = await updateReleaseName(req.params.id, payload.name);
+
+    await writeAuditLog({
+      req,
+      action: "releases.update-name",
+      entityType: "Release",
+      entityId: release._id.toString(),
+      after: release.toObject()
+    });
+
+    return ok(res, release);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const patchRelease = async (req: Request, res: Response) => {
+  try {
+    const payload = updateReleaseSchema.parse(req.body);
+    const release = await updateRelease(req.params.id, payload);
+
+    await writeAuditLog({
+      req,
+      action: "releases.update",
+      entityType: "Release",
+      entityId: release._id.toString(),
+      after: release.toObject()
+    });
+
+    return ok(res, release);
   } catch (error) {
     return handleError(error, res);
   }
@@ -317,34 +359,14 @@ export const recordBrowserDeploymentEvidence = async (req: Request, res: Respons
 export const rollbackSiteVersion = async (req: Request, res: Response) => {
   try {
     const payload = rollbackSiteSchema.parse(req.body);
-    const result = await enqueueRollbackSite({
+    await enqueueRollbackSite({
       siteId: req.params.id,
       releaseId: payload.releaseId,
       reason: payload.reason,
       createdBy: req.user?.name || "system"
     });
 
-    await writeAuditLog({
-      req,
-      action: "sites.rollback-version",
-      entityType: "Site",
-      entityId: req.params.id,
-      metadata: {
-        releaseId: payload.releaseId,
-        jobId: result.job._id.toString(),
-        deploymentId: result.deployment._id.toString(),
-        reason: payload.reason || ""
-      }
-    });
-
-    logger.warn("releases", "Rollback job queued from API", {
-      siteId: req.params.id,
-      releaseId: payload.releaseId,
-      jobId: result.job._id.toString(),
-      deploymentId: result.deployment._id.toString()
-    });
-
-    return ok(res, result, undefined, 202);
+    return ok(res, null, undefined, 202);
   } catch (error) {
     return handleError(error, res);
   }

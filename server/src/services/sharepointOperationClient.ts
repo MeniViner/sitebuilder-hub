@@ -3,8 +3,7 @@ import { env } from "../config/env";
 import { SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
 import { logger } from "../utils/logger";
 import {
-  getDangerousValidationBypassEnvVar,
-  isDangerousValidationBypassEnabled
+  getDangerousValidationBypassEnvVar
 } from "./dangerousBackupBypass.service";
 
 export type SharePointOperationCapabilities = {
@@ -186,20 +185,21 @@ export class SharePointWriteCapabilityError extends Error {
   }
 }
 
+const SERVER_SHAREPOINT_REST_DISABLED_REASON =
+  "Server-side SharePoint REST is disabled. Use the active browser SharePoint session for SharePoint reads and writes.";
+
+const assertServerSharePointRestDisabled = () => {
+  throw new Error("server-sharepoint-rest-disabled");
+};
+
 const encodeSpaces = (value: string) => value.replace(/ /g, "%20");
 const escapeODataString = (value: string) => value.replace(/'/g, "''");
 const encodeODataUrlValue = (value: string) => encodeURIComponent(value).replace(/'/g, "%27");
 
-const authHeaders = () => {
-  const headers: Record<string, string> = {};
-  if (env.SHAREPOINT_AUTH_COOKIE) headers.Cookie = env.SHAREPOINT_AUTH_COOKIE;
-  if (env.SHAREPOINT_BEARER_TOKEN) headers.Authorization = `Bearer ${env.SHAREPOINT_BEARER_TOKEN}`;
-  return headers;
-};
+const authHeaders = () => ({});
 
 export const getSharePointReadHeaders = (accept = "application/json;odata=verbose, text/plain, */*") => ({
-  Accept: accept,
-  ...authHeaders()
+  Accept: accept
 });
 
 const describeBody = (body: BodyInit | null | undefined) => {
@@ -365,62 +365,44 @@ const getSharePointCollectionPayload = async (
 };
 
 export const getSharePointOperationCapabilities = (): SharePointOperationCapabilities => {
-  const hasAuthMaterial = Boolean(env.SHAREPOINT_AUTH_COOKIE || env.SHAREPOINT_BEARER_TOKEN);
-  const unauthenticatedWriteAllowed = env.SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE;
   const dangerousWriteGateBypassEnvVar = getDangerousValidationBypassEnvVar("sharepoint-write-gates");
   const dangerousWriteGateBypass = Boolean(dangerousWriteGateBypassEnvVar);
-  const writeAvailable = dangerousWriteGateBypass || (env.SHAREPOINT_WRITE_ENABLED && hasAuthMaterial);
-  const authModes = [
-    env.SHAREPOINT_BEARER_TOKEN ? "bearer" as const : undefined,
-    env.SHAREPOINT_AUTH_COOKIE ? "cookie" as const : undefined
-  ].filter((mode): mode is "bearer" | "cookie" => Boolean(mode));
-  const authMode: SharePointOperationCapabilities["authMode"] = env.SHAREPOINT_BEARER_TOKEN
-    ? "bearer"
-    : env.SHAREPOINT_AUTH_COOKIE
-      ? "cookie"
-      : "none";
   const reason = dangerousWriteGateBypass
-    ? `${dangerousWriteGateBypassEnvVar}=true bypasses Hub SharePoint write/digest preflight gates. Real SharePoint REST requests can still fail.`
-    : writeAvailable
-    ? undefined
-    : env.SHAREPOINT_WRITE_ENABLED
-      ? unauthenticatedWriteAllowed && !hasAuthMaterial
-        ? "SharePoint write is enabled, but unauthenticated write bypass is not proof that SharePoint accepts writes. Configure SHAREPOINT_AUTH_COOKIE or SHAREPOINT_BEARER_TOKEN and verify contextinfo/digest."
-        : "SharePoint write is enabled, but no SHAREPOINT_AUTH_COOKIE or SHAREPOINT_BEARER_TOKEN is configured."
-      : "SharePoint write is disabled. Set SHAREPOINT_WRITE_ENABLED=true and configure auth material to run real write operations.";
+    ? `${dangerousWriteGateBypassEnvVar}=true is ignored. ${SERVER_SHAREPOINT_REST_DISABLED_REASON}`
+    : SERVER_SHAREPOINT_REST_DISABLED_REASON;
 
   const capabilities: SharePointOperationCapabilities = {
-    readAvailable: true,
-    readUsesAuthMaterial: hasAuthMaterial,
+    readAvailable: false,
+    readUsesAuthMaterial: false,
     configured: {
       writeEnabled: env.SHAREPOINT_WRITE_ENABLED,
       authCookieConfigured: Boolean(env.SHAREPOINT_AUTH_COOKIE),
       bearerTokenConfigured: Boolean(env.SHAREPOINT_BEARER_TOKEN),
-      unauthenticatedWriteBypassEnabled: unauthenticatedWriteAllowed,
+      unauthenticatedWriteBypassEnabled: env.SHAREPOINT_ALLOW_UNAUTHENTICATED_WRITE,
       dangerousWriteGateBypassEnabled: dangerousWriteGateBypass,
       dangerousWriteGateBypassEnvVar: dangerousWriteGateBypassEnvVar || undefined
     },
-    writeEnabled: dangerousWriteGateBypass || env.SHAREPOINT_WRITE_ENABLED,
-    hasAuthMaterial,
-    unauthenticatedWriteAllowed,
-    writeAvailable,
+    writeEnabled: false,
+    hasAuthMaterial: false,
+    unauthenticatedWriteAllowed: false,
+    writeAvailable: false,
     writeVerified: false,
-    authMode,
-    authModes,
+    authMode: "none",
+    authModes: [],
     requestTimeoutMs: env.SHAREPOINT_REQUEST_TIMEOUT_MS,
     digest: {
       requiredForWrites: true,
       endpointSuffix: "/_api/contextinfo",
-      canRequest: writeAvailable,
-      reason: dangerousWriteGateBypass ? reason : writeAvailable ? undefined : reason
+      canRequest: false,
+      reason
     },
     siteCreation: {
       modernSiteCollectionEndpoint: "/_api/SPSiteManager/create",
       statusEndpoint: "/_api/SPSiteManager/status",
-      canCreate: writeAvailable,
+      canCreate: false,
       pollAttempts: env.SHAREPOINT_SITE_CREATE_POLL_ATTEMPTS,
       pollIntervalMs: env.SHAREPOINT_SITE_CREATE_POLL_INTERVAL_MS,
-      reason: writeAvailable ? undefined : reason
+      reason
     },
     reason
   };
@@ -430,17 +412,12 @@ export const getSharePointOperationCapabilities = (): SharePointOperationCapabil
 
 export const assertSharePointWriteAvailable = () => {
   const capabilities = getSharePointOperationCapabilities();
-  if (!capabilities.writeAvailable) {
-    logger.warn("sharepoint", "SharePoint write capability blocked", capabilities);
-    throw new SharePointWriteCapabilityError(capabilities.reason || "SharePoint write capability is not available.");
-  }
-  if (isDangerousValidationBypassEnabled("sharepoint-write-gates")) {
-    logger.warn("sharepoint", "SharePoint write preflight bypassed by dangerous env", capabilities);
-  }
-  logger.debug("sharepoint", "SharePoint write capability available", capabilities);
+  logger.warn("sharepoint", "Server SharePoint write capability is disabled", capabilities);
+  throw new SharePointWriteCapabilityError(capabilities.reason || SERVER_SHAREPOINT_REST_DISABLED_REASON);
 };
 
 export async function readSharePointTextFile(paths: SiteBuilderResolvedPaths, serverRelativePath: string): Promise<SharePointTextFile> {
+  assertServerSharePointRestDisabled();
   const url = absoluteFileUrl(paths, serverRelativePath);
   logger.info("sharepoint", "Reading SharePoint text file", { serverRelativePath, url });
   const response = await withTimeout(url, {
@@ -469,6 +446,7 @@ export async function readSharePointFileBytes(
   paths: SiteBuilderResolvedPaths,
   serverRelativePath: string
 ): Promise<SharePointFileBytes> {
+  assertServerSharePointRestDisabled();
   const url = absoluteFileUrl(paths, serverRelativePath);
   logger.info("sharepoint", "Reading SharePoint file bytes", { serverRelativePath, url });
   const response = await withTimeout(url, {
@@ -588,6 +566,7 @@ export async function readSharePointFileEvidence(
 }
 
 export async function readSharePointJsonApi(paths: SiteBuilderResolvedPaths, suffix: string) {
+  assertServerSharePointRestDisabled();
   logger.info("sharepoint", "Reading SharePoint JSON API", { suffix });
   const response = await withTimeout(siteApiUrl(paths, suffix), {
     method: "GET",
@@ -611,6 +590,7 @@ export async function listSharePointFolders(
   paths: SiteBuilderResolvedPaths,
   serverRelativeFolder: string
 ): Promise<SharePointFolderListResult> {
+  assertServerSharePointRestDisabled();
   const escapedFolder = escapeODataString(serverRelativeFolder);
   const result = await getSharePointCollectionPayload(
     paths,
@@ -649,6 +629,7 @@ export async function listSharePointFiles(
   paths: SiteBuilderResolvedPaths,
   serverRelativeFolder: string
 ): Promise<SharePointFileListResult> {
+  assertServerSharePointRestDisabled();
   const escapedFolder = escapeODataString(serverRelativeFolder);
   const result = await getSharePointCollectionPayload(
     paths,
@@ -784,6 +765,7 @@ export async function ensureSharePointUser(
   loginName: string,
   digest?: string
 ): Promise<SharePointEnsuredUser> {
+  assertSharePointWriteAvailable();
   const normalizedLogin = String(loginName || "").trim();
   if (!normalizedLogin) throw new Error("sharepoint-user-login-required");
 
@@ -808,6 +790,7 @@ export async function setSharePointSiteCollectionAdmin(
   isSiteAdmin: boolean,
   digest?: string
 ) {
+  assertSharePointWriteAvailable();
   const userId = typeof user === "string" ? undefined : numberOrUndefined(user.id);
   const loginName = typeof user === "string" ? String(user || "").trim() : String(user.loginName || "").trim();
   const suffix = userId
@@ -864,6 +847,7 @@ export async function addSharePointUserToGroup(
   loginName: string,
   digest?: string
 ) {
+  assertSharePointWriteAvailable();
   assertGroupId(groupId);
   const normalizedLogin = String(loginName || "").trim();
   if (!normalizedLogin) throw new Error("sharepoint-user-login-required");
@@ -887,6 +871,7 @@ export async function removeSharePointUserFromGroup(
   loginName: string,
   digest?: string
 ) {
+  assertSharePointWriteAvailable();
   assertGroupId(groupId);
   const normalizedLogin = String(loginName || "").trim();
   if (!normalizedLogin) throw new Error("sharepoint-user-login-required");
@@ -990,6 +975,7 @@ const extractSiteCreationStatusPayload = (payload: any) => {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function readSharePointSiteCollectionStatus(paths: SiteBuilderResolvedPaths): Promise<SharePointSiteCreationStatus> {
+  assertServerSharePointRestDisabled();
   const encodedTargetUrl = encodeURIComponent(paths.sharePointSiteUrl);
   const endpoint = siteRootApiUrl(paths, "/", `/_api/SPSiteManager/status?url='${encodedTargetUrl}'`);
   logger.info("sharepoint", "Reading SharePoint site creation status", {

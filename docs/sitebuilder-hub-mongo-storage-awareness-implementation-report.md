@@ -338,3 +338,6 @@ The following are intentionally not complete in this phase:
 - Migration/export workflow from SharePoint TXT to Mongo inside the HUB.
 
 The HUB is now ready for the next implementation phase: building a planned, verified create-new-Mongo-site flow on top of the storage-aware model, runtime config validator, and Builder/Mongo health connector.
+# Legacy Historical Report
+
+This report includes older connector terminology. The current source of truth is `docs/sharepoint-browser-only-status-report.md`.

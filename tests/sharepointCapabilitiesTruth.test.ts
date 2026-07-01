@@ -27,12 +27,12 @@ describe("SharePoint capability truthfulness", () => {
 
     const capabilities = getSharePointOperationCapabilities();
 
-    expect(capabilities.writeEnabled).toBe(true);
-    expect(capabilities.unauthenticatedWriteAllowed).toBe(true);
+    expect(capabilities.writeEnabled).toBe(false);
+    expect(capabilities.unauthenticatedWriteAllowed).toBe(false);
     expect(capabilities.hasAuthMaterial).toBe(false);
     expect(capabilities.writeAvailable).toBe(false);
     expect(capabilities.writeVerified).toBe(false);
     expect(capabilities.digest.canRequest).toBe(false);
-    expect(capabilities.reason).toContain("unauthenticated write bypass is not proof");
+    expect(capabilities.reason).toContain("Server-side SharePoint REST is disabled");
   });
 });

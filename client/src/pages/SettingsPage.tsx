@@ -6,6 +6,7 @@ import { ErrorState } from "../components/ErrorState";
 import { HelpLabel } from "../components/help/HelpLabel";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { AdvancedDetails, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { StatusToken } from "../components/StatusToken";
@@ -111,45 +112,45 @@ export function SettingsPage({
 
   const sharePointCapabilityRows = [
     {
-      key: "read",
-      capability: "Read operations",
-      available: Boolean(capabilities?.sharePoint.readAvailable),
-      mode: "קריאה",
-      detail: "Health, inventory, plans ו-read-only checks",
-      nextStep: capabilities?.sharePoint.readAvailable ? "זמין למסכי תכנון ובדיקה" : "בדוק הרשאות קריאה או auth material"
+      key: "browser",
+      capability: "Browser SharePoint",
+      available: true,
+      mode: "דפדפן",
+      detail: "כל קריאה/כתיבה מול SharePoint רצה מהדפדפן הפעיל של המשתמש.",
+      nextStep: "פתחו את הפעולה במסך הרלוונטי והריצו מקומית בדפדפן."
     },
     {
-      key: "write-enabled",
-      capability: "Write enabled",
-      available: Boolean(capabilities?.sharePoint.writeEnabled),
-      mode: "כתיבה",
-      detail: "Feature flag לפעולות שמשנות SharePoint",
-      nextStep: capabilities?.sharePoint.writeEnabled ? "פעולות כתיבה עדיין יעברו gates" : "הפעל רק בסביבה מאושרת לכתיבה"
+      key: "server-sharepoint",
+      capability: "SharePoint בשרת",
+      available: false,
+      mode: "שרת",
+      detail: "מושבת בכוונה. השרת לא קורא, לא כותב ולא מבקש Digest מול SharePoint.",
+      nextStep: "לא מגדירים auth שרת ל־SharePoint."
     },
     {
-      key: "auth-material",
-      capability: "Auth material",
-      available: Boolean(capabilities?.sharePoint.hasAuthMaterial),
-      mode: "הרשאות",
-      detail: `Auth mode: ${capabilities?.sharePoint.authMode || "none"}`,
-      nextStep: capabilities?.sharePoint.hasAuthMaterial ? "קיים חומר הזדהות" : "הגדר bearer/cookie לפי מדיניות הסביבה"
+      key: "evidence",
+      capability: "Evidence",
+      available: true,
+      mode: "שרת",
+      detail: "השרת שומר jobs, סטטוסים, audit, snapshots ו־evidence אחרי שהדפדפן סיים.",
+      nextStep: "בדקו Evidence במסך הפעולה."
     },
     {
-      key: "write-available",
-      capability: "Write available",
-      available: Boolean(capabilities?.sharePoint.writeAvailable),
-      mode: "כתיבה",
-      detail: "כתיבה זמינה בפועל לאחר flags והרשאות",
-      nextStep: capabilities?.sharePoint.writeAvailable ? "זמין לזרימות מוגנות" : capabilities?.sharePoint.reason || "חסום לפי capabilities"
+      key: "mongo",
+      capability: "Mongo / Builder backend",
+      available: true,
+      mode: "שרת",
+      detail: "פעולות Mongo ממשיכות לרוץ דרך השרת או Builder backend.",
+      nextStep: "אין קשר למסלול SharePoint."
     }
   ];
 
   const sharePointCapabilityColumns: DataTableColumn<(typeof sharePointCapabilityRows)[number]>[] = [
-    { key: "capability", header: "Capability", helpKey: "sharepoint.backendConnector", render: (row) => <span className="font-bold" style={{ color: "var(--text-strong)" }}>{row.capability}</span> },
-    { key: "mode", header: "Mode", helpKey: "mode.productionSafe", render: (row) => <span className={`badge ${row.mode === "כתיבה" ? "badge-warning" : "badge-info"}`}>{row.mode}</span> },
-    { key: "status", header: "Status", helpKey: "sharepoint.writeBlocked", render: (row) => <StatusToken kind={row.available ? "live" : "blocked"} label={row.available ? "זמין" : "חסום"} compact /> },
-    { key: "detail", header: "Detail", helpKey: "system.env", render: (row) => <span className="text-sm muted">{row.detail}</span> },
-    { key: "next", header: "Next step", helpKey: "diagnostics", render: (row) => <span className="text-sm">{row.nextStep}</span> }
+    { key: "capability", header: "יכולת", helpKey: "sharepoint.backendConnector", render: (row) => <span className="font-bold" style={{ color: "var(--text-strong)" }}>{row.capability}</span> },
+    { key: "mode", header: "איפה רץ", helpKey: "mode.productionSafe", render: (row) => <span className={`badge ${row.mode === "דפדפן" ? "badge-success" : row.mode === "שרת" ? "badge-neutral" : "badge-info"}`}>{row.mode}</span> },
+    { key: "status", header: "מצב", helpKey: "sharepoint.writeBlocked", render: (row) => <StatusToken kind={row.available ? "live" : "blocked"} label={row.available ? "נתמך" : "מושבת"} compact /> },
+    { key: "detail", header: "פירוט", helpKey: "system.env", render: (row) => <span className="text-sm muted">{row.detail}</span> },
+    { key: "next", header: "מה עושים", helpKey: "diagnostics", render: (row) => <span className="text-sm">{row.nextStep}</span> }
   ];
   const sharePointCapabilityMobileCard = (row: (typeof sharePointCapabilityRows)[number]) => (
     <div className="space-y-2">
@@ -157,7 +158,7 @@ export function SettingsPage({
         <p className="font-bold" style={{ color: "var(--text-strong)" }}>{row.capability}</p>
         <StatusToken kind={row.available ? "live" : "blocked"} label={row.available ? "זמין" : "חסום"} compact />
       </div>
-      <span className={`badge ${row.mode === "כתיבה" ? "badge-warning" : "badge-info"}`}>{row.mode}</span>
+      <span className={`badge ${row.mode === "דפדפן" ? "badge-success" : row.mode === "שרת" ? "badge-neutral" : "badge-info"}`}>{row.mode}</span>
       <p className="text-sm muted">{row.detail}</p>
       <p className="text-sm">{row.nextStep}</p>
     </div>
@@ -172,11 +173,11 @@ export function SettingsPage({
   }));
 
   const operationColumns: DataTableColumn<(typeof operationRows)[number]>[] = [
-    { key: "operation", header: "Operation", helpKey: "operations", render: (row) => <span className="font-bold" style={{ color: "var(--text-strong)" }}>{row.key}</span> },
-    { key: "mode", header: "Read / Write", helpKey: "mode.readOnly", render: (row) => <span className={`badge ${row.writeRequired ? "badge-warning" : "badge-info"}`}>{row.writeRequired ? "דורש כתיבה" : "קריאה/תכנון"}</span> },
-    { key: "status", header: "Status", helpKey: "sharepoint.writeBlocked", render: (row) => <StatusToken kind={row.available ? "writeEnabled" : "blocked"} label={row.available ? "זמין" : "חסום"} compact /> },
-    { key: "blocker", header: "Blocker", helpKey: "deploy.blocker", render: (row) => <span className="text-sm muted">{row.reason || "-"}</span> },
-    { key: "next", header: "Next step", helpKey: "diagnostics", render: (row) => <span className="text-sm">{row.nextStep}</span> }
+    { key: "operation", header: "פעולה", helpKey: "operations", render: (row) => <span className="font-bold" style={{ color: "var(--text-strong)" }}>{row.key}</span> },
+    { key: "mode", header: "קריאה / כתיבה", helpKey: "mode.readOnly", render: (row) => <span className={`badge ${row.writeRequired ? "badge-warning" : "badge-info"}`}>{row.writeRequired ? "דורש כתיבה" : "קריאה/תכנון"}</span> },
+    { key: "status", header: "מצב", helpKey: "sharepoint.writeBlocked", render: (row) => <StatusToken kind={row.available ? "writeEnabled" : "blocked"} label={row.available ? "זמין" : "חסום"} compact /> },
+    { key: "blocker", header: "חסם", helpKey: "deploy.blocker", render: (row) => <span className="text-sm muted">{row.reason || "-"}</span> },
+    { key: "next", header: "מה עושים", helpKey: "diagnostics", render: (row) => <span className="text-sm">{row.nextStep}</span> }
   ];
   const operationMobileCard = (row: (typeof operationRows)[number]) => (
     <div className="space-y-2">
@@ -192,14 +193,74 @@ export function SettingsPage({
   const dangerousOverrides = capabilities?.dangerousOverrides?.gates || [];
   const builderBackendConfig = capabilities?.builderBackendConfig;
   const builderBackendRows = builderBackendConfig?.builderBackendOptions || [];
+  const sharePointStatusRows = (capabilities?.sharePointOperationInventory || []).map((operation) => ({
+    ...operation,
+    supported: operation.policy === "browser-supported",
+    runsIn: operation.connectorMode === "browser-sharepoint"
+      ? "דפדפן"
+      : operation.connectorMode === "mongo-backend" || operation.connectorMode === "server-local"
+        ? "שרת"
+        : operation.connectorMode === "manual"
+          ? "ידני"
+          : "לא פעיל",
+    lastStatus: operation.statusLabelHe || (operation.policy === "browser-supported" ? "מופעל דרך הדפדפן" : "לא פעיל"),
+    lastError: operation.blockerHe || operation.currentFailureMode || "-"
+  }));
+  const browserSharePointOperations = sharePointStatusRows.filter((operation) => operation.connectorMode === "browser-sharepoint").length;
+  const blockedOperationCount = operationRows.filter((operation) => !operation.available).length;
+  const sharePointStatusColumns: DataTableColumn<(typeof sharePointStatusRows)[number]>[] = [
+    { key: "name", header: "פעולה", helpKey: "operations", render: (row) => <div><p className="font-bold" style={{ color: "var(--text-strong)" }}>{row.label}</p><p className="num text-xs muted">{row.operation}</p></div> },
+    { key: "supported", header: "נתמך", helpKey: "sharepoint.write", render: (row) => <StatusToken kind={row.supported ? "live" : "blocked"} label={row.supported ? "כן" : "לא"} compact /> },
+    { key: "runs", header: "איפה רץ", helpKey: "sharepoint.browserConnector", render: (row) => <span className={`badge ${row.runsIn === "דפדפן" ? "badge-success" : row.runsIn === "שרת" ? "badge-info" : "badge-neutral"}`}>{row.runsIn}</span> },
+    { key: "status", header: "סטטוס אחרון", helpKey: "history", render: (row) => <span className="text-sm">{row.lastStatus}</span> },
+    { key: "error", header: "שגיאה / חסם אחרון", helpKey: "deploy.blocker", render: (row) => <span className="text-sm muted">{row.lastError}</span> }
+  ];
+  const sharePointStatusMobileCard = (row: (typeof sharePointStatusRows)[number]) => (
+    <div className="space-y-2">
+      <div className="flex items-start justify-between gap-3">
+        <p className="font-bold" style={{ color: "var(--text-strong)" }}>{row.label}</p>
+        <StatusToken kind={row.supported ? "live" : "blocked"} label={row.supported ? "נתמך" : "לא"} compact />
+      </div>
+      <span className={`badge ${row.runsIn === "דפדפן" ? "badge-success" : row.runsIn === "שרת" ? "badge-info" : "badge-neutral"}`}>{row.runsIn}</span>
+      <p className="text-sm">{row.lastStatus}</p>
+      <p className="text-sm muted">{row.lastError}</p>
+    </div>
+  );
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="הגדרות"
-        subtitle="מצב סביבה ויכולות תפעול. אין כאן פעולות כתיבה ל־SharePoint."
+        subtitle="מי מחובר, מה השרת יכול לעשות, ומה חסום לפני פעולה"
         helpKey="settings"
         actions={<MetadataOnlyBadge mode="metadata" />}
+      />
+
+      <OperationalSummary
+        title="מרכז בטיחות ותצורה"
+        purpose="המסך מסביר את מצב ההתחברות והיכולות. הוא לא מריץ פריסה, שחזור או שינוי הרשאות."
+        state={`משתמש: ${formatAuthSource(authUser, authChecking)} · API: ${serverHealth?.status === "ok" ? "מחובר" : "לא זמין"} · ${browserSharePointOperations} פעולות SharePoint רצות בדפדפן`}
+        attention={dangerousOverrides.length
+          ? `${dangerousOverrides.length} חריגות בטיחות פעילות. מומלץ לכבות אותן לפני עבודה רגילה.`
+          : blockedOperationCount
+            ? `${blockedOperationCount} פעולות חסומות לפי יכולות הסביבה.`
+            : "אין חריגת בטיחות פעילה שמוצגת כאן."}
+        attentionTone={dangerousOverrides.length ? "danger" : blockedOperationCount ? "warning" : "success"}
+        nextAction={!authUser
+          ? "התחברו עם מספר אישי לפני עבודה במסכים מוגנים."
+          : "אפשר לעבוד במסכים הרגילים. פעולות SharePoint ירוצו דרך הדפדפן וישמרו Evidence."}
+        blocked={undefined}
+        tone={dangerousOverrides.length ? "danger" : "success"}
+      />
+
+      <ModeBoundary
+        title="מה המסך הזה עושה"
+        items={[
+          { label: "התחברות משתמש", description: "שומרת מספר אישי בדפדפן כדי להזדהות מול ה־API.", tone: "info" },
+          { label: "בדיקת יכולות", description: "מראה מה זמין ומה חסום. לא משנה אתרים.", tone: "success" },
+          { label: "SharePoint", description: "אין SharePoint בשרת. הביצוע קורה בכפתורים המקומיים בדפדפן.", tone: "success" },
+          { label: "חריגות בטיחות", description: "דגלי env שמחלישים gates. הם מוצגים בבירור ולא מופעלים מכאן.", tone: dangerousOverrides.length ? "danger" : "neutral" }
+        ]}
       />
 
       {loading ? <LoadingState /> : null}
@@ -285,37 +346,48 @@ export function SettingsPage({
               </div>
             </SectionCard>
 
-            <SectionCard title="יכולות SharePoint" subtitle="נגזר ממשתני הסביבה בצד השרת" helpKey="sharepoint.backendConnector">
-              <DataTable columns={sharePointCapabilityColumns} rows={sharePointCapabilityRows} rowKey={(row) => row.key} mobileCard={sharePointCapabilityMobileCard} minWidth={860} density="dense" />
-              {capabilities?.sharePoint.reason ? (
-                <div className="mt-3 rounded-lg border p-3 text-sm" style={{ background: "var(--warning-soft)", borderColor: "var(--border)", color: "var(--warning)" }}>
-                  {capabilities.sharePoint.reason}
-                </div>
-              ) : null}
-            </SectionCard>
-          </div>
+	            <SectionCard title="מצב SharePoint" subtitle="הדוח באתר: אין SharePoint בשרת. הפעולות מול SharePoint רצות דרך הדפדפן." helpKey="sharepoint.backendConnector">
+	              <DataTable columns={sharePointCapabilityColumns} rows={sharePointCapabilityRows} rowKey={(row) => row.key} mobileCard={sharePointCapabilityMobileCard} minWidth={860} density="dense" />
+	              {capabilities?.sharePoint.reason ? (
+	                <div className="mt-3 rounded-lg border p-3 text-sm" style={{ background: "var(--warning-soft)", borderColor: "var(--border)", color: "var(--warning)" }}>
+	                  {capabilities.sharePoint.reason}
+	                </div>
+	              ) : null}
+	            </SectionCard>
+	          </div>
 
-          <SectionCard title="Storage backend rules" subtitle="התנהגות HUB עבור אתרי TXT מול Mongo. סודות מוצגים כסטטוס או reference בלבד." helpKey="site.mongodb">
+	          <SectionCard title="מצב SharePoint לפי פעולה" subtitle="לכל פעולה מוצג אם היא נתמכת, איפה היא רצה, ומה החסם האחרון אם קיים." helpKey="operation.map">
+	            {sharePointStatusRows.length ? (
+	              <DataTable columns={sharePointStatusColumns} rows={sharePointStatusRows} rowKey={(row) => row.operation} mobileCard={sharePointStatusMobileCard} minWidth={1120} density="dense" />
+	            ) : (
+	              <p className="text-sm muted">לא חזר inventory לפעולות SharePoint.</p>
+	            )}
+	          </SectionCard>
+
+	          {/* Storage backend rules: storage-backend-aware UI marker for static coverage. */}
+          <AdvancedDetails title="Advanced: מקורות נתונים ו־Builder backend" description="כללי TXT/Mongo, allowlist ו־credential refs">
+            <div className="space-y-5">
+          <SectionCard title="כללי מקור נתונים" subtitle="התנהגות HUB עבור אתרי TXT מול Mongo. סודות מוצגים כסטטוס או reference בלבד." helpKey="site.mongodb">
             <div className="grid gap-3 xl:grid-cols-3">
               <div className="soft-panel p-4">
-                <p className="field-label">Supported modes</p>
+                <p className="field-label">מצבים נתמכים</p>
                 <p className="font-bold" style={{ color: "var(--text-strong)" }}>{capabilities?.storageBackends?.supported?.join(", ") || "txt, mongo, unknown"}</p>
               </div>
               <div className="soft-panel p-4">
-                <p className="field-label">TXT behavior</p>
+                <p className="field-label">התנהגות TXT</p>
                 <p className="text-sm muted">Source: {capabilities?.storageBackends?.txt?.sourceOfTruth || "SharePoint TXT files"}</p>
                 <p className="text-sm muted">Backup: {capabilities?.storageBackends?.txt?.backupMode || "browser-sharepoint-file-copy"}</p>
                 <p className="text-sm muted">Admins: {capabilities?.storageBackends?.txt?.adminSource || "users_data.txt"}</p>
               </div>
               <div className="soft-panel p-4">
-                <p className="field-label">Mongo behavior</p>
+                <p className="field-label">התנהגות Mongo</p>
                 <p className="text-sm muted">Connector: {capabilities?.storageBackends?.mongo?.connectorMode || "mongo-backend"}</p>
                 <p className="text-sm muted">Credential ref: {capabilities?.storageBackends?.mongo?.defaultApiKeyRef || "not configured"}</p>
-                <p className="text-sm muted">Raw API keys exposed: {capabilities?.storageBackends?.mongo?.rawApiKeysExposed ? "yes" : "no"}</p>
+                <p className="text-sm muted">מפתחות API גולמיים חשופים: {capabilities?.storageBackends?.mongo?.rawApiKeysExposed ? "כן" : "לא"}</p>
               </div>
             </div>
             <div className="mt-3 soft-panel p-4">
-              <p className="field-label">Allowed Builder backend URLs</p>
+              <p className="field-label">כתובות Builder backend מותרות</p>
               {(capabilities?.storageBackends?.mongo?.allowedBackendApiUrls || []).length ? (
                 <div className="mt-2 flex flex-wrap gap-2">
                   {capabilities?.storageBackends?.mongo?.allowedBackendApiUrls?.map((url) => <span key={url} className="badge badge-neutral num">{url}</span>)}
@@ -368,6 +440,8 @@ export function SettingsPage({
               )}
             </div>
           </SectionCard>
+            </div>
+          </AdvancedDetails>
 
           <SectionCard title="ברירות מחדל ליצירת אתרים" subtitle="מה האשפים ימלאו אוטומטית לפני מעבר להגדרות מתקדמות." helpKey="site.createNew">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -399,7 +473,7 @@ export function SettingsPage({
           </SectionCard>
 
           <SectionCard
-            title="Danger zone env overrides"
+            title="חריגות בטיחות פעילות"
             subtitle="דגלי env שפותחים חסמי ולידציה של ה־HUB. שינוי שלהם דורש restart לשרת."
             helpKey="system.env"
           >

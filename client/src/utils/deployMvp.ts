@@ -46,10 +46,8 @@ export function getDeployMvpMissingRequirements(input: DeployMvpGateInput) {
     }
   }
 
-  const connectorMode = input.connectorMode || input.plan?.connectorMode || "backend-sharepoint";
-  if (connectorMode === "backend-sharepoint" && input.capabilities && !input.capabilities.sharePoint.writeAvailable) {
-    missing.push("Deploy cannot run because SharePoint write is not configured.");
-  }
+  const connectorMode = input.connectorMode || input.plan?.connectorMode || "browser-sharepoint";
+  void connectorMode;
 
   return Array.from(new Set(missing));
 }

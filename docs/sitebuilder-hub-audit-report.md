@@ -1283,3 +1283,6 @@ FINAL VERDICT:
 - Biggest technical risk: SharePoint write operations are complex, dangerous, and only conditionally wired; without end-to-end environment tests they can fail halfway through deploy/backup/restore/admin changes.
 - First thing to fix: make a simple read-only path work end-to-end: install/run locally, register one site, validate connection, pull live health/version/admin summary, and show exact timestamps/evidence.
 - Whether this should be repaired or partially rebuilt: repair the backend pieces that are real, but partially rebuild/simplify the product architecture and UI around a smaller read-only-first HUB core before expanding write orchestration.
+# Legacy Historical Report
+
+This audit contains findings from the older server-side SharePoint phase. The current source of truth is `docs/sharepoint-browser-only-status-report.md`: there is no SharePoint in the server.

@@ -1,15 +1,7 @@
 import { Site } from "../models/Site";
 import { logger } from "../utils/logger";
 import { resolveSiteBuilderPaths, SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
-import {
-  getRequestDigest,
-  getSharePointOperationCapabilities,
-  postSharePointJsonApi,
-  readSharePointJsonApi,
-  writeSharePointTextFile
-} from "./sharepointOperationClient";
-
-const CONTRIBUTE_ROLE_DEF_ID = 1073741827;
+import { getSharePointOperationCapabilities } from "./sharepointOperationClient";
 
 type PermissionStep = {
   key: string;
@@ -28,8 +20,6 @@ export type PermissionsSetupPlan = {
   notes: string[];
 };
 
-const escapeODataString = (value: string) => value.replace(/'/g, "''");
-
 const resolveSite = async (siteId: string) => {
   const site = await Site.findById(siteId);
   if (!site) throw new Error("site-not-found");
@@ -46,16 +36,6 @@ const resolveSite = async (siteId: string) => {
   });
 
   return { site, resolvedPaths };
-};
-
-const listItemPrefix = (usersDbRoot: string) =>
-  `/_api/web/GetFolderByServerRelativeUrl('${escapeODataString(usersDbRoot)}')/ListItemAllFields`;
-
-const extractAssociatedGroupId = (payload: any) => {
-  const group = payload?.d || payload;
-  const id = Number(group?.Id || group?.id);
-  if (!id) throw new Error("associated-members-group-id-missing");
-  return id;
 };
 
 export async function buildPermissionsSetupPlan(siteId: string): Promise<PermissionsSetupPlan> {
@@ -93,7 +73,7 @@ export async function buildPermissionsSetupPlan(siteId: string): Promise<Permiss
     notes: [
       "This mirrors the original Site Builder siteUsersDb permissions setup.",
       "It grants Contribute role (1073741827) to the associated members group.",
-      "It is a SharePoint write operation and requires explicit write capability."
+      "It is a SharePoint write operation executed by the active browser session; the server records evidence only."
     ]
   };
 
@@ -107,93 +87,7 @@ export async function buildPermissionsSetupPlan(siteId: string): Promise<Permiss
   return plan;
 }
 
-export async function executePermissionsSetup(siteId: string) {
+export async function executePermissionsSetup(siteId: string): Promise<any> {
   logger.info("sites", "Permissions setup execution started", { siteId });
-  const { site, resolvedPaths } = await resolveSite(siteId);
-  const digest = await getRequestDigest(resolvedPaths);
-  const completedSteps: PermissionStep[] = [];
-
-  const record = (step: PermissionStep) => {
-    completedSteps.push({ ...step, status: "succeeded" });
-    logger.info("sites", "Permissions setup step completed", {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      step: step.key,
-      target: step.target
-    });
-  };
-
-  const membersGroupPayload = await readSharePointJsonApi(resolvedPaths, "/_api/web/associatedmembergroup");
-  const membersGroupId = extractAssociatedGroupId(membersGroupPayload);
-  record({
-    key: "resolve-members-group",
-    label: "Resolve Associated Members Group",
-    target: String(membersGroupId),
-    status: "succeeded"
-  });
-
-  await postSharePointJsonApi(
-    resolvedPaths,
-    `${listItemPrefix(resolvedPaths.usersDbRoot)}/breakroleinheritance(copyRoleAssignments=true,clearSubscopes=true)`,
-    undefined,
-    digest
-  );
-  record({
-    key: "break-inheritance",
-    label: "Break role inheritance on siteUsersDb root",
-    target: resolvedPaths.usersDbRoot,
-    status: "succeeded"
-  });
-
-  await postSharePointJsonApi(
-    resolvedPaths,
-    `${listItemPrefix(resolvedPaths.usersDbRoot)}/roleassignments/addroleassignment(principalid=${membersGroupId},roledefid=${CONTRIBUTE_ROLE_DEF_ID})`,
-    undefined,
-    digest
-  );
-  record({
-    key: "grant-contribute",
-    label: "Grant Contribute to Associated Members Group",
-    target: resolvedPaths.usersDbRoot,
-    status: "succeeded"
-  });
-
-  await writeSharePointTextFile(
-    resolvedPaths,
-    resolvedPaths.permissionsMarkerFile,
-    JSON.stringify({
-      status: "ok",
-      configuredAt: new Date().toISOString(),
-      membersGroupId,
-      roleDefId: CONTRIBUTE_ROLE_DEF_ID
-    }, null, 2),
-    digest
-  );
-  record({
-    key: "write-marker",
-    label: "Write permissions marker",
-    target: resolvedPaths.permissionsMarkerFile,
-    status: "succeeded"
-  });
-
-  site.health = {
-    ...(site.health as any),
-    permissionsOk: true
-  };
-  site.sharePointStatus.permissionsStatus = "ok";
-  site.lastHealthCheckAt = new Date();
-  site.lastError = "";
-  await site.save();
-  logger.info("sites", "Permissions setup execution completed", {
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    completedSteps: completedSteps.length
-  });
-
-  return {
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    resolvedPaths,
-    completedSteps
-  };
+  throw new Error("browser-sharepoint-required");
 }

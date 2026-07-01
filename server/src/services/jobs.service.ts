@@ -48,6 +48,20 @@ const selfApprovalLoggedTypes = new Set<JobType>([
   "site-bootstrap"
 ]);
 
+const browserOnlySharePointJobTypes = new Set<JobType>([
+  "health-check",
+  "deploy",
+  "backup",
+  "restore",
+  "admin-sync",
+  "repair",
+  "version-upgrade",
+  "version-rollback",
+  "site-provision",
+  "permissions-setup",
+  "site-bootstrap"
+]);
+
 const approvalTtlMs = () => {
   const hours = Number((env as any).JOB_APPROVAL_TTL_HOURS || 24);
   const normalizedHours = Number.isFinite(hours) && hours > 0 ? hours : 24;
@@ -124,7 +138,7 @@ export async function createJob(input: {
   const createdById = normalizeActorId(input.createdById);
   const now = new Date();
   const executionMode: JobExecutionMode = input.executionMode || "backend";
-  const connectorMode: JobConnectorMode = input.connectorMode || (executionMode === "browser-required" ? "browser-sharepoint" : "backend-sharepoint");
+  const connectorMode: JobConnectorMode = input.connectorMode || (executionMode === "browser-required" ? "browser-sharepoint" : "server-local");
   const initialStatus: JobStatus = requiresApproval
     ? "awaiting-approval"
     : executionMode === "browser-required"
@@ -189,12 +203,12 @@ export async function createJob(input: {
         : executionMode === "browser-required"
           ? "Job waiting for browser SharePoint execution"
           : executionMode === "blocked-service-auth-required"
-            ? input.connectorBlocker || "Job blocked because backend SharePoint service auth is required"
+            ? input.connectorBlocker || "Job blocked because this legacy server SharePoint path is disabled"
             : "Job queued",
       at: now
     }]
   });
-  logger.info("jobs", requiresApproval ? "Job awaiting approval" : initialStatus === "browser-required" ? "Job waiting for browser execution" : initialStatus === "blocked-service-auth-required" ? "Job blocked for service auth" : "Job queued", {
+  logger.info("jobs", requiresApproval ? "Job awaiting approval" : initialStatus === "browser-required" ? "Job waiting for browser execution" : initialStatus === "blocked-service-auth-required" ? "Job blocked for legacy server SharePoint" : "Job queued", {
     jobId: job._id.toString(),
     type: job.type,
     siteId: job.siteId?.toString(),
@@ -225,7 +239,10 @@ export async function approveJobWithActor(jobId: string, approvedBy: { name: str
   }
   logSelfApprovalIfSameActor(job, actor, actorId);
   const executionMode = String((job as any).executionMode || "backend");
-  const browserConnector = (job as any).connectorMode === "browser-sharepoint" || (job.payload as any)?.connectorMode === "browser-sharepoint";
+  const browserConnector =
+    (job as any).connectorMode === "browser-sharepoint" ||
+    (job.payload as any)?.connectorMode === "browser-sharepoint" ||
+    browserOnlySharePointJobTypes.has(job.type as JobType);
   const approvedStatus: JobStatus = browserConnector
     ? "browser-required"
     : executionMode === "blocked-service-auth-required"
@@ -248,6 +265,7 @@ export async function approveJobWithActor(jobId: string, approvedBy: { name: str
       $set: {
         status: approvedStatus,
         executionMode: approvedStatus === "browser-required" ? "browser-required" : approvedStatus === "blocked-service-auth-required" ? "blocked-service-auth-required" : "backend",
+        connectorMode: approvedStatus === "browser-required" ? "browser-sharepoint" : (job as any).connectorMode || "server-local",
         progressPercent: 0,
         approvedAt: now,
         approvedBy: actor,
@@ -534,7 +552,8 @@ export async function claimNextJob() {
     {
       status: "queued",
       executionMode: { $nin: ["browser-required", "browser-in-progress", "blocked-service-auth-required"] },
-      "payload.connectorMode": { $ne: "browser-sharepoint" },
+      connectorMode: { $nin: ["browser-sharepoint", "backend-sharepoint", "backend-service-auth-required"] },
+      "payload.connectorMode": { $nin: ["browser-sharepoint", "backend-sharepoint", "backend-service-auth-required"] },
       "payload.executionMode": { $ne: "browser-required" },
       $or: [{ nextRetryAt: { $exists: false } }, { nextRetryAt: null }, { nextRetryAt: { $lte: now } }]
     },

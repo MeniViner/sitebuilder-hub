@@ -21,6 +21,7 @@ import { KpiCard } from "../components/KpiCard";
 import { LinkRow } from "../components/LinkRow";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { ProtectedActionDialog } from "../components/ProtectedActionDialog";
 import { SectionCard } from "../components/SectionCard";
@@ -33,6 +34,7 @@ import {
   type BrowserSharePointBackupProgressEvent
 } from "../utils/sharepointBrowserConnector";
 import { runBrowserSharePointBackupOperation } from "../utils/sharepointBrowserOperationRunner";
+import { runBrowserSharePointRestoreOperation } from "../utils/sharepointBrowserSiteOperations";
 
 const restoreStatusLabel = (status?: Backup["restoreStatus"]) => {
   const labels: Record<string, string> = {
@@ -115,30 +117,19 @@ const restoreFileCandidates = (backup: Backup) => {
 };
 
 const restoreReadinessTone = (backup: Backup, writeAvailable: boolean) => {
-  void backup;
   void writeAvailable;
-  return "danger";
-};
-
-const legacyRestoreReadinessTone = (backup: Backup, writeAvailable: boolean) => {
-  if (!writeAvailable || restoreFileCandidates(backup).length === 0 || backup.status === "failed") return "danger";
+  if (restoreFileCandidates(backup).length === 0 || backup.status === "failed") return "danger";
   if (backupVerificationStatus(backup) !== "verified" || backup.status !== "verified") return "warning";
   return "success";
 };
 
 const restoreReadinessLabel = (backup: Backup, writeAvailable: boolean) => {
-  void backup;
   void writeAvailable;
-  return "שחזור דורש הרשאת שרת ל־SharePoint או מימוש שחזור דרך הדפדפן.";
-};
-
-const legacyRestoreReadinessLabel = (backup: Backup, writeAvailable: boolean) => {
   const files = restoreFileCandidates(backup);
-  if (!writeAvailable) return "חסום: אין כתיבה ל־SharePoint";
   if (!files.length) return "חסום: חסר evidence לשחזור";
   if (backup.status === "failed") return "חסום: backup נכשל";
   if (backupVerificationStatus(backup) !== "verified") return "דורש זהירות: backup לא אומת";
-  return "מוכן ל־review מוגן";
+  return "מוכן לשחזור דרך הדפדפן";
 };
 
 const restoreReadinessBadgeClass = (backup: Backup, writeAvailable: boolean) => {
@@ -149,20 +140,21 @@ const restoreReadinessBadgeClass = (backup: Backup, writeAvailable: boolean) => 
 };
 
 const buildRestoreReview = (backup: Backup, sites: Site[], writeAvailable: boolean) => {
+  void writeAvailable;
   const files = restoreFileCandidates(backup);
   const site = sites.find((item) => item._id === backup.siteId);
   const verificationStatus = backupVerificationStatus(backup);
   const blockers = [
-    "שחזור דורש הרשאת שרת ל־SharePoint או מימוש שחזור דרך הדפדפן.",
-    !writeAvailable ? "SharePoint write capability is not configured, so restore execution cannot be queued." : "",
-    !files.length ? "Stored backup evidence/source paths are missing, so the system cannot derive restore source and target paths." : "",
-    backup.status === "failed" ? "The selected backup record is failed. Verify or choose a healthy backup before restoring." : ""
+    !site ? "לא נמצא אתר עבור הגיבוי." : "",
+    site && !site.sharePointSiteUrl ? "לא מוגדר SharePoint URL לאתר." : "",
+    !files.length ? "חסרים evidence או source paths לגיבוי, ולכן המערכת לא יכולה לגזור נתיבי מקור ויעד לשחזור." : "",
+    backup.status === "failed" ? "רשומת הגיבוי שנבחרה נכשלה. אמתו אותה או בחרו גיבוי תקין לפני שחזור." : ""
   ].filter(Boolean);
   const warnings = [
-    verificationStatus !== "verified" ? `Backup read-back verification is ${verificationStatus}. Run verification before restoring if possible.` : "",
-    backup.status !== "verified" && backup.status !== "succeeded" ? `Backup record status is ${backup.status || "unknown"}.` : "",
-    backup.restoreStatus === "failed" ? "A previous restore attempt failed. Review restore evidence before retrying." : "",
-    backup.restoreStatus === "running" ? "A restore for this backup is already marked as running." : ""
+    verificationStatus !== "verified" ? `אימות read-back של הגיבוי הוא ${verificationStatus}. מומלץ להריץ אימות לפני שחזור.` : "",
+    backup.status !== "verified" && backup.status !== "succeeded" ? `סטטוס רשומת הגיבוי הוא ${backup.status || "unknown"}.` : "",
+    backup.restoreStatus === "failed" ? "ניסיון שחזור קודם נכשל. בדקו ראיות שחזור לפני ניסיון חוזר." : "",
+    backup.restoreStatus === "running" ? "שחזור עבור הגיבוי הזה כבר מסומן כרץ." : ""
   ].filter(Boolean);
   const backupSamples = files.slice(0, 3).map((file) => file.backupPath).filter(Boolean);
   const liveSamples = files.slice(0, 3).map((file) => file.liveTargetPath).filter(Boolean);
@@ -174,14 +166,14 @@ const buildRestoreReview = (backup: Backup, sites: Site[], writeAvailable: boole
     warnings,
     disabledReason: blockers.join(" "),
     risks: [
-      `Site: ${site?.displayName || site?.siteCode || backup.siteId}.`,
-      `Backup: ${backup.backupId}; status ${backup.status}; verification ${verificationStatus}.`,
-      `Blast radius: ${formatNumber(files.length || backup.filesCount)} live file paths may be overwritten.`,
-      backup.storagePath ? `Backup storage path: ${backup.storagePath}.` : "",
-      backupSamples.length ? `Backup source sample: ${backupSamples.join(" | ")}.` : "",
-      liveSamples.length ? `Live target sample: ${liveSamples.join(" | ")}.` : "",
-      "Restore overwrites live SharePoint files but does not delete live files absent from the backup.",
-      "A pre-restore verified backup is required by backend safety policy before the restore job is queued.",
+      `אתר: ${site?.displayName || site?.siteCode || backup.siteId}.`,
+      `גיבוי: ${backup.backupId}; סטטוס ${backup.status}; אימות ${verificationStatus}.`,
+      `היקף השפעה: עד ${formatNumber(files.length || backup.filesCount)} נתיבי קבצים חיים עשויים להידרס.`,
+      backup.storagePath ? `נתיב אחסון גיבוי: ${backup.storagePath}.` : "",
+      backupSamples.length ? `דוגמת מקור גיבוי: ${backupSamples.join(" | ")}.` : "",
+      liveSamples.length ? `דוגמת יעד חי: ${liveSamples.join(" | ")}.` : "",
+      "שחזור דורס קבצי SharePoint חיים, אבל לא מוחק קבצים חיים שלא קיימים בגיבוי.",
+      "הפעולה תרוץ בדפדפן הפעיל של המשתמש. השרת ישמור רק סטטוס, Snapshot ו־Evidence.",
       ...warnings,
       ...blockers
     ].filter(Boolean)
@@ -200,8 +192,8 @@ const backupTabs: Array<{ key: BackupTab; label: string }> = [
   { key: "overview", label: "סקירה" },
   { key: "plan", label: "תכנון" },
   { key: "schedule", label: "תזמון" },
-  { key: "inventory", label: "Inventory" },
-  { key: "restore", label: "Restore" },
+  { key: "inventory", label: "מלאי גיבויים" },
+  { key: "restore", label: "שחזור מוגן" },
   { key: "history", label: "היסטוריה" }
 ];
 
@@ -423,8 +415,8 @@ export function BackupsPage() {
         const failedRestoreEvidenceCount = backup.restoreEvidence?.filter((item) => item.status === "failed").length || 0;
         return (
           <div className="space-y-1">
-            <span className={`badge ${failedEvidenceCount ? "badge-danger" : evidenceCount ? "badge-success" : "badge-neutral"}`}>{evidenceCount ? `${evidenceCount} files` : "no evidence"}</span>
-            <span className={`badge ${failedRestoreEvidenceCount ? "badge-danger" : restoreEvidenceCount ? "badge-success" : "badge-neutral"}`}>{restoreEvidenceCount ? `${restoreEvidenceCount} restore files` : "no restore evidence"}</span>
+            <span className={`badge ${failedEvidenceCount ? "badge-danger" : evidenceCount ? "badge-success" : "badge-neutral"}`}>{evidenceCount ? `${evidenceCount} קבצים` : "אין evidence"}</span>
+            <span className={`badge ${failedRestoreEvidenceCount ? "badge-danger" : restoreEvidenceCount ? "badge-success" : "badge-neutral"}`}>{restoreEvidenceCount ? `${restoreEvidenceCount} קבצי שחזור` : "אין evidence שחזור"}</span>
             {backup.backupSha256 ? <code className="num block max-w-[180px] truncate text-xs muted" title={backup.backupSha256}>{backup.backupSha256}</code> : null}
           </div>
         );
@@ -439,22 +431,22 @@ export function BackupsPage() {
         const restoreReview = buildRestoreReview(backup, sites, writeAvailable);
         return (
           <div className="flex flex-wrap gap-2">
-            <button className={`btn ${selectedRestoreBackup?._id === backup._id ? "btn-primary" : "btn-secondary"} min-h-0 px-2 py-1 text-xs`} disabled={!restoreAttempted} onClick={() => setSelectedRestoreBackupId(backup._id)} type="button"><Eye size={13} />Evidence שחזור</button>
+            <button className={`btn ${selectedRestoreBackup?._id === backup._id ? "btn-primary" : "btn-secondary"} min-h-0 px-2 py-1 text-xs`} disabled={!restoreAttempted} onClick={() => setSelectedRestoreBackupId(backup._id)} type="button"><Eye size={13} />ראיות שחזור</button>
             <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" onClick={() => runAction(`verify-${backup._id}`, async () => {
               await verifyBackupThroughBrowser(backup);
             })} type="button">אמת דרך הדפדפן</button>
             <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" disabled={busyAction === `restore-plan-${backup._id}`} onClick={() => runAction(`restore-plan-${backup._id}`, async () => {
               await sitesApi.restorePlan(backup._id, "Auto-generated restore planning note");
-              setMessage(`נוצר restore plan מטא־דאטה עבור ${backup.backupId}`);
-            })} type="button">Restore plan בלבד</button>
+              setMessage(`נוצרה תוכנית שחזור מטא־דאטה עבור ${backup.backupId}`);
+            })} type="button">תוכנית שחזור בלבד</button>
             <button
               className={`btn ${restoreReview.disabledReason ? "btn-secondary" : "btn-danger"} min-h-0 px-2 py-1 text-xs`}
               disabled={busyAction === `restore-queue-${backup._id}`}
               onClick={() => setRestoreRequestBackup(backup)}
-              title={restoreReview.disabledReason || "פתח review מוגן לפני יצירת Restore job"}
+              title={restoreReview.disabledReason || "פתח review מוגן לפני יצירת Job שחזור"}
               type="button"
             >
-              <RotateCcw size={13} />סקור Restore
+              <RotateCcw size={13} />סקור שחזור
             </button>
           </div>
         );
@@ -487,7 +479,7 @@ export function BackupsPage() {
           <span className={`badge ${failedEvidenceCount ? "badge-danger" : evidenceCount ? "badge-success" : "badge-neutral"}`}>{evidenceCount ? `${evidenceCount} evidence` : "no evidence"}</span>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button className={`btn ${selectedRestoreBackup?._id === backup._id ? "btn-primary" : "btn-secondary"} min-h-0 px-2 py-1 text-xs`} disabled={!restoreAttempted} onClick={() => setSelectedRestoreBackupId(backup._id)} type="button"><Eye size={13} />Evidence</button>
+          <button className={`btn ${selectedRestoreBackup?._id === backup._id ? "btn-primary" : "btn-secondary"} min-h-0 px-2 py-1 text-xs`} disabled={!restoreAttempted} onClick={() => setSelectedRestoreBackupId(backup._id)} type="button"><Eye size={13} />ראיות שחזור</button>
           <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" onClick={() => runAction(`verify-${backup._id}`, async () => {
             await verifyBackupThroughBrowser(backup);
           })} type="button">אמת בדפדפן</button>
@@ -495,10 +487,10 @@ export function BackupsPage() {
             className={`btn ${restoreReview.disabledReason ? "btn-secondary" : "btn-danger"} min-h-0 px-2 py-1 text-xs`}
             disabled={busyAction === `restore-queue-${backup._id}`}
             onClick={() => setRestoreRequestBackup(backup)}
-            title={restoreReview.disabledReason || "פתח review מוגן לפני יצירת Restore job"}
+            title={restoreReview.disabledReason || "פתח review מוגן לפני יצירת Job שחזור"}
             type="button"
           >
-            <RotateCcw size={13} />סקור Restore
+            <RotateCcw size={13} />סקור שחזור
           </button>
         </div>
       </div>
@@ -610,10 +602,43 @@ export function BackupsPage() {
     <div className="space-y-5">
       <PageHeader
         title="גיבוי ושחזור"
-        subtitle="Recovery Center לאתרי Site Builder. גיבוי ואימות Backup רצים דרך הדפדפן עם Digest מאתר היעד; Restore עדיין לא הוסב לדפדפן ולכן חסום כברירת מחדל."
+        subtitle="Recovery Center לאתרי Site Builder. גיבוי ואימות רצים דרך הדפדפן עם Digest מאתר היעד; שחזור עדיין לא הוסב לדפדפן ולכן חסום כברירת מחדל."
         actions={<span className="badge badge-success">Browser SharePoint backup</span>}
         helpKey="backup"
       />
+
+      <OperationalSummary
+        title="Recovery Center"
+        purpose="המסך הזה עוזר לבדוק אם יש גיבוי עדכני, להריץ גיבוי בטוח דרך הדפדפן, ולמנוע שחזור מסוכן בלי Review."
+        state={`${formatNumber(backups.length)} גיבויים רשומים · ${formatNumber(verifiedBackups.length)} מאומתים`}
+        attention={failedBackups.length
+          ? `${formatNumber(failedBackups.length)} גיבויים נכשלו ודורשים בדיקה.`
+          : backups.length
+            ? "אין כשל גיבוי מרכזי שמופיע כרגע."
+            : "אין עדיין גיבויים. לפני פריסה או שחזור צריך ליצור תוכנית גיבוי."}
+        attentionTone={failedBackups.length ? "danger" : backups.length ? "success" : "warning"}
+        nextAction={selectedSite ? `בחרו פעולה עבור ${selectedSite.displayName}: תוכנית, גיבוי, מלאי או שחזור מוגן.` : "בחרו אתר כדי להתחיל תוכנית גיבוי."}
+        blocked="שחזור חי חסום עד שיושלם מסלול שחזור דרך הדפדפן, evidence מספיק, וסיבת שחזור מאושרת."
+        blockedTone="warning"
+        tone={failedBackups.length ? "danger" : verifiedBackups.length ? "success" : "warning"}
+      >
+        <GuidedFlow
+          title="זרימת שחזור בטוחה"
+          steps={[
+            { title: "מצא גיבוי", description: "בדקו היסטוריה ומלאי גיבויים לפני בחירה.", status: backups.length ? "done" : "active" },
+            { title: "אמת Evidence", description: "Verify משווה size/sha מול SharePoint דרך הדפדפן.", status: verifiedBackups.length ? "done" : "pending" },
+            { title: "סקור השפעה", description: "סקירת שחזור מציגה היקף השפעה, מקור/יעד ומה לא יימחק.", status: selectedRestoreBackup ? "active" : "pending" },
+            { title: "אישור מוגן", description: "Job שחזור נוצר רק עם נימוק ומילת אישור.", status: "pending" }
+          ]}
+        />
+        <ModeBoundary
+          items={[
+            { label: "גיבוי ידני", description: "רץ דרך Browser SharePoint עם Digest מאתר היעד.", tone: "success" },
+            { label: "תזמון גיבוי", description: "יוצר משימה שממתינה לדפדפן SharePoint מחובר.", tone: "warning" },
+            { label: "שחזור", description: "פעולה מוגנת שעלולה לדרוס קבצים חיים. לא מתבצעת בלי Review.", tone: "danger" }
+          ]}
+        />
+      </OperationalSummary>
 
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}
       {loading ? <LoadingState /> : null}
@@ -668,7 +693,7 @@ export function BackupsPage() {
                 <>
                   <span className="badge badge-success">credentials include</span>
                   <span className="badge badge-success">Digest per target site</span>
-                  {!writeAvailable ? <span className="badge badge-warning">Backend SharePoint 401 לא חוסם גיבוי דפדפן</span> : null}
+                  <span className="badge badge-neutral">Server SharePoint לא נדרש</span>
                 </>
               )}
             </div>
@@ -779,11 +804,10 @@ export function BackupsPage() {
           ) : null}
 
           {backupTab === "schedule" ? (
-          <SectionCard title="תזמון גיבוי חוזר" subtitle="תזמון רץ ברקע ולכן דורש הרשאת שרת ל־SharePoint; גיבוי ידני רץ דרך הדפדפן." helpKey="backup.schedule">
+          <SectionCard title="תזמון גיבוי חוזר" subtitle="תזמון יוצר משימה שממתינה לדפדפן SharePoint מחובר; השרת לא נוגע ב־SharePoint." helpKey="backup.schedule">
             <div className="mb-4 flex flex-wrap gap-2">
-              <span className="badge badge-warning">דורש הרשאת שרת</span>
-              <span className="badge badge-neutral">לא יכול לרוץ ברקע בלי חיבור שרת ל־SharePoint</span>
-              {!writeAvailable ? <MetadataOnlyBadge mode="notConnected" /> : null}
+              <span className="badge badge-warning">ממתין לדפדפן</span>
+              <span className="badge badge-neutral">שרת SharePoint מושבת בכוונה</span>
             </div>
             <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
               <label className="block">
@@ -911,22 +935,22 @@ export function BackupsPage() {
           ) : null}
 
           {backupTab === "history" || backupTab === "restore" ? (
-          <SectionCard
-            title="היסטוריית גיבויים"
-            subtitle="Verify קורא את קבצי הגיבוי מ־SharePoint דרך הדפדפן ומשווה sha256/size מול evidence שמור; Restore plan הוא תכנון בלבד."
-            helpKey="history"
-            actions={<button className="btn btn-secondary" onClick={load} type="button"><RefreshCcw size={15} />רענן</button>}
-          >
-            <div className="mb-4 flex flex-wrap gap-2">
-              <span className="badge badge-success">Browser Verify</span>
-              <MetadataOnlyBadge mode="metadata" />
-              {writeAvailable ? <span className="badge badge-success">Restore במצב בעלים</span> : null}
-            </div>
+	          <SectionCard
+	            title="היסטוריית גיבויים"
+	            subtitle="אימות ושחזור קוראים וכותבים מול SharePoint דרך הדפדפן הפעיל; השרת שומר רק Job ו־Evidence."
+	            helpKey="history"
+	            actions={<button className="btn btn-secondary" onClick={load} type="button"><RefreshCcw size={15} />רענן</button>}
+	          >
+	            <div className="mb-4 flex flex-wrap gap-2">
+	              <span className="badge badge-success">אימות דפדפן</span>
+	              <span className="badge badge-success">שחזור דפדפן</span>
+	              <MetadataOnlyBadge mode="metadata" />
+	            </div>
             {backupTab === "restore" ? (
               <div className="mb-5 space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <KpiCard
-                    title="מוכנים ל־Restore review"
+                    title="מוכנים לסקירת שחזור"
                     value={formatNumber(restoreReviewReadyBackups.length)}
                     icon={<RotateCcw size={18} />}
                     description="ללא חסימת write/evidence בסיסית"
@@ -942,28 +966,28 @@ export function BackupsPage() {
                     helpKey="deploy.evidence"
                   />
                   <KpiCard
-                    title="Verified backups"
+                    title="גיבויים מאומתים"
                     value={formatNumber(verifiedBackups.length)}
                     icon={<ShieldAlert size={18} />}
                     description="אומת read-back מול SharePoint"
                     tone={verifiedBackups.length ? "success" : "warning"}
                     helpKey="backup.verified"
                   />
-                  <KpiCard
-                    title="יכולת כתיבה"
-                    value={writeAvailable ? "זמינה" : "חסומה"}
-                    icon={<DatabaseBackup size={18} />}
-                    description={writeAvailable ? "ניתן לשלוח Restore job לאישור" : "אפשר לתכנן ולאמת בלבד"}
-                    tone={writeAvailable ? "success" : "danger"}
-                    helpKey="sharepoint.write"
-                  />
+	                  <KpiCard
+	                    title="מסלול הרצה"
+	                    value="דפדפן"
+	                    icon={<DatabaseBackup size={18} />}
+	                    description="אין שחזור SharePoint בשרת"
+	                    tone="success"
+	                    helpKey="sharepoint.write"
+	                  />
                 </div>
                 <div className="rounded-lg border p-4 text-sm" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
-                  <p className="font-bold" style={{ color: "var(--text-strong)" }}>Restore flow</p>
-                  <p className="mt-1 muted">
-                    בחר backup, בדוק verification/evidence, פתח "סקור Restore", ודא blast radius ונתיבי source/target, ואז הקלד את מילת האישור עם נימוק.
-                    השרת עדיין אוכף backup בטיחותי עדכני לפני queue של restore job.
-                  </p>
+                  <p className="font-bold" style={{ color: "var(--text-strong)" }}>זרימת שחזור</p>
+	                  <p className="mt-1 muted">
+	                    בחרו גיבוי, בדקו אימות ו־evidence, פתחו "סקור שחזור", ודאו היקף השפעה ונתיבי מקור/יעד, ואז הקלידו את מילת האישור עם נימוק.
+	                    הדפדפן הפעיל יבצע את הקריאה והכתיבה מול SharePoint; השרת ישמור רק Job, סטטוס ו־Evidence.
+	                  </p>
                 </div>
               </div>
             ) : null}
@@ -978,7 +1002,7 @@ export function BackupsPage() {
                 <div className="soft-panel p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <p className="text-sm font-bold muted">Restore evidence</p>
+                      <p className="text-sm font-bold muted">ראיות שחזור</p>
                       <p className="num mt-1 font-bold" style={{ color: "var(--text-strong)" }}>{selectedRestoreBackup.backupId}</p>
                     </div>
                     <span className={`badge ${restoreStatusBadgeClass(selectedRestoreBackup.restoreStatus)}`}>{restoreStatusLabel(selectedRestoreBackup.restoreStatus)}</span>
@@ -989,7 +1013,7 @@ export function BackupsPage() {
                       <p className="num text-sm">{formatDateTime(selectedRestoreBackup.lastRestoreAt)}</p>
                     </div>
                     <div>
-                      <span className="field-label">Restore job</span>
+                      <span className="field-label">Job שחזור</span>
                       {selectedRestoreBackup.lastRestoreJobId ? (
                         <code className="num block max-w-[220px] truncate text-sm" title={selectedRestoreBackup.lastRestoreJobId}>{selectedRestoreBackup.lastRestoreJobId}</code>
                       ) : <p className="muted">-</p>}
@@ -1015,7 +1039,7 @@ export function BackupsPage() {
                 </div>
 
                 {selectedRestoreEvidence.length === 0 ? (
-                  <EmptyState title="אין restore evidence להצגה" description="לא נשמרו שורות evidence עבור ניסיון השחזור הזה." />
+                  <EmptyState title="אין ראיות שחזור להצגה" description="לא נשמרו שורות evidence עבור ניסיון השחזור הזה." />
                 ) : (
                   <DataTable
                     columns={restoreEvidenceColumns}
@@ -1055,28 +1079,48 @@ export function BackupsPage() {
 
       <ProtectedActionDialog
         open={Boolean(restoreRequestBackup)}
-        title="הרצת Restore"
+        title="הרצת שחזור"
         description={restoreRequestBackup
-          ? `Review מוגן לפני יצירת Restore job עבור ${restoreRequestBackup.backupId}. בדקו את ה־blast radius, ה־evidence והחסימות לפני אישור.`
+          ? `סקירה מוגנת לפני יצירת Job שחזור עבור ${restoreRequestBackup.backupId}. בדקו את היקף ההשפעה, ה־evidence והחסימות לפני אישור.`
           : ""}
         confirmWord="שחזר"
-        noteLabel="סיבת Restore"
-        notePlaceholder="לדוגמה: שחזור לאחר תקלה, אושר מול בעל האתר ונבדק backup עדכני"
-        initialNote={restoreRequestBackup ? `Restore backup ${restoreRequestBackup.backupId}` : ""}
-        confirmLabel="צור Restore job"
-        confirmDisabledReason={pendingRestoreReview?.disabledReason || ""}
-        busy={Boolean(restoreRequestBackup && busyAction === `restore-queue-${restoreRequestBackup._id}`)}
-        risks={pendingRestoreReview?.risks || []}
+        noteLabel="סיבת שחזור"
+	        notePlaceholder="לדוגמה: שחזור לאחר תקלה, אושר מול בעל האתר ונבדק backup עדכני"
+	        initialNote={restoreRequestBackup ? `שחזור גיבוי ${restoreRequestBackup.backupId}` : ""}
+	        confirmLabel="הרץ שחזור בדפדפן"
+	        confirmDisabledReason={pendingRestoreReview?.disabledReason || ""}
+	        busy={Boolean(restoreRequestBackup && busyAction === `restore-queue-${restoreRequestBackup._id}`)}
+	        risks={pendingRestoreReview?.risks || []}
         onClose={() => setRestoreRequestBackup(null)}
         onConfirm={(notes) => {
-          const backup = restoreRequestBackup;
-          if (!backup) return;
-          void runAction(`restore-queue-${backup._id}`, async () => {
-            const result = await sitesApi.queueRestoreBackup(backup._id, notes);
-            setMessage(`Restore job ${result.data.job._id} נשלח לתור עבור ${backup.backupId}`);
-            setRestoreRequestBackup(null);
-            await load();
-          });
+	          const backup = restoreRequestBackup;
+	          if (!backup) return;
+	          void runAction(`restore-queue-${backup._id}`, async () => {
+	            const site = sites.find((item) => item._id === backup.siteId);
+	            if (!site) throw new Error("לא נמצא אתר עבור הגיבוי");
+	            const queued = await sitesApi.queueRestoreBackup(backup._id, notes);
+	            const browserResult = await runBrowserSharePointRestoreOperation(
+	              site,
+	              queued.data.backup || backup,
+	              queued.data.browserOperationPlan
+	            );
+	            const stored = await sitesApi.recordBrowserRestoreEvidence(backup._id, {
+	              connectorMode: "browser-sharepoint",
+	              jobId: queued.data.job._id,
+	              targetSiteUrl: browserResult.targetSiteUrl,
+	              restoreEvidence: browserResult.restoreEvidence,
+	              errors: browserResult.errors,
+	              startedAt: browserResult.startedAt,
+	              completedAt: browserResult.completedAt,
+	              finalStatus: browserResult.finalStatus
+	            });
+	            setSelectedRestoreBackupId(stored.data.backup._id);
+	            setMessage(browserResult.finalStatus === "success"
+	              ? `שחזור ${backup.backupId} הושלם ואומת דרך הדפדפן`
+	              : `שחזור ${backup.backupId} נכשל דרך הדפדפן; evidence נשמר`);
+	            setRestoreRequestBackup(null);
+	            await load();
+	          });
         }}
       />
     </div>

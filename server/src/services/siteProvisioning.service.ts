@@ -1,13 +1,7 @@
 import { Site } from "../models/Site";
 import { logger } from "../utils/logger";
 import { resolveSiteBuilderPaths, SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
-import {
-  ensureDocumentLibrary,
-  ensureSharePointFolderHierarchy,
-  ensureSharePointTextFile,
-  getRequestDigest,
-  getSharePointOperationCapabilities,
-} from "./sharepointOperationClient";
+import { getSharePointOperationCapabilities } from "./sharepointOperationClient";
 
 type ProvisionStep = {
   key: string;
@@ -182,11 +176,8 @@ export async function buildSiteProvisionPlan(siteId: string): Promise<SiteProvis
       target: file.path
     }))
   ];
-  const readyForProvisionExecution = capabilities.writeAvailable && capabilities.digest.canRequest;
-  const blockers = [
-    !capabilities.writeAvailable ? "sharepoint-write-not-configured" : "",
-    !capabilities.digest.canRequest ? "sharepoint-request-digest-not-available" : ""
-  ].filter(Boolean);
+  const readyForProvisionExecution = true;
+  const blockers = [] as string[];
 
   const plan = {
     generatedAt: new Date().toISOString(),
@@ -207,7 +198,7 @@ export async function buildSiteProvisionPlan(siteId: string): Promise<SiteProvis
       "It does not create a SharePoint site collection/subsite.",
       "It does not deploy dist assets; controlled deploy still requires a release artifact/manifest flow.",
       "It ensures bootstrap and backup folders plus an initial bootstrap manifest when they are missing.",
-      "Execution is blocked unless SharePoint write capability and request digest acquisition are available."
+      "Execution runs through the active browser SharePoint session; the server records evidence only."
     ]
   };
 
@@ -222,98 +213,7 @@ export async function buildSiteProvisionPlan(siteId: string): Promise<SiteProvis
   return plan;
 }
 
-export async function executeSiteProvisioning(siteId: string) {
+export async function executeSiteProvisioning(siteId: string): Promise<any> {
   logger.info("sites", "Site provisioning execution started", { siteId });
-  const { site, resolvedPaths } = await resolvePathsForSite(siteId);
-  const digest = await getRequestDigest(resolvedPaths);
-  const completedSteps: ProvisionStep[] = [];
-
-  const record = (step: ProvisionStep) => {
-    completedSteps.push({ ...step, status: "succeeded" });
-    logger.info("sites", "Site provisioning step completed", {
-      siteId: site._id.toString(),
-      siteCode: site.siteCode,
-      step: step.key,
-      target: step.target
-    });
-  };
-
-  await ensureDocumentLibrary(resolvedPaths, resolvedPaths.siteDbLibrary, digest);
-  record({ key: "library-site-db", label: "Ensure siteDB Document Library", mode: "read-write", target: resolvedPaths.siteDbLibrary });
-
-  await ensureDocumentLibrary(resolvedPaths, resolvedPaths.usersDbLibrary, digest);
-  record({ key: "library-users-db", label: "Ensure siteUsersDb Document Library", mode: "read-write", target: resolvedPaths.usersDbLibrary });
-
-  await ensureDocumentLibrary(resolvedPaths, resolvedPaths.bootstrapLibrary, digest);
-  record({ key: "library-bootstrap", label: "Ensure bootstrap Document Library", mode: "read-write", target: resolvedPaths.bootstrapLibrary });
-
-  for (const folder of [
-    resolvedPaths.siteAssetsRoot,
-    resolvedPaths.imagesRoot,
-    resolvedPaths.finalDistRoot,
-    resolvedPaths.backupsRoot,
-    resolvedPaths.bootstrapRoot,
-    resolvedPaths.bootstrapDistRoot
-  ]) {
-    await ensureSharePointFolderHierarchy(resolvedPaths, folder, digest);
-    record({ key: `folder-${folder}`, label: "Ensure folder", mode: "read-write", target: folder });
-  }
-
-  for (const file of defaultTextFiles(site, resolvedPaths)) {
-    try {
-      await ensureSharePointTextFile(resolvedPaths, file.path, file.content, digest);
-      record({ key: `txt-${file.path}`, label: "Ensure TXT file", mode: "read-write", target: file.path });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error("sites", "Site provisioning TXT step failed", {
-        siteId: site._id.toString(),
-        siteCode: site.siteCode,
-        path: file.path,
-        error: message
-      });
-      throw new Error(`site-provision-text-file-failed:${file.path}:${message}`);
-    }
-  }
-
-  for (const file of defaultBootstrapFiles(site, resolvedPaths)) {
-    try {
-      await ensureSharePointTextFile(resolvedPaths, file.path, file.content, digest);
-      record({ key: `bootstrap-${file.path}`, label: "Ensure bootstrap file", mode: "read-write", target: file.path });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error("sites", "Site provisioning bootstrap file step failed", {
-        siteId: site._id.toString(),
-        siteCode: site.siteCode,
-        path: file.path,
-        error: message
-      });
-      throw new Error(`site-provision-bootstrap-file-failed:${file.path}:${message}`);
-    }
-  }
-
-  site.resolvedPaths = resolvedPaths as any;
-  site.health = {
-    ...(site.health as any),
-    siteDbExists: true,
-    usersDbExists: true,
-    distExists: true,
-    assetsExists: true,
-    txtFilesExist: true
-  };
-  site.lastHealthCheckAt = new Date();
-  site.sharePointStatus.documentLibrariesStatus = "ok";
-  site.lastError = "";
-  await site.save();
-  logger.info("sites", "Site provisioning execution completed", {
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    completedSteps: completedSteps.length
-  });
-
-  return {
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    resolvedPaths,
-    completedSteps
-  };
+  throw new Error("browser-sharepoint-required");
 }

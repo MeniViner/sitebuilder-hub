@@ -33,6 +33,30 @@ const backupEvidenceSchema = z.object({
   error: z.string().optional()
 });
 
+const restoreEvidenceSchema = z.object({
+  sourcePath: z.string().optional(),
+  targetPath: z.string().optional(),
+  backupPath: z.string().optional(),
+  status: z.enum(["verified", "failed"]).optional(),
+  checkedAt: z.string().optional(),
+  expectedBackupSizeBytes: z.number().optional(),
+  expectedBackupSha256: z.string().optional(),
+  backupSizeBytes: z.number().optional(),
+  backupSha256: z.string().optional(),
+  expectedRestoreSizeBytes: z.number().optional(),
+  expectedRestoreSha256: z.string().optional(),
+  restoredSizeBytes: z.number().optional(),
+  restoredSha256: z.string().optional(),
+  sizeMatches: z.boolean().optional(),
+  sha256Matches: z.boolean().optional(),
+  httpStatus: z.number().optional(),
+  httpStatusText: z.string().optional(),
+  contentType: z.string().optional(),
+  etag: z.string().optional(),
+  lastModified: z.string().optional(),
+  error: z.string().optional()
+});
+
 const backupSourceEvidenceSchema = z.object({
   path: z.string(),
   exists: z.boolean().optional(),
@@ -78,12 +102,31 @@ export const browserBackupVerificationEvidenceSchema = z.object({
   finalStatus: z.enum(["success", "failed"])
 });
 
+export const browserRestoreEvidenceSchema = z.object({
+  connectorMode: z.literal("browser-sharepoint"),
+  jobId: z.string().optional(),
+  targetSiteUrl: z.string().optional(),
+  restoreEvidence: z.array(restoreEvidenceSchema),
+  errors: z.array(z.union([
+    z.string(),
+    z.object({
+      sourcePath: z.string().optional(),
+      targetPath: z.string().optional(),
+      backupPath: z.string().optional(),
+      error: z.string(),
+      status: z.number().optional()
+    })
+  ])).optional(),
+  startedAt: z.string().optional(),
+  completedAt: z.string().optional(),
+  finalStatus: z.enum(["success", "failed"])
+});
+
 export const restorePlanSchema = z.object({
   notes: z.string().optional()
 });
 
 export const queueRestoreSchema = z.object({
   notes: z.string().trim().max(4000).optional(),
-  connectorMode: z.enum(["browser-sharepoint", "backend-sharepoint"]).optional(),
-  confirmBackendSharePoint: z.boolean().optional()
+  connectorMode: z.literal("browser-sharepoint").optional()
 });

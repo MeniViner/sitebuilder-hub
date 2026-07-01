@@ -87,7 +87,7 @@ describe("job approval TTL defaults", () => {
       createdBy: "Operator One",
       approvalRequestedBy: "Operator One"
     };
-    const updatedJob = { ...pendingJob, status: "queued", approvedBy: "Operator One" };
+    const updatedJob = { ...pendingJob, status: "browser-required", approvedBy: "Operator One" };
     mocks.Job.findById.mockResolvedValue(pendingJob);
     mocks.Job.findByIdAndUpdate.mockResolvedValue(updatedJob);
 
@@ -98,7 +98,9 @@ describe("job approval TTL defaults", () => {
       "job-self-1",
       expect.objectContaining({
         $set: expect.objectContaining({
-          status: "queued",
+          status: "browser-required",
+          executionMode: "browser-required",
+          connectorMode: "browser-sharepoint",
           approvedBy: "Operator One",
           approvalDecisionReason: "looks good"
         })
@@ -126,7 +128,7 @@ describe("job approval TTL defaults", () => {
       approvalRequestedBy: "Operator One",
       siteId: { toString: () => "site-1" }
     };
-    const updatedJob = { ...pendingJob, status: "queued", approvedBy: "Admin Two" };
+    const updatedJob = { ...pendingJob, status: "browser-required", approvedBy: "Admin Two" };
     mocks.Job.findById.mockResolvedValue(pendingJob);
     mocks.Job.findByIdAndUpdate.mockResolvedValue(updatedJob);
 
@@ -139,7 +141,9 @@ describe("job approval TTL defaults", () => {
       "job-approve-1",
       expect.objectContaining({
         $set: expect.objectContaining({
-          status: "queued",
+          status: "browser-required",
+          executionMode: "browser-required",
+          connectorMode: "browser-sharepoint",
           approvedBy: "Admin Two",
           approvedById: "pn:s2222222",
           approvalResult: expect.objectContaining({

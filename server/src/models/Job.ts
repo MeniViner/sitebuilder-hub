@@ -48,7 +48,7 @@ const jobSchema = new Schema(
     connectorMode: {
       type: String,
       enum: ["backend-sharepoint", "browser-sharepoint", "mongo-backend", "server-local", "backend-service-auth-required", "manual", "none"],
-      default: "backend-sharepoint",
+      default: "server-local",
       index: true
     },
     operationPolicy: { type: String, default: "" },

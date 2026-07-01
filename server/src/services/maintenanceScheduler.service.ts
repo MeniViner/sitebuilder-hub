@@ -5,6 +5,7 @@ import { Site } from "../models/Site";
 import { logger } from "../utils/logger";
 import { enqueueSiteBackup } from "./backups.service";
 import { createJob } from "./jobs.service";
+import { getBrowserRequiredJobMessage, getSharePointOperationPolicy } from "./sharepointOperationPolicy.service";
 
 type ScheduleKind = "backup" | "healthCheck";
 type SchedulerSiteId = Types.ObjectId | string;
@@ -164,14 +165,30 @@ async function queueScheduledHealthCheck(site: any, now: Date, result: Scheduler
   }
 
   try {
+    const policy = getSharePointOperationPolicy("scheduled-health-check");
     const job = await createJob({
       type: "health-check",
       siteId: siteId.toString(),
       createdBy: SCHEDULER_ACTOR,
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint",
+      operationPolicy: policy.operation,
+      connectorStatusLabel: policy.statusLabelHe,
+      connectorBlocker: policy.blockerHe || "",
       payload: {
         scheduled: true,
         kind: "health-check",
-        intervalMinutes
+        intervalMinutes,
+        connectorMode: "browser-sharepoint",
+        executionMode: "browser-required",
+        browserOperationPlan: {
+          operation: "health-check",
+          connectorMode: "browser-sharepoint",
+          executionMode: "browser-required",
+          siteId: siteId.toString(),
+          siteCode: site.siteCode,
+          message: getBrowserRequiredJobMessage("scheduled-health-check")
+        }
       }
     });
     result.queuedHealthChecks += 1;

@@ -77,17 +77,16 @@ describe("dangerous validation bypass env", () => {
     ]));
   });
 
-  it("turns SharePoint backend write preflight into a dangerous warning instead of a blocker", async () => {
+  it("does not re-enable server SharePoint even when the old write bypass flag is active", async () => {
     mockEnv.HUB_DANGEROUS_BYPASS_SHAREPOINT_WRITE_GATES = true;
 
     const { getSharePointOperationCapabilities } = await import("../server/src/services/sharepointOperationClient");
     const capabilities = getSharePointOperationCapabilities();
 
     expect(capabilities.hasAuthMaterial).toBe(false);
-    expect(capabilities.writeAvailable).toBe(true);
-    expect(capabilities.digest.canRequest).toBe(true);
-    expect(capabilities.configured.dangerousWriteGateBypassEnvVar).toBe("HUB_DANGEROUS_BYPASS_SHAREPOINT_WRITE_GATES");
-    expect(capabilities.reason).toContain("bypasses Hub SharePoint write/digest preflight gates");
+    expect(capabilities.writeAvailable).toBe(false);
+    expect(capabilities.digest.canRequest).toBe(false);
+    expect(capabilities.reason).toContain("Server-side SharePoint REST is disabled");
   });
 
   it("skips approval and backup policy gates when explicit dangerous env flags are active", async () => {

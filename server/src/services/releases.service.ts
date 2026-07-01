@@ -4,7 +4,6 @@ import { Site } from "../models/Site";
 import { SiteVersionDeployment } from "../models/SiteVersionDeployment";
 import { compareSemver, bumpVersion } from "../utils/version";
 import { createJob } from "./jobs.service";
-import { assertSharePointWriteAvailable } from "./sharepointOperationClient";
 import { logger } from "../utils/logger";
 import { assertReleaseArtifactReady, buildSiteDeployPlan } from "./deployArtifact.service";
 import { assertRecentVerifiedBackupForDangerousWrite, BackupSafetySnapshot } from "./writeSafety.service";
@@ -16,10 +15,11 @@ import {
   DeploySafetySnapshot
 } from "./deployPolicy.service";
 import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
+import { getBrowserRequiredJobMessage, getSharePointOperationPolicy } from "./sharepointOperationPolicy.service";
 
 export type BatchDeployTargetMode = "single" | "selected" | "all";
 export type BatchDeployTargetStatus = "ready" | "warning" | "blocked" | "up_to_date";
-export type SharePointConnectorMode = "backend-sharepoint" | "browser-sharepoint";
+export type SharePointConnectorMode = "browser-sharepoint";
 
 export type BatchDeployPlanRow = {
   siteId: string;
@@ -271,6 +271,7 @@ export async function getReleaseById(id: string) {
 }
 
 export async function createRelease(input: {
+  name?: string;
   version?: string;
   releaseType: "patch" | "minor" | "major" | "hotfix";
   notes?: string;
@@ -279,6 +280,7 @@ export async function createRelease(input: {
   createdBy: string;
 }) {
   logger.info("releases", "Creating release", {
+    name: input.name,
     requestedVersion: input.version,
     releaseType: input.releaseType,
     artifactRef: input.artifactRef,
@@ -299,13 +301,79 @@ export async function createRelease(input: {
   }
 
   const release = await Release.create({
+    name: String(input.name || "").trim(),
     version,
     releaseType: input.releaseType,
     notes: input.notes || "",
     artifactRef: input.artifactRef || "",
     createdBy: input.createdBy
   });
-  logger.info("releases", "Release created", { releaseId: release._id.toString(), version: release.version });
+  logger.info("releases", "Release created", { releaseId: release._id.toString(), name: release.name, version: release.version });
+  return release;
+}
+
+export async function updateReleaseName(id: string, name: string) {
+  return updateRelease(id, { name });
+}
+
+export async function updateRelease(id: string, input: {
+  name: string;
+  version?: string;
+  releaseType?: "patch" | "minor" | "major" | "hotfix";
+  notes?: string;
+  artifactRef?: string;
+  status?: "active" | "deprecated";
+}) {
+  const release = await Release.findById(id);
+  if (!release) throw new Error("release-not-found");
+
+  const trimmedName = String(input.name || "").trim();
+  if (!trimmedName) throw new Error("release-name-required");
+
+  const nextVersion = String(input.version || release.version || "").trim();
+  if (!nextVersion) throw new Error("release-version-required");
+  if (nextVersion !== release.version) {
+    const existing = await Release.findOne({ version: nextVersion });
+    if (existing && existing._id.toString() !== release._id.toString()) {
+      throw new Error("duplicate-release-version");
+    }
+  }
+
+  const previousArtifactRef = String(release.artifactRef || "");
+  const nextArtifactRef = input.artifactRef !== undefined ? String(input.artifactRef || "").trim() : previousArtifactRef;
+  const existingArtifactValidation = (release.artifactValidation as any)?.toObject?.() || release.artifactValidation || {};
+
+  release.set("name", trimmedName);
+  release.set("version", nextVersion);
+  if (input.releaseType) release.set("releaseType", input.releaseType);
+  if (input.notes !== undefined) release.set("notes", input.notes || "");
+  if (input.artifactRef !== undefined) release.set("artifactRef", nextArtifactRef);
+  if (input.status) release.set("status", input.status);
+
+  if (nextArtifactRef !== previousArtifactRef) {
+    release.set("artifactValidation", {
+      ...existingArtifactValidation,
+      artifactRef: nextArtifactRef,
+      artifactRoot: "",
+      filesCount: 0,
+      totalSizeBytes: 0,
+      hasIndexHtml: false,
+      hasManifest: false,
+      readyForDeploy: false,
+      validationError: nextArtifactRef ? "artifact-validation-required-after-edit" : "release-artifact-ref-missing",
+      storageCompatibility: [],
+      artifactKind: "unknown",
+      requiresRuntimeConfig: false,
+      preservesRuntimeConfig: true,
+      requiredFolders: [],
+      runtimeConfigFiles: [],
+      compatibilitySource: "unknown",
+      compatibilityWarnings: []
+    });
+  }
+
+  await release.save();
+  logger.info("releases", "Release updated", { releaseId: release._id.toString(), name: trimmedName, version: release.version, artifactRefChanged: nextArtifactRef !== previousArtifactRef });
   return release;
 }
 
@@ -377,7 +445,7 @@ export async function buildBatchDeployPlan(params: {
   if (!release) throw new Error("release-not-found");
 
   const deployPolicy = buildDeployPolicy(params.deployMode || "local-dev-owner");
-  const connectorMode: SharePointConnectorMode = params.connectorMode === "browser-sharepoint" ? "browser-sharepoint" : "backend-sharepoint";
+  const connectorMode: SharePointConnectorMode = "browser-sharepoint";
   const backupOverrideAllowed = Boolean(params.allowDeployWithoutBackup && deployPolicy.localDevOwnerMode && connectorMode === "browser-sharepoint");
   const deployPlanBypassEnvVar = getDangerousValidationBypassEnvVar("deploy-plan-blockers");
   const deployPlanBlockersBypassed = Boolean(deployPlanBypassEnvVar);
@@ -589,6 +657,11 @@ const queueBatchDeployForSite = async (params: {
     type: "version-upgrade",
     siteId: params.site._id.toString(),
     createdBy: params.createdBy,
+    executionMode: "browser-required",
+    connectorMode: "browser-sharepoint",
+    operationPolicy: "deploy",
+    connectorStatusLabel: "ממתין לדפדפן SharePoint",
+    connectorBlocker: "פריסה ל־SharePoint מתבצעת דרך הדפדפן המחובר בלבד.",
     requiresApproval: params.deployPolicy.requiresApproval,
     approvalSummary: params.deployPolicy.requiresApproval ? approval.approvalSummary : undefined,
     approvalSnapshot: params.deployPolicy.requiresApproval ? approval.approvalSnapshot : {
@@ -603,7 +676,9 @@ const queueBatchDeployForSite = async (params: {
       deployMode: params.deployPolicy.mode,
       deployPolicy: params.deployPolicy,
       backupSafety: params.backupSafety,
-      batchDeploy: true
+      batchDeploy: true,
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required"
     }
   };
 
@@ -648,7 +723,6 @@ export async function enqueueBatchDeploy(params: {
 
   const deployPolicy = buildDeployPolicy(plan.deployMode);
   assertDeployPolicyUsable(deployPolicy);
-  assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
   const backupOverrideForExecution = Boolean(plan.allowDeployWithoutBackup && deployPolicy.localDevOwnerMode && plan.connectorMode === "browser-sharepoint");
 
@@ -718,7 +792,6 @@ export async function enqueueDeployAll(params: {
   if (!release) throw new Error("release-not-found");
   const deployPolicy = buildDeployPolicy(params.deployMode || "production-safe");
   assertDeployPolicyUsable(deployPolicy);
-  assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
 
   const sites = await Site.find({ status: { $ne: "archived" } });
@@ -737,7 +810,8 @@ export async function enqueueDeployAll(params: {
       : buildLocalDevDeploySafetySnapshot("deploy");
     backupSafetyBySiteId.set(site._id.toString(), safety);
     const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString(), {
-      deployMode: deployPolicy.mode
+      deployMode: deployPolicy.mode,
+      connectorMode: "browser-sharepoint"
     });
     deployPlanBySiteId.set(site._id.toString(), deployPlan);
   }
@@ -768,6 +842,11 @@ export async function enqueueDeployAll(params: {
       type: "version-upgrade",
       siteId: site._id.toString(),
       createdBy: params.createdBy,
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint",
+      operationPolicy: "deploy",
+      connectorStatusLabel: "ממתין לדפדפן SharePoint",
+      connectorBlocker: "פריסה ל־SharePoint מתבצעת דרך הדפדפן המחובר בלבד.",
       requiresApproval: deployPolicy.requiresApproval,
       approvalSummary: approval.approvalSummary,
       approvalSnapshot: approval.approvalSnapshot,
@@ -777,7 +856,9 @@ export async function enqueueDeployAll(params: {
         targetVersion: release.version,
         deployMode: deployPolicy.mode,
         deployPolicy,
-        backupSafety: backupSafetyBySiteId.get(site._id.toString())
+        backupSafety: backupSafetyBySiteId.get(site._id.toString()),
+        connectorMode: "browser-sharepoint",
+        executionMode: "browser-required"
       }
     };
 
@@ -845,12 +926,11 @@ export async function enqueueDeploySite(params: {
   const release = await Release.findById(params.releaseId);
   if (!release) throw new Error("release-not-found");
   const deployPolicy = buildDeployPolicy(params.deployMode);
-  const connectorMode: SharePointConnectorMode = params.connectorMode === "browser-sharepoint" ? "browser-sharepoint" : "backend-sharepoint";
+  const connectorMode: SharePointConnectorMode = "browser-sharepoint";
   const backupOverrideAllowed = Boolean(params.allowDeployWithoutBackup && deployPolicy.localDevOwnerMode && connectorMode === "browser-sharepoint");
   assertDeployPolicyUsable(deployPolicy);
-  assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
-  const deployPlanOptions = params.connectorMode
+    const deployPlanOptions = params.connectorMode
     ? { deployMode: deployPolicy.mode, connectorMode }
     : { deployMode: deployPolicy.mode };
   const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString(), deployPlanOptions);
@@ -885,6 +965,11 @@ export async function enqueueDeploySite(params: {
     type: "version-upgrade",
     siteId: site._id.toString(),
     createdBy: params.createdBy,
+    executionMode: "browser-required",
+    connectorMode: "browser-sharepoint",
+    operationPolicy: "deploy",
+    connectorStatusLabel: "ממתין לדפדפן SharePoint",
+    connectorBlocker: "פריסה ל־SharePoint מתבצעת דרך הדפדפן המחובר בלבד.",
     requiresApproval: deployPolicy.requiresApproval,
     approvalSummary: deployPolicy.requiresApproval ? approval.approvalSummary : undefined,
     approvalSnapshot: deployPolicy.requiresApproval ? approval.approvalSnapshot : {
@@ -898,7 +983,9 @@ export async function enqueueDeploySite(params: {
       targetVersion: release.version,
       deployMode: deployPolicy.mode,
       deployPolicy,
-      backupSafety
+      backupSafety,
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required"
     }
   };
 
@@ -961,18 +1048,12 @@ export async function enqueueRollbackSite(params: {
   if (!release) throw new Error("release-not-found");
 
   const currentVersion = assertRollbackTargetOlder(site, release);
-
-  assertSharePointWriteAvailable();
   await assertReleaseArtifactReady(release._id.toString());
-  const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString());
-  const deployPolicy = buildDeployPolicy(undefined, "rollback");
-  const backupSafety = deployPolicy.requiresRecentVerifiedBackup
-    ? await assertRecentVerifiedBackupForDangerousWrite({
-        siteId: site._id,
-        operation: "rollback"
-      })
-    : buildLocalDevDeploySafetySnapshot("rollback");
-
+  const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString(), {
+    deployMode: "local-dev-owner",
+    connectorMode: "browser-sharepoint"
+  });
+  const deployPolicy = buildDeployPolicy("local-dev-owner");
   const deployment = await SiteVersionDeployment.create({
     siteId: site._id,
     releaseId: release._id,
@@ -982,9 +1063,8 @@ export async function enqueueRollbackSite(params: {
     rollbackReason: reason,
     status: "queued",
     triggeredBy: params.createdBy,
-    logLines: [{ level: "warn", message: reason ? `Rollback queued: ${reason}` : "Rollback queued", at: new Date() }]
+    logLines: [{ level: "warn", message: "Rollback queued for browser SharePoint execution.", at: new Date() }]
   });
-
   const approval = buildDeployApproval({
     site,
     release,
@@ -992,63 +1072,56 @@ export async function enqueueRollbackSite(params: {
     createdBy: params.createdBy,
     mode: "rollback",
     reason,
-    backupSafety,
+    backupSafety: buildBackupOverrideSafety("rollback", "Fast browser rollback flow selected; no server SharePoint restore path exists."),
     deployPolicy,
     deployPlan
   });
-  const jobInput: ApprovalGatedJobInput = {
+  const policy = getSharePointOperationPolicy("deploy");
+  const job = await createJob({
     type: "version-rollback",
     siteId: site._id.toString(),
     createdBy: params.createdBy,
+    executionMode: "browser-required",
+    connectorMode: "browser-sharepoint",
+    operationPolicy: "rollback",
+    connectorStatusLabel: policy.statusLabelHe,
+    connectorBlocker: getBrowserRequiredJobMessage("deploy"),
     requiresApproval: deployPolicy.requiresApproval,
-    approvalSummary: approval.approvalSummary,
-    approvalSnapshot: approval.approvalSnapshot,
+    approvalSummary: deployPolicy.requiresApproval ? approval.approvalSummary : undefined,
+    approvalSnapshot: deployPolicy.requiresApproval ? approval.approvalSnapshot : {
+      ...approval.approvalSnapshot,
+      approvalSkipped: true,
+      approvalSkippedReason: "owner-direct-mode"
+    },
     payload: {
       releaseId: release._id.toString(),
       deploymentId: deployment._id.toString(),
       targetVersion: release.version,
-      rollback: true,
       rollbackReason: reason,
+      deployMode: deployPolicy.mode,
       deployPolicy,
-      backupSafety
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required"
     }
-  };
-
-  logger.warn("jobs", deployPolicy.requiresApproval ? "Approval required for rollback job" : "Owner-direct rollback job", {
-    type: jobInput.type,
-    siteId: site._id.toString(),
-    siteCode: site.siteCode,
-    releaseId: release._id.toString(),
-    releaseVersion: release.version,
-    fromVersion: currentVersion,
-    deploymentId: deployment._id.toString(),
-    reason,
-    backupSafety,
-    staleTargetFilesCount: deployPlan?.targetInventory?.staleFilesCount
   });
-
-  const job = await createJob(jobInput);
   await SiteVersionDeployment.findByIdAndUpdate(deployment._id, { jobId: job._id });
-  const requiresApproval = Boolean(job.requiresApproval || job.status === "awaiting-approval");
 
-  logger.warn("releases", "Site rollback queued", {
+  logger.info("releases", "Rollback job queued for browser execution", {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     releaseId: release._id.toString(),
-    fromVersion: currentVersion,
     targetVersion: release.version,
+    currentVersion,
     jobId: job._id.toString(),
     deploymentId: deployment._id.toString(),
-    requiresApproval,
-    approvalStatus: requiresApproval ? "pending" : "not-required"
+    createdBy: params.createdBy
   });
-
   return {
     job,
     deployment,
-    requiresApproval,
-    approvalStatus: requiresApproval ? "pending" : "not-required",
-    message: requiresApproval ? "Rollback job requires approval because advanced approvals are enabled." : ROLLBACK_OWNER_DIRECT_MESSAGE
+    requiresApproval: job.requiresApproval,
+    approvalStatus: job.requiresApproval ? "pending" : "browser-required",
+    message: ROLLBACK_OWNER_DIRECT_MESSAGE
   };
 }
 

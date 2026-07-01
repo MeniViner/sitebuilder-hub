@@ -152,6 +152,7 @@ describe("release creation", () => {
     const { createRelease } = await import("../server/src/services/releases.service");
 
     const release = await createRelease({
+      name: "Major portal refresh",
       version: "2.0.0",
       releaseType: "major",
       notes: "Major release",
@@ -159,12 +160,94 @@ describe("release creation", () => {
       createdBy: "operator"
     });
 
+    expect(release.name).toBe("Major portal refresh");
     expect(release.version).toBe("2.0.0");
     expect(mocks.Release.create).toHaveBeenCalledWith(expect.objectContaining({
+      name: "Major portal refresh",
       version: "2.0.0",
       releaseType: "major",
       artifactRef: "/tmp/artifact"
     }));
+    expect(mocks.createJob).not.toHaveBeenCalled();
+  });
+
+  it("updates an existing release display name without changing deployment data", async () => {
+    const releaseDoc = {
+      ...makeRelease({ name: "" }),
+      set: vi.fn(function (this: any, key: string, value: unknown) {
+        this[key] = value;
+      }),
+      save: vi.fn(async function (this: any) {
+        return this;
+      })
+    };
+    mocks.Release.findById.mockResolvedValueOnce(releaseDoc);
+    const { updateReleaseName } = await import("../server/src/services/releases.service");
+
+    const release = await updateReleaseName("release-1", "הדרכות יוני");
+
+    expect(release.name).toBe("הדרכות יוני");
+    expect(releaseDoc.set).toHaveBeenCalledWith("name", "הדרכות יוני");
+    expect(releaseDoc.set).not.toHaveBeenCalledWith("artifactValidation", expect.anything());
+    expect(releaseDoc.save).toHaveBeenCalled();
+    expect(mocks.createJob).not.toHaveBeenCalled();
+  });
+
+  it("updates release metadata and requires validation again when artifact changes", async () => {
+    const releaseDoc = {
+      ...makeRelease({
+        name: "פורטל ישן",
+        version: "1.2.4",
+        releaseType: "patch",
+        artifactRef: "/tmp/old-artifact",
+        notes: "old notes",
+        status: "active",
+        artifactValidation: {
+          artifactRef: "/tmp/old-artifact",
+          readyForDeploy: true,
+          filesCount: 12,
+          toObject() {
+            return {
+              artifactRef: "/tmp/old-artifact",
+              readyForDeploy: true,
+              filesCount: 12
+            };
+          }
+        }
+      }),
+      set: vi.fn(function (this: any, key: string, value: unknown) {
+        this[key] = value;
+      }),
+      save: vi.fn(async function (this: any) {
+        return this;
+      })
+    };
+    mocks.Release.findById.mockResolvedValueOnce(releaseDoc);
+    mocks.Release.findOne.mockResolvedValueOnce(null);
+    const { updateRelease } = await import("../server/src/services/releases.service");
+
+    const release = await updateRelease("release-1", {
+      name: "פורטל עובדים",
+      version: "1.2.5",
+      releaseType: "minor",
+      artifactRef: "/tmp/new-artifact",
+      notes: "new notes",
+      status: "deprecated"
+    });
+
+    expect(mocks.Release.findOne).toHaveBeenCalledWith({ version: "1.2.5" });
+    expect(release.name).toBe("פורטל עובדים");
+    expect(release.version).toBe("1.2.5");
+    expect(release.releaseType).toBe("minor");
+    expect(release.artifactRef).toBe("/tmp/new-artifact");
+    expect(release.artifactValidation).toMatchObject({
+      artifactRef: "/tmp/new-artifact",
+      readyForDeploy: false,
+      filesCount: 0,
+      validationError: "artifact-validation-required-after-edit",
+      artifactKind: "unknown"
+    });
+    expect(releaseDoc.save).toHaveBeenCalled();
     expect(mocks.createJob).not.toHaveBeenCalled();
   });
 });

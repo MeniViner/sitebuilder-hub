@@ -3,47 +3,22 @@ import { normalizeError } from "../server/src/utils/errors";
 
 const mocks = vi.hoisted(() => ({
   Site: {
-    find: vi.fn(),
-    findById: vi.fn(),
-    findByIdAndUpdate: vi.fn()
+    findById: vi.fn()
   },
   SiteBackup: {
-    find: vi.fn(),
-    findById: vi.fn()
-  },
-  Job: {
     findById: vi.fn(),
-    findByIdAndUpdate: vi.fn(),
-    findOneAndUpdate: vi.fn()
-  },
-  Release: {
-    findById: vi.fn()
-  },
-  SiteVersionDeployment: {
-    findByIdAndUpdate: vi.fn()
+    findOne: vi.fn()
   },
   createJob: vi.fn(),
-  claimNextJob: vi.fn(),
   setJobEvidence: vi.fn(),
   setJobFailed: vi.fn(),
-  setJobProgress: vi.fn(),
   setJobResult: vi.fn(),
   setJobStatus: vi.fn(),
   setJobTargetPaths: vi.fn(),
   setJobSucceeded: vi.fn(),
-  executeSharePointBackup: vi.fn(),
-  executeSharePointRestore: vi.fn(),
-  executeSiteBootstrap: vi.fn(),
-  executeSiteProvisioning: vi.fn(),
-  executeSharePointDeploy: vi.fn(),
-  readLiveAdminSources: vi.fn(),
-  executePermissionsSetup: vi.fn(),
   assertSharePointWriteAvailable: vi.fn(),
-  readSharePointFileEvidence: vi.fn(),
-  getCanonicalBackupSourcePaths: vi.fn(),
   assertRecentVerifiedBackupForDangerousWrite: vi.fn(),
   assertDistinctRecentVerifiedBackupForRestore: vi.fn(),
-  writeSystemAuditLog: vi.fn(),
   logger: {
     debug: vi.fn(),
     info: vi.fn(),
@@ -55,65 +30,28 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../server/src/models/Site", () => ({ Site: mocks.Site }));
 vi.mock("../server/src/models/SiteBackup", () => ({ SiteBackup: mocks.SiteBackup }));
-vi.mock("../server/src/models/Job", () => ({ Job: mocks.Job }));
-vi.mock("../server/src/models/Release", () => ({ Release: mocks.Release }));
-vi.mock("../server/src/models/SiteVersionDeployment", () => ({
-  SiteVersionDeployment: mocks.SiteVersionDeployment
-}));
 vi.mock("../server/src/services/jobs.service", () => ({
   createJob: mocks.createJob,
-  claimNextJob: mocks.claimNextJob,
   setJobEvidence: mocks.setJobEvidence,
   setJobFailed: mocks.setJobFailed,
-  setJobProgress: mocks.setJobProgress,
   setJobResult: mocks.setJobResult,
   setJobStatus: mocks.setJobStatus,
   setJobTargetPaths: mocks.setJobTargetPaths,
   setJobSucceeded: mocks.setJobSucceeded
 }));
-vi.mock("../server/src/services/realBackup.service", () => ({
-  executeSharePointBackup: mocks.executeSharePointBackup,
-  executeSharePointRestore: mocks.executeSharePointRestore
-}));
-vi.mock("../server/src/services/siteBootstrap.service", () => ({
-  executeSiteBootstrap: mocks.executeSiteBootstrap
-}));
-vi.mock("../server/src/services/siteProvisioning.service", () => ({
-  executeSiteProvisioning: mocks.executeSiteProvisioning
-}));
-vi.mock("../server/src/services/deployArtifact.service", () => ({
-  executeSharePointDeploy: mocks.executeSharePointDeploy
-}));
-vi.mock("../server/src/services/liveAdminSources.service", () => ({
-  readLiveAdminSources: mocks.readLiveAdminSources
-}));
-vi.mock("../server/src/services/permissionsSetup.service", () => ({
-  executePermissionsSetup: mocks.executePermissionsSetup
-}));
 vi.mock("../server/src/services/sharepointOperationClient", () => ({
-  assertSharePointWriteAvailable: mocks.assertSharePointWriteAvailable,
-  readSharePointFileEvidence: mocks.readSharePointFileEvidence
-}));
-vi.mock("../server/src/services/backupPlan.service", () => ({
-  getCanonicalBackupSourcePaths: mocks.getCanonicalBackupSourcePaths
+  assertSharePointWriteAvailable: mocks.assertSharePointWriteAvailable
 }));
 vi.mock("../server/src/services/writeSafety.service", () => ({
   assertRecentVerifiedBackupForDangerousWrite: mocks.assertRecentVerifiedBackupForDangerousWrite,
   assertDistinctRecentVerifiedBackupForRestore: mocks.assertDistinctRecentVerifiedBackupForRestore
 }));
-vi.mock("../server/src/services/audit.service", () => ({
-  writeSystemAuditLog: mocks.writeSystemAuditLog
-}));
 vi.mock("../server/src/utils/logger", () => ({ logger: mocks.logger }));
-vi.mock("../server/src/config/env", () => ({
-  env: {
-    JOB_WORKER_ENABLED: false,
-    JOB_WORKER_POLL_MS: 3000
-  },
-  ownerDirectModeEnabled: () => false
-}));
 
-const restoreMessage = "Restore job requires approval because advanced approvals are enabled.";
+const idOf = (value: string) => ({ toString: () => value });
+
+const backupObjectId = "64f000000000000000000010";
+const jobObjectId = "64f000000000000000000011";
 
 const restoreFiles = [
   {
@@ -130,430 +68,170 @@ const restoreFiles = [
   }
 ];
 
-const idOf = (value: string) => ({ toString: () => value });
-
-const makeBackupSafetySnapshot = (
-  operation: "deploy" | "rollback" | "restore",
-  overrides: Record<string, unknown> = {}
-) => {
-  const backupOverrides = (overrides.backup || {}) as Record<string, unknown>;
-  const { backup: _backup, ...snapshotOverrides } = overrides;
-  return {
-    policy: "recent-verified-backup",
-    operation,
-    required: true,
-    satisfied: true,
-    maxAgeHours: 24,
-    checkedAt: "2026-05-14T00:00:00.000Z",
-    backup: {
-      id: "current-state-backup-object-2",
-      backupId: "pre-restore-current-state-2026-05-14",
-      status: "verified",
-      verificationStatus: "verified",
-      storagePath: "/sites/alpha/siteDB/siteAssets/Backups/pre-restore-current-state-2026-05-14",
-      filesCount: 2,
-      sizeBytes: 192,
-      createdAt: "2026-05-14T00:00:00.000Z",
-      verificationCheckedAt: "2026-05-14T00:00:00.000Z",
-      ageHours: 1,
-      ...backupOverrides
-    },
-    ...snapshotOverrides
-  };
-};
-
-const makePreRestoreBackupSafetySnapshot = (overrides: Record<string, unknown> = {}) =>
-  makeBackupSafetySnapshot("restore", {
-    policy: "pre-restore-current-state-backup",
-    restoreBackup: {
-      id: "backup-object-1",
-      backupId: "backup-2026-05-14"
-    },
-    ...overrides
-  });
-
-beforeEach(() => {
-  mocks.Site.find.mockReset();
-  mocks.Site.findById.mockReset();
-  mocks.Site.findByIdAndUpdate.mockReset();
-  mocks.SiteBackup.find.mockReset();
-  mocks.SiteBackup.findById.mockReset();
-  mocks.Job.findById.mockReset();
-  mocks.Job.findByIdAndUpdate.mockReset();
-  mocks.Job.findOneAndUpdate.mockReset();
-  mocks.createJob.mockReset();
-  mocks.claimNextJob.mockReset();
-  mocks.setJobEvidence.mockReset();
-  mocks.setJobFailed.mockReset();
-  mocks.setJobProgress.mockReset();
-  mocks.setJobResult.mockReset();
-  mocks.setJobStatus.mockReset();
-  mocks.setJobTargetPaths.mockReset();
-  mocks.setJobSucceeded.mockReset();
-  mocks.executeSharePointBackup.mockReset();
-  mocks.executeSharePointRestore.mockReset();
-  mocks.executeSiteBootstrap.mockReset();
-  mocks.executeSiteProvisioning.mockReset();
-  mocks.executeSharePointDeploy.mockReset();
-  mocks.readLiveAdminSources.mockReset();
-  mocks.executePermissionsSetup.mockReset();
-  mocks.assertSharePointWriteAvailable.mockReset();
-  mocks.readSharePointFileEvidence.mockReset();
-  mocks.getCanonicalBackupSourcePaths.mockReset();
-  mocks.assertRecentVerifiedBackupForDangerousWrite.mockReset();
-  mocks.assertRecentVerifiedBackupForDangerousWrite.mockResolvedValue(makeBackupSafetySnapshot("restore"));
-  mocks.assertDistinctRecentVerifiedBackupForRestore.mockReset();
-  mocks.assertDistinctRecentVerifiedBackupForRestore.mockResolvedValue(makePreRestoreBackupSafetySnapshot());
-  mocks.writeSystemAuditLog.mockReset();
-  mocks.logger.isPayloadLoggingEnabled.mockReturnValue(false);
+const makeSite = () => ({
+  _id: idOf("site-1"),
+  siteCode: "alpha",
+  displayName: "Alpha Site",
+  sharePointHost: "portal.army.idf",
+  sharePointSiteUrl: "https://portal.army.idf/sites/alpha",
+  siteDbLibrary: "siteDB",
+  usersDbLibrary: "siteUsersDb",
+  bootstrapLibrary: "SiteAssets",
+  bootstrapFolder: "sitebuilder-bootstrap",
+  widgetsDbTarget: "users",
+  lastError: "",
+  save: vi.fn().mockResolvedValue(undefined)
 });
 
-describe("backup restore approval gating", () => {
-  it("queues restore jobs with approval metadata and restore file payload", async () => {
-    const site = {
-      _id: "site-1",
-      siteCode: "alpha",
-      displayName: "Alpha Site",
-      sharePointSiteUrl: "https://portal.army.idf/sites/alpha"
-    };
-    const backup = {
-      _id: "backup-object-1",
-      siteId: site._id,
-      backupId: "backup-2026-05-14",
-      status: "verified",
-      storagePath: "/sites/alpha/siteDB/siteAssets/Backups/backup-2026-05-14",
-      verification: {
-        status: "verified",
-        evidence: [
-          {
-            sourcePath: restoreFiles[0].targetPath,
-            targetPath: restoreFiles[0].sourcePath,
-            expectedBackupSizeBytes: restoreFiles[0].expectedSizeBytes,
-            expectedBackupSha256: restoreFiles[0].expectedSha256
-          },
-          {
-            sourcePath: restoreFiles[1].targetPath,
-            targetPath: restoreFiles[1].sourcePath,
-            backupSizeBytes: restoreFiles[1].expectedSizeBytes,
-            backupSha256: restoreFiles[1].expectedSha256
-          }
-        ]
+const makeBackup = () => ({
+  _id: idOf(backupObjectId),
+  siteId: "site-1",
+  backupId: "backup-2026-05-14",
+  status: "verified",
+  restoreStatus: "idle",
+  storagePath: "/sites/alpha/siteDB/siteAssets/Backups/backup-2026-05-14",
+  verification: {
+    status: "verified",
+    evidence: [
+      {
+        sourcePath: restoreFiles[0].targetPath,
+        targetPath: restoreFiles[0].sourcePath,
+        expectedBackupSizeBytes: restoreFiles[0].expectedSizeBytes,
+        expectedBackupSha256: restoreFiles[0].expectedSha256
+      },
+      {
+        sourcePath: restoreFiles[1].targetPath,
+        targetPath: restoreFiles[1].sourcePath,
+        backupSizeBytes: restoreFiles[1].expectedSizeBytes,
+        backupSha256: restoreFiles[1].expectedSha256
       }
-    };
-    const job = {
-      _id: { toString: () => "job-restore-1" },
-      status: "awaiting-approval"
-    };
-    mocks.SiteBackup.findById.mockResolvedValue(backup);
-    mocks.Site.findById.mockResolvedValue(site);
-    mocks.createJob.mockResolvedValue(job);
+    ]
+  },
+  save: vi.fn().mockResolvedValue(undefined)
+});
 
+beforeEach(() => {
+  vi.resetModules();
+  Object.values(mocks).forEach((group) => {
+    if (vi.isMockFunction(group)) {
+      group.mockReset();
+      return;
+    }
+    Object.values(group as Record<string, unknown>).forEach((value) => {
+      if (vi.isMockFunction(value)) value.mockReset();
+    });
+  });
+  mocks.logger.isPayloadLoggingEnabled.mockReturnValue(false);
+  mocks.Site.findById.mockResolvedValue(makeSite());
+  mocks.SiteBackup.findById.mockResolvedValue(makeBackup());
+  mocks.SiteBackup.findOne.mockResolvedValue(makeBackup());
+  mocks.createJob.mockImplementation(async (input) => ({
+    _id: idOf(jobObjectId),
+    ...input,
+    status: "browser-required"
+  }));
+});
+
+describe("backup restore browser flow", () => {
+  it("queues restore jobs as browser-required with a browser restore plan", async () => {
     const { enqueueBackupRestore } = await import("../server/src/services/backups.service");
     const result = await enqueueBackupRestore({
-      backupId: backup._id,
+      backupId: backupObjectId,
       createdBy: "operator",
       notes: "restore after deploy",
-      connectorMode: "backend-sharepoint",
-      confirmBackendSharePoint: true
+      connectorMode: "browser-sharepoint"
     });
 
-    expect(mocks.assertSharePointWriteAvailable).toHaveBeenCalledTimes(1);
-    expect(mocks.assertRecentVerifiedBackupForDangerousWrite).toHaveBeenCalledWith({
-      siteId: site._id,
-      operation: "restore"
-    });
-    expect(mocks.assertDistinctRecentVerifiedBackupForRestore).toHaveBeenCalledWith({
-      siteId: site._id,
-      restoreBackupObjectId: backup._id,
-      restoreBackupExternalId: backup.backupId
-    });
-    expect(mocks.createJob).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "restore",
-        siteId: site._id,
-        createdBy: "operator",
-        requiresApproval: true,
-        payload: expect.objectContaining({
-          backupId: backup._id,
-          backupExternalId: backup.backupId,
-          files: restoreFiles,
-          notes: "restore after deploy",
-          preRestoreBackupId: "current-state-backup-object-2",
-          preRestoreBackupExternalId: "pre-restore-current-state-2026-05-14"
+    expect(mocks.assertSharePointWriteAvailable).not.toHaveBeenCalled();
+    expect(mocks.assertRecentVerifiedBackupForDangerousWrite).not.toHaveBeenCalled();
+    expect(mocks.assertDistinctRecentVerifiedBackupForRestore).not.toHaveBeenCalled();
+    expect(mocks.createJob).toHaveBeenCalledWith(expect.objectContaining({
+      type: "restore",
+      siteId: "site-1",
+      createdBy: "operator",
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint",
+      operationPolicy: "restore",
+      payload: expect.objectContaining({
+        connectorMode: "browser-sharepoint",
+        executionMode: "browser-required",
+        browserOperationPlan: expect.objectContaining({
+          operation: "restore",
+          connectorMode: "browser-sharepoint",
+          executionMode: "browser-required",
+          files: restoreFiles
         })
       })
-    );
-
-    const jobInput = mocks.createJob.mock.calls[0][0];
-    expect(jobInput.approvalSummary).toMatchObject({
-      title: "Restore Alpha Site from backup-2026-05-14",
-      message: restoreMessage,
-      operation: "restore",
-      backupId: backup._id,
-      backupExternalId: backup.backupId,
-      siteId: site._id,
-      siteCode: site.siteCode,
-      fileCount: restoreFiles.length,
-      requestedBy: "operator",
-      notes: "restore after deploy"
-    });
-    expect(jobInput.approvalSummary).toMatchObject({
-      preRestoreBackupId: "current-state-backup-object-2",
-      preRestoreBackupExternalId: "pre-restore-current-state-2026-05-14"
-    });
-    expect(jobInput.approvalSnapshot).toMatchObject({
-      operation: "restore",
-      backupId: backup._id,
-      backupExternalId: backup.backupId,
-      backupStatus: "verified",
-      backupStoragePath: backup.storagePath,
-      backupVerificationStatus: "verified",
-      site: {
-        id: site._id,
-        siteCode: site.siteCode,
-        displayName: site.displayName,
-        sharePointSiteUrl: site.sharePointSiteUrl
-      },
-      files: restoreFiles,
-      preRestoreBackupSafety: {
-        policy: "pre-restore-current-state-backup",
-        operation: "restore",
-        required: true,
-        satisfied: true,
-        backup: expect.objectContaining({
-          id: "current-state-backup-object-2",
-          backupId: "pre-restore-current-state-2026-05-14",
-          verificationStatus: "verified"
-        })
-      },
-      requestedBy: "operator",
-      notes: "restore after deploy"
-    });
-    expect(jobInput.approvalSnapshot.risks).toContain("Restore overwrites live SharePoint files at the target paths.");
-    expect(jobInput.approvalSnapshot.preRestoreBackupSafety.backup.id).not.toBe(jobInput.approvalSnapshot.backupId);
-
+    }));
     expect(result).toMatchObject({
-      job,
-      backupId: backup._id,
-      backupExternalId: backup.backupId,
-      siteId: site._id,
-      siteCode: site.siteCode,
-      files: restoreFiles,
-      requiresApproval: true,
-      approvalStatus: "pending",
-      message: restoreMessage
-    });
-    expect(result.pathSummary).toEqual({
-      fileCount: restoreFiles.length,
-      backupSourcePaths: {
-        count: restoreFiles.length,
-        sample: restoreFiles.map((file) => file.sourcePath)
-      },
-      liveTargetPaths: {
-        count: restoreFiles.length,
-        sample: restoreFiles.map((file) => file.targetPath)
-      }
-    });
-  });
-
-  it("rejects restore queue before creating a job when no recent verified backup exists", async () => {
-    const site = {
-      _id: "site-1",
-      siteCode: "alpha",
-      displayName: "Alpha Site",
-      sharePointSiteUrl: "https://portal.army.idf/sites/alpha"
-    };
-    const backup = {
-      _id: "backup-object-1",
-      siteId: site._id,
-      backupId: "backup-2026-05-14",
-      status: "verified",
-      storagePath: "/sites/alpha/siteDB/siteAssets/Backups/backup-2026-05-14",
-      verification: {
-        status: "verified",
-        evidence: [
-          {
-            sourcePath: restoreFiles[0].targetPath,
-            targetPath: restoreFiles[0].sourcePath,
-            expectedBackupSizeBytes: restoreFiles[0].expectedSizeBytes,
-            expectedBackupSha256: restoreFiles[0].expectedSha256
-          }
-        ]
-      }
-    };
-    mocks.SiteBackup.findById.mockResolvedValue(backup);
-    mocks.Site.findById.mockResolvedValue(site);
-    mocks.assertRecentVerifiedBackupForDangerousWrite.mockRejectedValue(
-      new Error("dangerous-write-backup-required:restore")
-    );
-
-    const { enqueueBackupRestore } = await import("../server/src/services/backups.service");
-
-    await expect(
-      enqueueBackupRestore({
-        backupId: backup._id,
-        createdBy: "operator",
-        notes: "restore after deploy",
-        connectorMode: "backend-sharepoint",
-        confirmBackendSharePoint: true
-      })
-    ).rejects.toThrow("dangerous-write-backup-required:restore");
-
-    expect(mocks.assertRecentVerifiedBackupForDangerousWrite).toHaveBeenCalledWith({
-      siteId: site._id,
-      operation: "restore"
-    });
-    expect(mocks.createJob).not.toHaveBeenCalled();
-  });
-
-  it("rejects restore queue when the only verified backup is the backup being restored", async () => {
-    const site = {
-      _id: "site-1",
-      siteCode: "alpha",
-      displayName: "Alpha Site",
-      sharePointSiteUrl: "https://portal.army.idf/sites/alpha"
-    };
-    const backup = {
-      _id: "backup-object-1",
-      siteId: site._id,
-      backupId: "backup-2026-05-14",
-      status: "verified",
-      storagePath: "/sites/alpha/siteDB/siteAssets/Backups/backup-2026-05-14",
-      verification: {
-        status: "verified",
-        evidence: [
-          {
-            sourcePath: restoreFiles[0].targetPath,
-            targetPath: restoreFiles[0].sourcePath,
-            expectedBackupSizeBytes: restoreFiles[0].expectedSizeBytes,
-            expectedBackupSha256: restoreFiles[0].expectedSha256
-          }
-        ]
-      }
-    };
-    mocks.SiteBackup.findById.mockResolvedValue(backup);
-    mocks.Site.findById.mockResolvedValue(site);
-    mocks.assertDistinctRecentVerifiedBackupForRestore.mockRejectedValue(
-      new Error("dangerous-write-backup-required:restore")
-    );
-
-    const { enqueueBackupRestore } = await import("../server/src/services/backups.service");
-
-    await expect(
-      enqueueBackupRestore({
-        backupId: backup._id,
-        createdBy: "operator",
-        notes: "restore after deploy",
-        connectorMode: "backend-sharepoint",
-        confirmBackendSharePoint: true
-      })
-    ).rejects.toThrow("dangerous-write-backup-required:restore");
-
-    expect(mocks.assertDistinctRecentVerifiedBackupForRestore).toHaveBeenCalledWith({
-      siteId: site._id,
-      restoreBackupObjectId: backup._id,
-      restoreBackupExternalId: backup.backupId
-    });
-    expect(mocks.createJob).not.toHaveBeenCalled();
-  });
-
-  it("keeps approval-gated restore reruns awaiting approval instead of executing restore", async () => {
-    const job = {
-      _id: { toString: () => "job-restore-1" },
-      type: "restore",
-      status: "failed",
-      requiresApproval: true,
-      createdBy: "operator",
-      siteId: { toString: () => "site-1" }
-    };
-    const updatedJob = { ...job, status: "awaiting-approval" };
-    mocks.Job.findById.mockResolvedValueOnce(job).mockResolvedValueOnce(updatedJob);
-    mocks.Job.findByIdAndUpdate.mockResolvedValue(updatedJob);
-
-    const { runJobNow } = await import("../server/src/services/jobs.worker");
-    const result = await runJobNow("job-restore-1");
-
-    expect(result).toBe(updatedJob);
-    expect(mocks.Job.findByIdAndUpdate).toHaveBeenCalledWith(
-      "job-restore-1",
-      expect.objectContaining({
-        $set: expect.objectContaining({
-          status: "awaiting-approval",
-          progressPercent: 0,
-          approvalRequestedBy: "operator",
-          approvedBy: "",
-          rejectedBy: "",
-          approvalDecisionReason: "",
-          approvalResult: expect.objectContaining({
-            decision: "rerun-requested",
-            previousStatus: "failed"
-          })
-        }),
-        $unset: expect.objectContaining({
-          approvedAt: "",
-          rejectedAt: ""
-        }),
-        $push: {
-          logs: {
-            level: "info",
-            message: "Job rerun requested and is awaiting approval",
-            at: expect.any(Date)
-          }
-        }
-      })
-    );
-    expect(mocks.claimNextJob).not.toHaveBeenCalled();
-    expect(mocks.executeSharePointRestore).not.toHaveBeenCalled();
-  });
-
-  it("blocks approved restore execution when the execution-time pre-restore backup check fails", async () => {
-    const safetyError = "dangerous-write-backup-required:restore";
-    const originalJob = {
-      _id: idOf("rerun-request-1"),
-      type: "restore",
-      status: "failed",
-      requiresApproval: false,
-      createdBy: "operator",
-      siteId: idOf("site-1")
-    };
-    const restoreJob = {
-      _id: idOf("job-restore-1"),
-      type: "restore",
-      status: "queued",
-      requiresApproval: true,
-      approvedAt: new Date("2026-05-14T09:00:00.000Z"),
-      approvedBy: "approver",
-      createdBy: "operator",
-      siteId: idOf("site-1"),
-      payload: {
-        backupId: "backup-object-1",
-        backupExternalId: "backup-2026-05-14",
+      connectorMode: "browser-sharepoint",
+      executionMode: "browser-required",
+      browserOperationPlan: expect.objectContaining({
+        operation: "restore",
         files: restoreFiles
-      }
-    };
-    const failedJob = { ...restoreJob, status: "failed", errorMessage: safetyError };
-
-    mocks.Job.findById.mockResolvedValueOnce(originalJob).mockResolvedValueOnce(failedJob);
-    mocks.Job.findByIdAndUpdate.mockResolvedValue({ ...originalJob, status: "queued" });
-    mocks.claimNextJob.mockResolvedValue(restoreJob);
-    mocks.setJobStatus.mockImplementation(async (_jobId, status) => ({ ...restoreJob, status }));
-    mocks.setJobFailed.mockResolvedValue(failedJob);
-    mocks.assertDistinctRecentVerifiedBackupForRestore.mockRejectedValueOnce(new Error(safetyError));
-    mocks.writeSystemAuditLog.mockResolvedValue({ _id: idOf("audit-1") });
-
-    const { runJobNow } = await import("../server/src/services/jobs.worker");
-    const result = await runJobNow("rerun-request-1");
-
-    expect(result).toBe(failedJob);
-    expect(mocks.assertSharePointWriteAvailable).toHaveBeenCalledTimes(1);
-    expect(mocks.assertDistinctRecentVerifiedBackupForRestore).toHaveBeenCalledWith({
-      siteId: restoreJob.siteId,
-      restoreBackupObjectId: "backup-object-1",
-      restoreBackupExternalId: "backup-2026-05-14"
+      })
     });
-    expect(mocks.executeSharePointRestore).not.toHaveBeenCalled();
-    expect(mocks.setJobFailed).toHaveBeenCalledWith("job-restore-1", safetyError);
-    expect(mocks.Site.findByIdAndUpdate).toHaveBeenCalledWith(restoreJob.siteId, { lastError: safetyError });
+    expect(result.backup.restoreStatus).toBe("running");
+    expect(result.backup.save).toHaveBeenCalled();
+  });
+
+  it("records browser restore evidence and completes the restore job", async () => {
+    const site = makeSite();
+    const backup = makeBackup();
+    mocks.Site.findById.mockResolvedValue(site);
+    mocks.SiteBackup.findById.mockResolvedValue(backup);
+
+    const { recordBrowserSharePointRestoreEvidence } = await import("../server/src/services/backups.service");
+    const result = await recordBrowserSharePointRestoreEvidence({
+      backupId: backupObjectId,
+      actor: "operator",
+      input: {
+        connectorMode: "browser-sharepoint",
+        jobId: jobObjectId,
+        targetSiteUrl: "https://portal.army.idf/sites/alpha",
+        finalStatus: "success",
+        restoreEvidence: restoreFiles.map((file) => ({
+          backupPath: file.sourcePath,
+          sourcePath: file.sourcePath,
+          targetPath: file.targetPath,
+          status: "verified",
+          expectedRestoreSizeBytes: file.expectedSizeBytes,
+          restoredSizeBytes: file.expectedSizeBytes,
+          expectedRestoreSha256: file.expectedSha256,
+          restoredSha256: file.expectedSha256,
+          sizeMatches: true,
+          sha256Matches: true
+        }))
+      }
+    });
+
+    expect(result.summary).toMatchObject({
+      connectorMode: "browser-sharepoint",
+      finalStatus: "verified",
+      filesCount: 2,
+      verifiedFilesCount: 2,
+      failedFilesCount: 0
+    });
+    expect(backup.restoreStatus).toBe("verified");
+    expect(backup.save).toHaveBeenCalled();
+    expect(site.lastError).toBe("");
+    expect(site.save).toHaveBeenCalled();
+    expect(mocks.setJobStatus).toHaveBeenCalledWith(jobObjectId, "browser-in-progress", expect.objectContaining({
+      message: "Browser SharePoint restore evidence received"
+    }));
+    expect(mocks.setJobTargetPaths).toHaveBeenCalledWith(
+      jobObjectId,
+      restoreFiles.map((file) => file.targetPath),
+      "Browser restore target paths recorded"
+    );
+    expect(mocks.setJobEvidence).toHaveBeenCalledWith(
+      jobObjectId,
+      expect.arrayContaining([
+        expect.objectContaining({ backupPath: restoreFiles[0].sourcePath, sourcePath: restoreFiles[0].targetPath, targetPath: restoreFiles[0].targetPath, status: "verified" })
+      ]),
+      "Browser restore per-file evidence recorded"
+    );
+    expect(mocks.setJobSucceeded).toHaveBeenCalledWith(jobObjectId, "Browser SharePoint restore completed and verified");
   });
 });
 
@@ -565,8 +243,9 @@ describe("restore-specific error normalization", () => {
     ["restore-job-requires-approval", "RESTORE_JOB_REQUIRES_APPROVAL"],
     ["restore-unsupported-storage-provider:local", "RESTORE_UNSUPPORTED_STORAGE_PROVIDER"],
     ["restore-backup-file-verification-failed:/backups/users_data.txt", "RESTORE_BACKUP_FILE_VERIFICATION_FAILED"],
-    ["restore-target-verification-failed:/live/users_data.txt", "RESTORE_TARGET_VERIFICATION_FAILED"]
-  ])("maps %s to a 409 restore conflict", (message, code) => {
+    ["restore-target-verification-failed:/live/users_data.txt", "RESTORE_TARGET_VERIFICATION_FAILED"],
+    ["browser-sharepoint-required", "BROWSER_SHAREPOINT_REQUIRED"]
+  ])("maps %s to a restore conflict", (message, code) => {
     expect(normalizeError(new Error(message))).toMatchObject({
       code,
       status: 409

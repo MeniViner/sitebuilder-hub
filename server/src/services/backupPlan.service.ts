@@ -1,14 +1,7 @@
 import { Site } from "../models/Site";
 import { resolveSiteBuilderPaths, SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
 import { logger } from "../utils/logger";
-import {
-  getSharePointOperationCapabilities,
-  getSharePointReadHeaders,
-  listSharePointFiles,
-  listSharePointFolders,
-  SharePointFileMetadata,
-  SharePointFolderMetadata
-} from "./sharepointOperationClient";
+import { getSharePointOperationCapabilities } from "./sharepointOperationClient";
 
 type BackupPlanEvidence = {
   key: string;
@@ -60,8 +53,30 @@ type BackupInventoryReadStatus = {
   error?: string;
 };
 
-export type SiteBackupInventoryFolder = SharePointFolderMetadata & {
-  files?: SharePointFileMetadata[];
+type BackupInventoryFolderMetadata = {
+  name: string;
+  serverRelativeUrl: string;
+  url: string;
+  itemCount?: number;
+  timeCreated?: string;
+  timeLastModified?: string;
+  uniqueId?: string;
+};
+
+type BackupInventoryFileMetadata = {
+  name: string;
+  serverRelativeUrl: string;
+  url: string;
+  sizeBytes?: number;
+  timeCreated?: string;
+  timeLastModified?: string;
+  uniqueId?: string;
+  etag?: string;
+  contentType?: string;
+};
+
+export type SiteBackupInventoryFolder = BackupInventoryFolderMetadata & {
+  files?: BackupInventoryFileMetadata[];
   filesStatus?: BackupInventoryReadStatus;
   filesCount: number;
   knownSizeBytes: number;
@@ -96,52 +111,6 @@ const encodeSpaces = (value: string) => value.replace(/ /g, "%20");
 
 const fileUrl = (paths: SiteBuilderResolvedPaths, serverRelativePath: string) =>
   encodeSpaces(`https://${paths.host}${serverRelativePath}`);
-
-const fetchReadOnlyFile = async (url: string) => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12_000);
-  const startedAt = Date.now();
-
-  try {
-    logger.info("sharepoint", "Checking backup source with read-only request", { url });
-    const response = await fetch(url, {
-      method: "GET",
-      headers: getSharePointReadHeaders("text/plain, application/json, */*"),
-      redirect: "follow",
-      signal: controller.signal
-    });
-
-    const contentLength = Number(response.headers.get("content-length") || 0);
-
-    logger.info("sharepoint", "Backup source read-only check finished", {
-      url,
-      status: response.status,
-      statusText: response.statusText,
-      ok: response.ok,
-      durationMs: Date.now() - startedAt
-    });
-
-    return {
-      exists: response.ok,
-      status: response.status,
-      statusText: response.statusText,
-      sizeBytes: Number.isFinite(contentLength) && contentLength > 0 ? contentLength : undefined,
-      authBlocked: response.status === 401 || response.status === 403
-    };
-  } catch (error) {
-    logger.warn("sharepoint", "Backup source read-only check failed", {
-      url,
-      durationMs: Date.now() - startedAt,
-      error
-    });
-    return {
-      exists: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-};
 
 export const getCanonicalBackupSourcePaths = (paths: SiteBuilderResolvedPaths) => [
   paths.txtFiles.masterConfig,
@@ -234,44 +203,30 @@ export async function buildReadOnlyBackupPlan(siteId: string): Promise<SiteBacku
 
   const sourceEntries = Object.entries(resolvedPaths.txtFiles);
 
-  const sources = await Promise.all(
-    sourceEntries.map(async ([key, serverRelativePath]) => {
-      const url = fileUrl(resolvedPaths, serverRelativePath);
-      const result = await fetchReadOnlyFile(url);
+  const sources = sourceEntries.map(([key, serverRelativePath]) => ({
+    key,
+    label: key,
+    serverRelativePath,
+    url: fileUrl(resolvedPaths, serverRelativePath),
+    required: true,
+    exists: false,
+    error: "browser-sharepoint-plan-required"
+  }));
 
-      return {
-        key,
-        label: key,
-        serverRelativePath,
-        url,
-        required: true,
-        ...result
-      };
-    })
-  );
-
-  const authBlockedSources = sources.filter((source) => source.authBlocked).length;
-  const missingSources = sources.filter((source) => !source.exists && !source.authBlocked).length;
-  const existingSources = sources.filter((source) => source.exists).length;
-  const knownSizeBytes = sources.reduce((sum, source) => sum + (source.sizeBytes || 0), 0);
-  const readyForBackup = missingSources === 0 && authBlockedSources === 0;
+  const authBlockedSources = 0;
+  const missingSources = sources.length;
+  const existingSources = 0;
+  const knownSizeBytes = 0;
+  const readyForBackup = false;
   const capabilities = getSharePointOperationCapabilities();
-  const readyForBackupExecution = readyForBackup && capabilities.writeAvailable;
+  const readyForBackupExecution = false;
   const blockers = [
-    missingSources > 0 ? "missing-required-source-files" : "",
-    authBlockedSources > 0 ? "sharepoint-read-auth-blocked" : "",
-    !capabilities.writeAvailable ? "sharepoint-write-not-configured" : "",
-    !capabilities.digest.canRequest ? "sharepoint-request-digest-not-available" : ""
+    "browser-sharepoint-plan-required"
   ].filter(Boolean);
   const notes = [
-    "Read-only plan only. No SharePoint files or folders were created, updated, or deleted.",
-    authBlockedSources > 0
-      ? "Some source files could not be verified because SharePoint returned 401/403 from the Hub server context."
-      : "",
-    missingSources > 0 ? "One or more required TXT/JSON source files appear to be missing." : "",
-    readyForBackupExecution
-      ? "Backup execution is write-gated and currently allowed by SharePoint capability settings."
-      : "Backup execution requires SharePoint write capability and request digest availability."
+    "השרת לא קורא קבצי TXT מ־SharePoint. תוכנית זו מציגה נתיבים בלבד.",
+    "אימות קיום/גודל קבצים והרצת הגיבוי מתבצעים דרך הדפדפן המחובר ל־SharePoint.",
+    "אין צורך בהזדהות SharePoint בצד השרת."
   ].filter(Boolean);
 
   return {
@@ -313,46 +268,19 @@ export async function listReadOnlyBackupInventory(
 
   const resolvedPaths = getPathsForSite(site);
   const capabilities = getSharePointOperationCapabilities();
-  const foldersResult = await listSharePointFolders(resolvedPaths, resolvedPaths.backupsRoot);
-  const baseFolders: SiteBackupInventoryFolder[] = foldersResult.folders.map((folder) => ({
-    ...folder,
-    filesCount: 0,
-    knownSizeBytes: 0
-  }));
-
-  const folders = includeFiles && foldersResult.exists
-    ? await Promise.all(baseFolders.map(async (folder) => {
-      const filesResult = await listSharePointFiles(resolvedPaths, folder.serverRelativeUrl);
-      const knownSizeBytes = filesResult.files.reduce((sum, file) => sum + (file.sizeBytes || 0), 0);
-      return {
-        ...folder,
-        files: filesResult.files,
-        filesCount: filesResult.files.length,
-        knownSizeBytes,
-        filesStatus: {
-          exists: filesResult.exists,
-          status: filesResult.status,
-          statusText: filesResult.statusText,
-          authBlocked: filesResult.authBlocked,
-          error: filesResult.error
-        }
-      };
-    }))
-    : baseFolders;
-
-  const filesCount = folders.reduce((sum, folder) => sum + folder.filesCount, 0);
-  const knownSizeBytes = folders.reduce((sum, folder) => sum + folder.knownSizeBytes, 0);
-  const fileReadBlocked = folders.some((folder) => folder.filesStatus?.authBlocked);
-  const fileReadFailed = folders.some((folder) => folder.filesStatus && (!folder.filesStatus.exists || Boolean(folder.filesStatus.error)));
-  const authBlocked = Boolean(foldersResult.authBlocked || fileReadBlocked);
-  const readOk = Boolean(foldersResult.exists && !foldersResult.error && (!includeFiles || !fileReadFailed));
+  const folders: SiteBackupInventoryFolder[] = [];
+  const filesCount = 0;
+  const knownSizeBytes = 0;
+  const authBlocked = false;
+  const readOk = false;
+  const checkedAt = new Date().toISOString();
 
   logger.info("backups", "Read-only SharePoint backup inventory listed", {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     backupsRoot: resolvedPaths.backupsRoot,
     includeFiles,
-    rootExists: foldersResult.exists,
+    rootExists: false,
     foldersCount: folders.length,
     filesCount,
     knownSizeBytes,
@@ -369,18 +297,16 @@ export async function listReadOnlyBackupInventory(
     root: {
       serverRelativePath: resolvedPaths.backupsRoot,
       url: fileUrl(resolvedPaths, resolvedPaths.backupsRoot),
-      apiUrl: foldersResult.url,
-      checkedAt: foldersResult.checkedAt,
-      exists: foldersResult.exists,
-      status: foldersResult.status,
-      statusText: foldersResult.statusText,
-      authBlocked: foldersResult.authBlocked,
-      error: foldersResult.error
+      apiUrl: "",
+      checkedAt,
+      exists: false,
+      authBlocked,
+      error: "browser-sharepoint-inventory-required"
     },
     capabilities,
     folders,
     summary: {
-      rootExists: foldersResult.exists,
+      rootExists: false,
       foldersCount: folders.length,
       filesCount,
       knownSizeBytes,
@@ -388,12 +314,9 @@ export async function listReadOnlyBackupInventory(
       readOk
     },
     notes: [
-      "SharePoint backup inventory uses REST GET only. No SharePoint folders or files were created, updated, or deleted.",
-      includeFiles ? "Folder file metadata was requested for each discovered backup folder." : "Only backup folder metadata was requested.",
-      foldersResult.authBlocked ? "SharePoint returned 401/403 while reading the backup root." : "",
-      foldersResult.error && !foldersResult.authBlocked ? "The backup root could not be listed from the Hub server context." : "",
-      fileReadBlocked ? "One or more backup folders returned 401/403 while listing files." : "",
-      fileReadFailed && !fileReadBlocked ? "One or more backup folders could not be fully listed." : ""
+      "Inventory של תיקיות גיבוי ב־SharePoint צריך להיקרא דרך הדפדפן.",
+      includeFiles ? "קריאת קבצים בתוך תיקיות הגיבוי לא בוצעה בשרת." : "קריאת שורש הגיבויים לא בוצעה בשרת.",
+      "השרת לא משתמש ב־SharePoint REST גם לא לקריאה."
     ].filter(Boolean)
   };
 }

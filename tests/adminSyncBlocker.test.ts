@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   Site: {
-    findById: vi.fn()
+    findById: vi.fn(),
+    findByIdAndUpdate: vi.fn()
   },
   SiteAdminSnapshot: {
     findOne: vi.fn()
@@ -36,33 +37,53 @@ vi.mock("../server/src/services/dangerousBackupBypass.service", () => ({
   isDangerousValidationBypassEnabled: vi.fn(() => false)
 }));
 vi.mock("../server/src/services/sharepointOperationPolicy.service", () => ({
-  shouldBlockBackendSharePointByDefault: vi.fn(() => true)
+  getSharePointOperationPolicy: vi.fn(() => ({
+    operation: "admin-sync",
+    statusLabelHe: "מופעל דרך הדפדפן",
+    blockerHe: "נדרש דפדפן"
+  })),
+  getBrowserRequiredJobMessage: vi.fn(() => "נדרש דפדפן")
 }));
 vi.mock("../server/src/utils/logger", () => ({ logger: mocks.logger }));
 
 beforeEach(() => {
   vi.resetModules();
   mocks.Site.findById.mockReset();
+  mocks.Site.findByIdAndUpdate.mockReset();
   mocks.createJob.mockReset();
   mocks.assertSharePointWriteAvailable.mockReset();
 });
 
 describe("admin-sync backend blocker", () => {
-  it("blocks legacy admin-sync before creating a backend SharePoint job", async () => {
+  it("creates a browser-required job instead of a backend SharePoint job", async () => {
     mocks.Site.findById.mockResolvedValue({
       _id: { toString: () => "site-1" },
-      siteCode: "schedule"
+      siteCode: "schedule",
+      sharePointSiteUrl: "https://portal.army.idf/sites/schedule"
     });
+    mocks.createJob.mockImplementation(async (input) => ({ _id: { toString: () => "job-1" }, ...input, status: "browser-required" }));
 
     const { enqueueAdminSync } = await import("../server/src/services/admins.service");
 
-    await expect(enqueueAdminSync({
+    const result = await enqueueAdminSync({
       siteId: "site-1",
       createdBy: "Owner",
       mode: "sync"
-    })).rejects.toThrow("admin-sync-backend-service-auth-or-browser-required");
+    });
 
-    expect(mocks.createJob).not.toHaveBeenCalled();
+    expect(result.job).toMatchObject({
+      type: "admin-sync",
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint"
+    });
+    expect(mocks.createJob).toHaveBeenCalledWith(expect.objectContaining({
+      type: "admin-sync",
+      executionMode: "browser-required",
+      connectorMode: "browser-sharepoint",
+      payload: expect.objectContaining({
+        browserOperationPlan: expect.objectContaining({ operation: "admin-live-read" })
+      })
+    }));
     expect(mocks.assertSharePointWriteAvailable).not.toHaveBeenCalled();
   });
 });

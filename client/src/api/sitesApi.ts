@@ -70,6 +70,7 @@ export type SharePointCurrentUserResult = {
 
 export type Release = {
   _id: string;
+  name?: string;
   version: string;
   releaseType: "patch" | "minor" | "major" | "hotfix";
   notes?: string;
@@ -502,7 +503,7 @@ export type RuntimeConfigValidationResult = {
   siteCode: string;
   runtimeConfigPath: string;
   runtimeConfigUrl: string;
-  readStatus: "unknown" | "configured" | "missing" | "invalid" | "mismatch" | "auth-blocked" | "error";
+  readStatus: "unknown" | "configured" | "missing" | "invalid" | "mismatch" | "auth-blocked" | "error" | "browser-required";
   storageBackend: "txt" | "mongo" | "unknown" | "";
   backendApiUrl: string;
   backendApiUrlHost: string;
@@ -580,7 +581,7 @@ export type MongoSiteCreationPlan = {
     distAssetsPath: string;
     runtimeConfigPath: string;
     connectorPreference: "browser-sharepoint";
-    libraryCreationFallback: "backend-service-auth-required-or-manual";
+    libraryCreationFallback: "browser-sharepoint-or-manual";
   };
   builderBackend: {
     backendApiUrl: string;
@@ -690,6 +691,61 @@ export type MongoSiteCreationVerifyResult = {
   runtimeConfig?: RuntimeConfigValidationResult | { error: string };
   mongoHealth?: BuilderMongoHealthResult | { error: string };
   health?: SiteHealth;
+};
+
+export type TxtToMongoMigrationSnapshotFile = {
+  key?: string;
+  fileName?: string;
+  logicalName?: string;
+  sourcePath?: string;
+  url?: string;
+  exists?: boolean;
+  status?: "read" | "missing" | "failed";
+  httpStatus?: number;
+  sizeBytes?: number;
+  sha256?: string;
+  text?: string;
+  data?: unknown;
+  parseStatus?: "json" | "empty" | "invalid-json" | "missing" | "failed";
+  error?: string;
+};
+
+export type TxtToMongoMigrationInput = {
+  connectorMode: "browser-sharepoint";
+  sourceSharePointSiteUrl?: string;
+  capturedAt?: string;
+  overwriteMongo?: boolean;
+  switchSiteToMongo?: boolean;
+  files: TxtToMongoMigrationSnapshotFile[];
+};
+
+export type TxtToMongoMigrationResult = {
+  operation: "txt-to-mongo-migration";
+  migratedAt: string;
+  siteId: string;
+  siteCode: string;
+  connectorMode: "browser-sharepoint";
+  sourceSharePointSiteUrl: string;
+  builderBackend: MongoSiteCreationPlan["builderBackend"];
+  registry: { status: "ok" | "failed"; safeCollectionName: string; evidence?: unknown };
+  import: {
+    status: "ok" | "partial" | "failed";
+    written: string[];
+    failed: Array<{ key: string; error: string }>;
+    files: Array<{
+      key: string;
+      sourcePath: string;
+      status: "ready" | "missing" | "invalid" | "failed";
+      sizeBytes?: number;
+      sha256?: string;
+      httpStatus?: number;
+      error?: string;
+    }>;
+    evidence?: unknown;
+  };
+  health?: BuilderMongoHealthResult;
+  finalStatus: "runtime-config-required" | "failed";
+  warnings: string[];
 };
 
 export type BackupPlanSource = {
@@ -974,7 +1030,7 @@ export type PermissionsSetupPlan = {
 };
 
 export type DeployMode = "local-dev-owner" | "production-safe";
-export type SharePointConnectorMode = "backend-sharepoint" | "browser-sharepoint";
+export type SharePointConnectorMode = "browser-sharepoint";
 
 export type DeployPolicy = {
   mode: DeployMode;
@@ -1437,6 +1493,64 @@ export type BrowserBackupOperationPlan = {
   message?: string;
 };
 
+export type BrowserRestoreOperationPlan = {
+  operation: "restore";
+  connectorMode: "browser-sharepoint";
+  executionMode: "browser-required";
+  backupId: string;
+  backupObjectId: string;
+  siteId: string;
+  siteCode: string;
+  targetSiteUrl: string;
+  files: Array<{
+    sourcePath: string;
+    targetPath: string;
+    backupPath?: string;
+    expectedSizeBytes?: number;
+    expectedSha256?: string;
+  }>;
+  message?: string;
+};
+
+export type BrowserRestoreEvidencePayload = {
+  connectorMode: "browser-sharepoint";
+  jobId?: string;
+  targetSiteUrl?: string;
+  restoreEvidence: BackupRestoreEvidence[];
+  errors?: Array<{ sourcePath?: string; targetPath?: string; backupPath?: string; error: string; status?: number } | string>;
+  startedAt?: string;
+  completedAt?: string;
+  finalStatus: "success" | "failed";
+};
+
+export type BrowserSiteOperationEvidencePayload = {
+  connectorMode: "browser-sharepoint";
+  jobId?: string;
+  operation: "site-provision" | "site-bootstrap" | "permissions-setup";
+  targetSiteUrl?: string;
+  startedAt?: string;
+  completedAt?: string;
+  finalStatus: "success" | "failed";
+  steps?: Array<{ step: string; status: "succeeded" | "failed" | "skipped"; path?: string; httpStatus?: number; error?: string }>;
+  health?: Record<string, unknown>;
+  evidence?: Record<string, unknown>;
+  warnings?: string[];
+};
+
+export type BrowserAdminTxtRepairEvidencePayload = {
+  connectorMode: "browser-sharepoint";
+  jobId?: string;
+  targetSiteUrl?: string;
+  targetPath: string;
+  mergedTxtAdmins: any[];
+  repairEvidence?: DeploymentVerificationEvidence;
+  errors?: Array<{ sourcePath?: string; targetPath?: string; error: string; status?: number } | string>;
+  startedAt?: string;
+  completedAt?: string;
+  finalStatus: "success" | "failed";
+  reason?: string;
+};
+
 export type BrowserBackupVerificationPayload = {
   connectorMode: "browser-sharepoint";
   targetSiteUrl?: string;
@@ -1581,7 +1695,7 @@ export type DiagnosticsResult = {
   };
   sharePoint: {
     targetSiteUrl: string;
-    preferredConnectorMode?: "browser-sharepoint" | "backend-sharepoint";
+    preferredConnectorMode?: "browser-sharepoint";
     writeEnabled: boolean;
     authCookieConfigured: boolean;
     authCookieNames?: string[];
@@ -1645,7 +1759,7 @@ export type DiagnosticsResult = {
 
 export type SharePointDiagnosticsCheck = {
   generatedAt: string;
-  connectorMode?: "backend-sharepoint";
+  connectorMode?: "browser-sharepoint";
   appMode?: string;
   targetSharePointSiteUrl?: string;
   site?: Partial<Site> | null;
@@ -2051,6 +2165,13 @@ export const sitesApi = {
         ...asJson({})
       })
     ),
+  migrateTxtToMongo: async (id: string, payload: TxtToMongoMigrationInput) =>
+    parseResponse<TxtToMongoMigrationResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/mongo-migration/txt-to-mongo`, {
+        method: "POST",
+        ...asJson(payload)
+      })
+    ),
   mongoRuntimeConfigContent: async (id: string) =>
     parseResponse<MongoRuntimeConfigContent>(await apiFetch(`${API_BASE_URL}/sites/${id}/mongo-create/runtime-config-content`)),
   recordMongoCreateBrowserEvidence: async (id: string, evidence: MongoCreateBrowserEvidenceInput) =>
@@ -2069,18 +2190,32 @@ export const sitesApi = {
     ),
   siteProvisionPlan: async (id: string) => parseResponse<SiteProvisionPlan>(await apiFetch(`${API_BASE_URL}/sites/${id}/provision/plan`)),
   queueSiteProvision: async (id: string) =>
-    parseResponse<{ job: Job }>(
+    parseResponse<{ job: Job; plan: SiteProvisionPlan; message?: string }>(
       await apiFetch(`${API_BASE_URL}/sites/${id}/provision`, {
         method: "POST",
         ...asJson({})
       })
     ),
+  recordBrowserSiteProvisionEvidence: async (id: string, payload: BrowserSiteOperationEvidencePayload) =>
+    parseResponse<{ site: Site; summary: Record<string, unknown> }>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/provision/browser-evidence`, {
+        method: "POST",
+        ...asJson({ ...payload, operation: "site-provision" })
+      })
+    ),
   permissionsSetupPlan: async (id: string) => parseResponse<PermissionsSetupPlan>(await apiFetch(`${API_BASE_URL}/sites/${id}/permissions/plan`)),
   queuePermissionsSetup: async (id: string) =>
-    parseResponse<{ job: Job }>(
+    parseResponse<{ job: Job; plan: PermissionsSetupPlan; message?: string }>(
       await apiFetch(`${API_BASE_URL}/sites/${id}/permissions/setup`, {
         method: "POST",
         ...asJson({})
+      })
+    ),
+  recordBrowserPermissionsEvidence: async (id: string, payload: BrowserSiteOperationEvidencePayload) =>
+    parseResponse<{ site: Site; summary: Record<string, unknown> }>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/permissions/browser-evidence`, {
+        method: "POST",
+        ...asJson({ ...payload, operation: "permissions-setup" })
       })
     ),
   siteBootstrapPlan: async (id: string, options?: SiteBootstrapOptions) => {
@@ -2098,13 +2233,34 @@ export const sitesApi = {
         ...asJson(options ?? {})
       })
     ),
+  recordBrowserSiteBootstrapEvidence: async (id: string, payload: BrowserSiteOperationEvidencePayload) =>
+    parseResponse<{ site: Site; summary: Record<string, unknown> }>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/bootstrap/browser-evidence`, {
+        method: "POST",
+        ...asJson({ ...payload, operation: "site-bootstrap" })
+      })
+    ),
 
   releases: async () => parseResponse<Release[]>(await apiFetch(`${API_BASE_URL}/releases`)),
-  createRelease: async (payload: { version?: string; releaseType: Release["releaseType"]; notes?: string; artifactRef?: string }) =>
+  createRelease: async (payload: { name?: string; version?: string; releaseType: Release["releaseType"]; notes?: string; artifactRef?: string }) =>
     parseResponse<Release>(
       await apiFetch(`${API_BASE_URL}/releases`, {
         method: "POST",
         ...asJson(payload)
+      })
+    ),
+  updateRelease: async (releaseId: string, payload: { name: string; version?: string; releaseType?: Release["releaseType"]; notes?: string; artifactRef?: string; status?: Release["status"] }) =>
+    parseResponse<Release>(
+      await apiFetch(`${API_BASE_URL}/releases/${releaseId}`, {
+        method: "PATCH",
+        ...asJson(payload)
+      })
+    ),
+  updateReleaseName: async (releaseId: string, name: string) =>
+    parseResponse<Release>(
+      await apiFetch(`${API_BASE_URL}/releases/${releaseId}/name`, {
+        method: "PATCH",
+        ...asJson({ name })
       })
     ),
   deployReleaseAll: async (releaseId: string, onlyOutdated = false, deployMode: DeployMode = "production-safe") =>
@@ -2150,7 +2306,7 @@ export const sitesApi = {
     siteId: string,
     releaseId: string,
     deployMode: DeployMode = "production-safe",
-    connectorMode: SharePointConnectorMode = "backend-sharepoint",
+    connectorMode: SharePointConnectorMode = "browser-sharepoint",
     allowDeployWithoutBackup = false
   ) =>
     parseResponse<{ job: Job; deployment?: SiteDeployment; requiresApproval?: boolean; approvalStatus?: string; message?: string; deployMode?: DeployMode; deployPolicy?: DeployPolicy }>(
@@ -2159,7 +2315,7 @@ export const sitesApi = {
         ...asJson({ releaseId, deployMode, connectorMode, allowDeployWithoutBackup })
       })
     ),
-  deploySiteVersionPlan: async (siteId: string, releaseId: string, deployMode: DeployMode = "production-safe", connectorMode: SharePointConnectorMode = "backend-sharepoint") =>
+  deploySiteVersionPlan: async (siteId: string, releaseId: string, deployMode: DeployMode = "production-safe", connectorMode: SharePointConnectorMode = "browser-sharepoint") =>
     parseResponse<DeployPlan>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/deploy-version/plan`, {
         method: "POST",
@@ -2260,10 +2416,17 @@ export const sitesApi = {
       })
     ),
   queueRestoreBackup: async (backupId: string, notes = "") =>
-    parseResponse<{ job: Job }>(
+    parseResponse<{ job: Job; backup: Backup; browserOperationPlan?: BrowserRestoreOperationPlan; connectorMode?: "browser-sharepoint"; executionMode?: string; message?: string }>(
       await apiFetch(`${API_BASE_URL}/backups/${backupId}/restore`, {
         method: "POST",
         ...asJson(notes ? { notes } : {})
+      })
+    ),
+  recordBrowserRestoreEvidence: async (backupId: string, payload: BrowserRestoreEvidencePayload) =>
+    parseResponse<{ backup: Backup; site: Site; summary: Record<string, unknown> }>(
+      await apiFetch(`${API_BASE_URL}/backups/${backupId}/browser-restore-evidence`, {
+        method: "POST",
+        ...asJson(payload)
       })
     ),
 
@@ -2338,6 +2501,13 @@ export const sitesApi = {
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/admins/repair-txt`, {
         method: "POST",
         ...asJson(notes ? { notes } : {})
+      })
+    ),
+  recordBrowserAdminTxtRepairEvidence: async (siteId: string, payload: BrowserAdminTxtRepairEvidencePayload) =>
+    parseResponse<{ siteId: string; siteCode: string; connectorMode: "browser-sharepoint"; targetPath: string; summary: Record<string, unknown>; snapshot: any }>(
+      await apiFetch(`${API_BASE_URL}/sites/${siteId}/admins/repair-txt/browser-evidence`, {
+        method: "POST",
+        ...asJson(payload)
       })
     ),
 

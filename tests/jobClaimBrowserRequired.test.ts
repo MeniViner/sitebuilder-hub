@@ -32,7 +32,8 @@ describe("job claiming", () => {
       expect.objectContaining({
         status: "queued",
         executionMode: { $nin: ["browser-required", "browser-in-progress", "blocked-service-auth-required"] },
-        "payload.connectorMode": { $ne: "browser-sharepoint" },
+        connectorMode: { $nin: ["browser-sharepoint", "backend-sharepoint", "backend-service-auth-required"] },
+        "payload.connectorMode": { $nin: ["browser-sharepoint", "backend-sharepoint", "backend-service-auth-required"] },
         "payload.executionMode": { $ne: "browser-required" }
       }),
       expect.any(Object),

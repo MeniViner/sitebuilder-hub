@@ -125,3 +125,6 @@ Note: an older API process was already listening on `4100`; it returned 404 for 
 - Real SharePoint write still requires valid backend auth material and a successful digest/contextinfo check.
 - Browser current-user detection cannot be fully validated from localhost.
 - Existing advanced approval code remains for future team mode but is no longer the owner-default path.
+# Legacy Historical Report
+
+This report documents an older usability fix from before the browser-only SharePoint architecture was finalized. The current source of truth is `docs/sharepoint-browser-only-status-report.md`.

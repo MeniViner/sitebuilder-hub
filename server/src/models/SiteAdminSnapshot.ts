@@ -46,7 +46,7 @@ const siteAdminSnapshotSchema = new Schema(
 
     capturedBy: { type: String, default: "system" },
     capturedAt: { type: Date, default: Date.now },
-    connectorMode: { type: String, enum: ["browser-sharepoint", "backend-sharepoint", "mongo-backend"], default: "backend-sharepoint" },
+    connectorMode: { type: String, enum: ["browser-sharepoint", "backend-sharepoint", "mongo-backend"], default: "browser-sharepoint" },
     targetSiteUrl: { type: String, default: "" },
 
     txtAdmins: { type: [adminIdentitySchema], default: [] },

@@ -265,3 +265,125 @@ describe("Mongo-native site creation execution", () => {
     expect(site.status).toBe("draft");
   });
 });
+
+describe("TXT to Mongo migration", () => {
+  const legacyKeys = [
+    "bihs_master_config_v1.txt",
+    "users_data.txt",
+    "events_data.txt",
+    "nav_data.txt",
+    "site_content_data.txt",
+    "theme_data.txt",
+    "widgets_data.txt",
+    "external_links_data.txt",
+    "gantt_data.txt"
+  ];
+
+  const dataForKey = (key: string) => {
+    if (key === "users_data.txt") return [{ id: "admin-1", name: "Admin One" }];
+    if (key === "events_data.txt") return { displayCount: 1, displayMode: "default", events: [{ id: "event-1", title: "Existing event" }] };
+    if (key === "nav_data.txt") return [{ id: "home", label: "Home" }];
+    if (key === "external_links_data.txt") return [];
+    return {};
+  };
+
+  it("imports browser-read TXT snapshot into Builder Mongo and switches the site to Mongo", async () => {
+    const site = siteDoc({
+      storageBackend: "txt",
+      creationMode: "track-existing",
+      health: {
+        siteDbExists: true,
+        usersDbExists: true,
+        distExists: true,
+        indexExists: true,
+        txtFilesExist: true
+      }
+    });
+    mocks.Site.findById.mockResolvedValue(site);
+    mocks.Site.findOne.mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
+    const batchWriteBodies: any[] = [];
+    let batchReadCount = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      expect(new Headers(init?.headers).get("X-API-Key")).toBe("builder-secret");
+      if (url.endsWith("/api/sites") && init?.method === "POST") {
+        return jsonResponse({ ok: true, site: { siteId: "alphateam", safeCollectionName: "site_alphateam_123" } }, 201);
+      }
+      if (url.endsWith("/api/healthz")) return jsonResponse({ ok: true });
+      if (url.endsWith("/healthz") || url.endsWith("/api/health")) return jsonResponse({ ok: false }, 404);
+      if (url.endsWith("/api/sites")) return jsonResponse({ ok: true, sites: [] });
+      if (url.endsWith("/api/sites/alphateam")) {
+        return jsonResponse({ ok: true, site: { siteId: "alphateam", safeCollectionName: "site_alphateam_123" } });
+      }
+      if (url.endsWith("/api/sites/alphateam/legacy/batch-read")) {
+        batchReadCount += 1;
+        return jsonResponse({
+          ok: true,
+          results: legacyKeys.map((key) => ({
+            ok: true,
+            key,
+            data: dataForKey(key),
+            version: batchReadCount === 1 && key === "users_data.txt" ? 7 : 0
+          }))
+        });
+      }
+      if (url.endsWith("/api/sites/alphateam/legacy/batch-write")) {
+        const body = JSON.parse(String(init?.body || "{}"));
+        batchWriteBodies.push(body);
+        return jsonResponse({ ok: true, results: body.items.map((item: { key: string }) => ({ ok: true, key: item.key, version: 1 })) });
+      }
+      if (url.endsWith("/api/sites/alphateam/backups")) return jsonResponse({ ok: true, backups: [] });
+      return jsonResponse({ ok: false }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { executeTxtToMongoMigration } = await import("../server/src/services/mongoSiteCreation.service");
+    const result = await executeTxtToMongoMigration("hub-site-1", {
+      connectorMode: "browser-sharepoint",
+      sourceSharePointSiteUrl: site.sharePointSiteUrl,
+      files: legacyKeys.map((key) => ({
+        key,
+        fileName: key,
+        sourcePath: `/sites/main-site/subsite/siteDB/siteAssets/${key}`,
+        exists: true,
+        status: "read",
+        data: dataForKey(key),
+        parseStatus: "json"
+      }))
+    });
+
+    expect(result.finalStatus).toBe("runtime-config-required");
+    expect(result.import.status).toBe("ok");
+    expect(result.import.written).toEqual(expect.arrayContaining(legacyKeys));
+    expect(site.storageBackend).toBe("mongo");
+    expect(site.creationMode).toBe("migration");
+    expect(site.authoritativeAdminSource).toBe("mongo");
+    expect(site.safeCollectionName).toBe("site_alphateam_123");
+    expect(batchWriteBodies).toHaveLength(1);
+    expect(batchWriteBodies[0].items.find((item: any) => item.key === "users_data.txt")).toMatchObject({
+      expectedVersion: 7,
+      allowEmptyOverwrite: true,
+      data: [{ id: "admin-1", name: "Admin One" }]
+    });
+  });
+
+  it("blocks migration when a required TXT file is missing from the browser snapshot", async () => {
+    const site = siteDoc({ storageBackend: "txt" });
+    mocks.Site.findById.mockResolvedValue(site);
+    const { executeTxtToMongoMigration } = await import("../server/src/services/mongoSiteCreation.service");
+
+    await expect(executeTxtToMongoMigration("hub-site-1", {
+      connectorMode: "browser-sharepoint",
+      sourceSharePointSiteUrl: site.sharePointSiteUrl,
+      files: legacyKeys.filter((key) => key !== "users_data.txt").map((key) => ({
+        key,
+        fileName: key,
+        sourcePath: `/sites/main-site/subsite/siteDB/siteAssets/${key}`,
+        exists: true,
+        status: "read",
+        data: dataForKey(key),
+        parseStatus: "json"
+      }))
+    })).rejects.toThrow("txt-to-mongo-migration-snapshot-invalid");
+  });
+});

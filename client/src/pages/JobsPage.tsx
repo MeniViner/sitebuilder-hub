@@ -10,6 +10,7 @@ import { HelpLabel } from "../components/help/HelpLabel";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
+import { AdvancedDetails, GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { ProtectedActionDialog } from "../components/ProtectedActionDialog";
 import { SectionCard } from "../components/SectionCard";
@@ -102,12 +103,12 @@ const jobErrorSummary = (job: Job) => {
     humanExplanation: browserRequired
       ? "הפעולה ממתינה להרצה דרך הדפדפן המחובר ל־SharePoint."
       : sharePoint401
-      ? "הדפדפן מחובר ל־SharePoint, אבל השרת המקומי לא מחובר"
+      ? "הפעולה נוצרה במסלול שרתי ישן שכבר מושבת. SharePoint רץ עכשיו דרך הדפדפן בלבד."
       : exact ? "הפעולה נכשלה בזמן הרצה. בדקו את השגיאה המדויקת ואת פרטי החיבור." : "לא נשמרה שגיאה מפורשת.",
     suggestedFix: browserRequired
       ? "פתחו את מסך הפעולה המתאים והריצו אותה דרך הדפדפן. ה־worker לא יריץ אותה מהשרת."
       : sharePoint401
-      ? "השרת המקומי לא מחובר ל־SharePoint, אבל פעולות שמוגדרות לדפדפן יכולות להמשיך דרך חיבור הדפדפן."
+      ? "פתחו את המסך הרלוונטי והריצו את הפעולה מחדש דרך הדפדפן המחובר. אין fallback שרת ל־SharePoint."
       : "הריצו אבחון במסך בעיות וחיבורים ובדקו את הלוגים הטכניים.",
     exact
   };
@@ -118,19 +119,19 @@ const isWriteLikeJob = (job: Job) =>
 
 const rerunRisks = (job: Job) => {
   const risks = [
-    `Job type: ${jobTypeLabel(job.type)}.`,
-    `Current status: ${jobStatusLabel(job.status)}.`,
-    job.siteId ? `Target site: ${job.siteId}.` : "Target site is not attached to this job.",
-    "Rerun resets execution timestamps/result/evidence and queues the operation again."
+    `סוג פעולה: ${jobTypeLabel(job.type)}.`,
+    `סטטוס נוכחי: ${jobStatusLabel(job.status)}.`,
+    job.siteId ? `אתר יעד: ${job.siteId}.` : "לא מחובר אתר יעד לפעולה הזאת.",
+    "הרצה מחדש מאפסת זמני ריצה, result ו־evidence קודמים ומכניסה את הפעולה שוב לתור."
   ];
   if (job.requiresApproval) {
-    risks.push("This job requires approval; rerun will return it to the approval gate instead of running immediately.");
+    risks.push("הפעולה דורשת אישור; הרצה מחדש תחזיר אותה לשער אישור ולא תריץ אותה מיד.");
   }
   if (isWriteLikeJob(job)) {
-    risks.push("This operation may write to SharePoint or update Hub metadata. Review the original evidence before rerun.");
+    risks.push("הפעולה עשויה לכתוב ל־SharePoint או לעדכן metadata ב־Hub. בדקו את הראיות המקוריות לפני הרצה מחדש.");
   }
   if (job.status === "failed" && job.errorMessage) {
-    risks.push(`Previous failure: ${job.errorMessage}`);
+    risks.push(`כשל קודם: ${job.errorMessage}`);
   }
   return risks;
 };
@@ -180,7 +181,7 @@ function ApprovalReviewDialog({
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className={`badge ${isReject ? "badge-danger" : "badge-warning"}`}>
                 {isReject ? <XCircle size={13} /> : <ShieldCheck size={13} />}
-                {isReject ? "דחיית Approval" : "סקירת Approval"}
+                {isReject ? "דחיית אישור" : "סקירת אישור"}
               </span>
               <span className={`badge ${jobStatusBadgeClass(job.status)}`}>{jobStatusLabel(job.status)}</span>
             </div>
@@ -226,7 +227,7 @@ function ApprovalReviewDialog({
                 <p className="text-sm muted">לא צורפו סיכונים מפורשים ל־approval snapshot.</p>
               )}
               <div className="mt-4 rounded-lg border p-3" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
-                <p className="field-label"><HelpLabel helpKey="deploy.targetMode">Target paths</HelpLabel></p>
+                <p className="field-label"><HelpLabel helpKey="deploy.targetMode">נתיבי יעד</HelpLabel></p>
                 {targetPaths.length ? (
                   <div className="mt-2 max-h-48 space-y-1 overflow-auto">
                     {targetPaths.slice(0, 30).map((targetPath) => (
@@ -243,7 +244,7 @@ function ApprovalReviewDialog({
             <section className="soft-panel p-4">
               <div className="mb-3 flex items-center gap-2 font-bold" style={{ color: backupSafety?.satisfied === false ? "var(--danger)" : "var(--success)" }}>
                 <ShieldCheck size={16} />
-                Backup safety
+                בטיחות גיבוי
               </div>
               {backupSafety ? (
                 <div className="grid gap-3 text-sm">
@@ -262,7 +263,9 @@ function ApprovalReviewDialog({
                     <p className="num text-xs">{stringValue(backup?.backupId) || stringValue(backup?.id) || "-"}</p>
                     <p className="text-xs muted">{stringValue(backup?.verificationStatus) || stringValue(backup?.status)}</p>
                   </div>
-                  <pre className="num max-h-44 overflow-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>{approvalText(backupSafety)}</pre>
+                  <AdvancedDetails title="פרטי Backup טכניים" description="נתוני בטיחות מלאים לאבחון">
+                    <pre className="num max-h-44 overflow-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>{approvalText(backupSafety)}</pre>
+                  </AdvancedDetails>
                 </div>
               ) : (
                 <p className="text-sm muted">לא צורף מידע backupSafety ל־approval snapshot.</p>
@@ -271,10 +274,9 @@ function ApprovalReviewDialog({
           </div>
 
           {summary || snapshot ? (
-            <details className="mt-4 rounded-lg border p-3" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
-              <summary className="cursor-pointer text-sm font-bold" style={{ color: "var(--text-strong)" }}>Raw approval payload</summary>
+            <AdvancedDetails title="נתוני אישור מתקדמים" description="Raw payload מלא למעקב Audit ותחקור">
               <pre className="num mt-3 max-h-72 overflow-auto text-xs">{approvalText({ approvalSummary: job.approvalSummary, approvalSnapshot: job.approvalSnapshot })}</pre>
-            </details>
+            </AdvancedDetails>
           ) : null}
 
           <div className="mt-4 grid gap-3 md:grid-cols-[1fr_16rem]">
@@ -427,7 +429,7 @@ export function JobsPage() {
               <p className="truncate text-xs muted" title={approvalSummaryTitle(job)}>{approvalSummaryTitle(job) || "-"}</p>
             </div>
           ) : job.requiresApproval ? (
-            <span className="badge badge-neutral">{job.approvedAt ? "אושר" : job.rejectedAt ? "נדחה" : "Approval gate"}</span>
+            <span className="badge badge-neutral">{job.approvedAt ? "אושר" : job.rejectedAt ? "נדחה" : "שער אישור"}</span>
           ) : (
             <span className="text-xs muted">-</span>
           )}
@@ -474,9 +476,9 @@ export function JobsPage() {
             disabled={busyAction === job._id || activeStatuses.has(job.status) || job.status === "awaiting-approval"}
             onClick={() => setRerunDialog({ job })}
             type="button"
-            title={activeStatuses.has(job.status) || job.status === "awaiting-approval" ? "Rerun זמין רק לפעולה שאינה רצה ואינה ממתינה לאישור" : "פתח אישור Rerun"}
+            title={activeStatuses.has(job.status) || job.status === "awaiting-approval" ? "הרצה מחדש זמינה רק לפעולה שאינה רצה ואינה ממתינה לאישור" : "פתח אישור הרצה מחדש"}
           >
-            <RotateCcw size={13} />Rerun
+            <RotateCcw size={13} />הרץ מחדש
           </button>
         </div>
       )
@@ -515,7 +517,7 @@ export function JobsPage() {
           onClick={() => setRerunDialog({ job })}
           type="button"
         >
-          <RotateCcw size={13} />Rerun
+          <RotateCcw size={13} />הרץ מחדש
         </button>
       </div>
     </div>
@@ -546,7 +548,7 @@ export function JobsPage() {
     <div className="space-y-5">
       <PageHeader
         title="תור פעולות"
-        subtitle="Operations Queue לפעולות פריסה, שחזור, גיבוי, הרשאות, health ו-provisioning. כל פעולה מסוכנת עוברת approval או confirmation לפני הרצה."
+        subtitle="מה רץ עכשיו, מה ממתין לאישור, ומה אפשר להריץ מחדש בבטחה"
         helpKey="job"
         actions={
           <div className="flex flex-wrap gap-2">
@@ -554,6 +556,52 @@ export function JobsPage() {
             <MetadataOnlyBadge mode="metadata" />
           </div>
         }
+      />
+
+      <OperationalSummary
+        title="כל הפעולות במקום אחד"
+        purpose="זהו חדר המתנה לפעולות כמו פריסה, שחזור, גיבוי, הרשאות ויצירת אתר. פעולה מסוכנת לא רצה בלי סקירת אישור או אישור מוגן."
+        state={`${formatNumber(jobs.length)} פעולות בתור · ${formatNumber(counts.active)} רצות · ${formatNumber(counts.awaiting)} ממתינות לאישור`}
+        attention={counts.failed
+          ? `${formatNumber(counts.failed)} פעולות נכשלו. פתחו פרטים כדי לראות סיבה ותיקון מוצע.`
+          : counts.browserRequired
+            ? `${formatNumber(counts.browserRequired)} פעולות ממתינות לדפדפן SharePoint מחובר.`
+            : counts.awaiting
+              ? `${formatNumber(counts.awaiting)} פעולות צריכות סקירה אנושית לפני הרצה.`
+              : "אין כשל דחוף בתור הפעולות כרגע."}
+        attentionTone={counts.failed ? "danger" : counts.browserRequired || counts.awaiting ? "warning" : "success"}
+        nextAction={counts.failed
+          ? "בחרו פעולה שנכשלה, פתחו פרטים, תקנו את החסם ואז השתמשו בהרצה מחדש עם נימוק."
+          : counts.awaiting
+            ? "פתחו סקור ואשר רק אחרי שבדקתם יעדים, סיכונים ו־Backup."
+            : counts.browserRequired
+              ? "פתחו את המסך הרלוונטי והריצו דרך הדפדפן המחובר."
+              : "אפשר לרענן, לסנן, או לפתוח פעולה כדי לקרוא Evidence בלי לשנות דבר."}
+        blocked={counts.serviceAuthBlocked
+          ? `${formatNumber(counts.serviceAuthBlocked)} פעולות היסטוריות מסומנות כמסלול שרתי מושבת. הפעולות החדשות צריכות לרוץ דרך הדפדפן המחובר.`
+          : undefined}
+        tone={counts.failed || counts.serviceAuthBlocked ? "danger" : counts.awaiting || counts.browserRequired ? "warning" : "success"}
+      />
+
+      <GuidedFlow
+        title="הרצה מחדש בלי הפתעות"
+        subtitle="הרצה מחדש זמינה רק אחרי שהסיבה והסיכון ברורים."
+        steps={[
+          { title: "פתח פרטים", description: "קראו מה נכשל, איזה אתר מושפע ומה המערכת מציעה לתקן.", status: "done" },
+          { title: "תקן חסם", description: "למשל דפדפן SharePoint לא מחובר, יעד פריסה לא נכון, או פעולה שעדיין לא הוסבה.", status: counts.failed ? "active" : "pending" },
+          { title: "כתוב סיבה", description: "הרצה מחדש דורשת נימוק שיישמר ב־Audit.", status: "pending" },
+          { title: "אשר פעולה מוגנת", description: "פעולה פעילה או ממתינה לאישור לא תרוץ שוב בטעות.", status: "pending" }
+        ]}
+      />
+
+      <ModeBoundary
+        title="קריאה, אישור והרצה"
+        items={[
+          { label: "פתיחת פרטים", description: "קריאה בלבד. מציגה סטטוס, שגיאה, לוגים ו־Evidence.", tone: "info" },
+          { label: "אישור", description: "מחייב בדיקת יעדים וסיכונים לפני שה־Job נכנס לתור.", tone: "warning" },
+          { label: "הרצה מחדש", description: "יוצר ניסיון חדש עם סיבה. הוא לא זמין לפעולה שכבר רצה או מחכה לאישור.", tone: "warning" },
+          { label: "דפדפן מול Backend", description: "browser-required פירושו להריץ דרך הדפדפן המחובר, לא דרך worker שרת.", tone: "neutral" }
+        ]}
       />
 
       {message ? <div className="badge badge-success px-3 py-2">{message}</div> : null}
@@ -570,8 +618,8 @@ export function JobsPage() {
           </div>
 
           <SectionCard
-            title="Operations Queue"
-            subtitle="תור פעולות עם approval, retry מבוקר, evidence וסטטוס ריצה. Rerun דורש נימוק ואישור מוגן."
+            title="תור פעולות"
+            subtitle="תור פעולות עם אישור, הרצה מחדש מבוקרת, evidence וסטטוס ריצה. הרצה מחדש דורשת נימוק ואישור מוגן."
             helpKey="job"
             actions={<button className="btn btn-secondary" onClick={() => load()} type="button"><RefreshCcw size={15} />רענן עכשיו</button>}
           >
@@ -596,7 +644,7 @@ export function JobsPage() {
                   <option value="awaiting-approval">אישור מתקדם</option>
                   <option value="browser-required">ממתין להרצה דרך הדפדפן</option>
                   <option value="browser-in-progress">רץ דרך הדפדפן</option>
-                  <option value="blocked-service-auth-required">דורש הרשאת שרת</option>
+                  <option value="blocked-service-auth-required">היסטורי: שרת מושבת</option>
                   <option value="active">בתהליך</option>
                   <option value="queued">בתור</option>
                   <option value="preflight">בדיקה מקדימה</option>
@@ -660,17 +708,16 @@ export function JobsPage() {
                         <p className="mt-2">{summary.suggestedFix}</p>
                         <code className="num mt-3 block break-all text-xs">{summary.exact}</code>
                       </div>
-                      <details className="rounded-lg border p-3" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
-                        <summary className="cursor-pointer text-sm font-bold" style={{ color: "var(--text-strong)" }}>פרטים טכניים</summary>
+                      <AdvancedDetails title="פרטים טכניים מתקדמים" description="Result, Evidence ו־Approval snapshot">
                         <pre className="num mt-3 max-h-72 overflow-auto text-xs">{approvalText({ result: selectedJob.result, evidence: selectedJob.evidence, approvalSnapshot: selectedJob.approvalSnapshot })}</pre>
-                      </details>
+                      </AdvancedDetails>
                     </div>
                   );
                 })()}
               </SectionCard>
             ) : null}
             {selectedJob.requiresApproval ? (
-              <SectionCard title="Approval" compact helpKey="job.approval">
+              <SectionCard title="אישור פעולה" compact helpKey="job.approval">
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="soft-panel p-3">
                     <p className="field-label"><HelpLabel helpKey="job.approval">נדרש אישור</HelpLabel></p>
@@ -697,29 +744,31 @@ export function JobsPage() {
                   <div className="mt-3 rounded-lg border p-3 text-sm muted" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>{selectedJob.approvalDecisionReason}</div>
                 ) : null}
                 {selectedJob.approvalSnapshot ? (
-                  <pre className="num mt-3 max-h-72 overflow-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>{approvalText(selectedJob.approvalSnapshot)}</pre>
+                  <AdvancedDetails title="תמונת אישור מתקדמת" description="JSON מלא לצוות טכני ו־Audit">
+                    <pre className="num mt-3 max-h-72 overflow-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>{approvalText(selectedJob.approvalSnapshot)}</pre>
+                  </AdvancedDetails>
                 ) : null}
               </SectionCard>
             ) : null}
             {selectedJob.targetPaths?.length || selectedJob.result || selectedJob.evidence ? (
-              <SectionCard title="Execution Evidence" compact helpKey="audit.evidence">
+              <SectionCard title="ראיות הרצה" compact helpKey="audit.evidence">
                 <div className="grid gap-3 md:grid-cols-3">
                   <div className="soft-panel p-3">
-                    <p className="field-label"><HelpLabel helpKey="deploy.targetMode">Target paths</HelpLabel></p>
+                    <p className="field-label"><HelpLabel helpKey="deploy.targetMode">נתיבי יעד</HelpLabel></p>
                     <p className="num">{formatNumber(selectedJob.targetPaths?.length || 0)}</p>
                   </div>
                   <div className="soft-panel p-3">
-                    <p className="field-label"><HelpLabel helpKey="audit.evidence">Result</HelpLabel></p>
+                    <p className="field-label"><HelpLabel helpKey="audit.evidence">תוצאה</HelpLabel></p>
                     <p className="num">{payloadCount(selectedJob.result)}</p>
                   </div>
                   <div className="soft-panel p-3">
-                    <p className="field-label"><HelpLabel helpKey="audit.evidence">Evidence rows</HelpLabel></p>
+                    <p className="field-label"><HelpLabel helpKey="audit.evidence">שורות ראיה</HelpLabel></p>
                     <p className="num">{formatNumber(payloadCount(selectedJob.evidence))}</p>
                   </div>
                 </div>
                 {selectedJob.targetPaths?.length ? (
                   <div className="mt-3 rounded-lg border p-3" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>
-                    <p className="field-label"><HelpLabel helpKey="deploy.targetMode">Target paths sample</HelpLabel></p>
+                    <p className="field-label"><HelpLabel helpKey="deploy.targetMode">דוגמת נתיבי יעד</HelpLabel></p>
                     <div className="mt-2 space-y-1">
                       {selectedJob.targetPaths.slice(0, 12).map((targetPath) => (
                         <code key={targetPath} className="num block truncate text-xs" title={targetPath}>{targetPath}</code>
@@ -728,10 +777,14 @@ export function JobsPage() {
                   </div>
                 ) : null}
                 {selectedJob.result ? (
-                  <pre className="num mt-3 max-h-72 overflow-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>{approvalText(selectedJob.result)}</pre>
+                  <AdvancedDetails title="Result מתקדם" description="פלט טכני מלא מההרצה">
+                    <pre className="num mt-3 max-h-72 overflow-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>{approvalText(selectedJob.result)}</pre>
+                  </AdvancedDetails>
                 ) : null}
                 {selectedJob.evidence ? (
-                  <pre className="num mt-3 max-h-96 overflow-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>{approvalText(selectedJob.evidence)}</pre>
+                  <AdvancedDetails title="Evidence מתקדם" description="ראיות מלאות לאימות ותחקור">
+                    <pre className="num mt-3 max-h-96 overflow-auto rounded-lg border p-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--border)" }}>{approvalText(selectedJob.evidence)}</pre>
+                  </AdvancedDetails>
                 ) : null}
               </SectionCard>
             ) : null}
@@ -761,15 +814,15 @@ export function JobsPage() {
       />
       <ProtectedActionDialog
         open={Boolean(rerunDialog)}
-        title="אישור Rerun"
+        title="אישור הרצה מחדש"
         description={rerunDialog
           ? `הרצה מחדש של ${jobTypeLabel(rerunDialog.job.type)} (${rerunDialog.job._id}). הפעולה תאפס timestamps/result/evidence קודמים ותכניס את ה־Job שוב לתור או לשער אישור.`
           : ""}
-        confirmWord="Rerun Job"
-        noteLabel="סיבת Rerun"
+        confirmWord="הרץ מחדש"
+        noteLabel="סיבת הרצה מחדש"
         notePlaceholder="לדוגמה: תיקון הגדרת חיבור אחרי כשל SharePoint 401"
-        noteHint="נדרש נימוק של לפחות 3 תווים. הנימוק יישמר ב־Audit של פעולת ה־rerun."
-        confirmLabel="אשר Rerun"
+        noteHint="נדרש נימוק של לפחות 3 תווים. הנימוק יישמר ב־Audit של ההרצה מחדש."
+        confirmLabel="אשר הרצה מחדש"
         busy={Boolean(rerunDialog && busyAction === rerunDialog.job._id)}
         risks={rerunDialog ? rerunRisks(rerunDialog.job) : []}
         onClose={() => {
