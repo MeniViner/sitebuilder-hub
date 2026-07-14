@@ -5,6 +5,7 @@ import { Site } from "../models/Site";
 import { logger } from "../utils/logger";
 import { enqueueSiteBackup } from "./backups.service";
 import { createJob } from "./jobs.service";
+import { inferBackupScheduleExecutionMode } from "./backupSchedule.service";
 import { getBrowserRequiredJobMessage, getSharePointOperationPolicy } from "./sharepointOperationPolicy.service";
 
 type ScheduleKind = "backup" | "healthCheck";
@@ -90,11 +91,57 @@ async function queueScheduledBackup(site: any, now: Date, result: SchedulerTickR
   const schedule = site.maintenanceSchedule?.backup || {};
   const intervalMinutes = clampIntervalMinutes(schedule.intervalMinutes, 24 * 60);
   const nextRunAt = nextRunFrom(now, intervalMinutes);
+  const executionMode = schedule.executionMode || inferBackupScheduleExecutionMode(site);
+
+  if (executionMode === "backend-service-auth-required" || executionMode === "not-configured") {
+    const policy = getSharePointOperationPolicy("scheduled-backup");
+    const blocker = executionMode === "backend-service-auth-required"
+      ? "scheduled-backup-requires-browser-sharepoint"
+      : "scheduled-backup-capability-not-configured";
+    const job = await createJob({
+      type: "backup",
+      siteId: siteId.toString(),
+      createdBy: SCHEDULER_ACTOR,
+      executionMode: "blocked-service-auth-required",
+      connectorMode: executionMode === "backend-service-auth-required" ? "backend-service-auth-required" : "none",
+      operationPolicy: policy.operation,
+      connectorStatusLabel: policy.statusLabelHe,
+      connectorBlocker: executionMode === "backend-service-auth-required"
+        ? "תזמון גיבוי TXT/SharePoint ללא משתמש מחובר דורש מימוש Browser SharePoint מתוזמן או Builder backend מתאים."
+        : "אין יכולת גיבוי מתוזמן מאומתת לאתר הזה.",
+      payload: {
+        scheduled: true,
+        kind: "backup",
+        intervalMinutes,
+        executionMode,
+        blocker
+      }
+    });
+    result.skipped += 1;
+    await setScheduleState(siteId, "backup", {
+      intervalMinutes,
+      nextRunAt,
+      lastRunAt: now,
+      lastRunStatus: "blocked",
+      lastJobId: job._id.toString(),
+      lastError: blocker,
+      failureCount: Number(schedule.failureCount || 0) + 1
+    });
+    logger.warn("backups", "Scheduled backup blocked because unattended execution is not available", {
+      siteId: siteId.toString(),
+      siteCode: site.siteCode,
+      executionMode,
+      nextRunAt
+    });
+    return;
+  }
 
   if (await hasActiveJob(siteId, "backup")) {
     result.skipped += 1;
     await setScheduleState(siteId, "backup", {
       nextRunAt,
+      lastRunAt: now,
+      lastRunStatus: "blocked",
       lastError: "scheduled-backup-skipped-active-job"
     });
     logger.warn("backups", "Scheduled backup skipped because an active backup job already exists", {
@@ -115,6 +162,8 @@ async function queueScheduledBackup(site: any, now: Date, result: SchedulerTickR
     await setScheduleState(siteId, "backup", {
       intervalMinutes,
       nextRunAt,
+      lastRunAt: now,
+      lastRunStatus: "queued",
       lastQueuedAt: now,
       lastJobId: queued.job._id.toString(),
       lastError: ""
@@ -132,6 +181,8 @@ async function queueScheduledBackup(site: any, now: Date, result: SchedulerTickR
     await setScheduleState(siteId, "backup", {
       intervalMinutes,
       nextRunAt,
+      lastRunAt: now,
+      lastRunStatus: "failed",
       lastError: message,
       failureCount: Number(schedule.failureCount || 0) + 1
     });

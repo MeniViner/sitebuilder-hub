@@ -1,7 +1,6 @@
 import { ReactNode, useState } from "react";
 import type { WhoAmIResult } from "../api/sitesApi";
 import { Sidebar } from "./Sidebar";
-import { SystemStatusBar } from "./SystemStatusBar";
 import { TopBar } from "./TopBar";
 
 type AuthUser = NonNullable<WhoAmIResult["user"]>;
@@ -43,6 +42,7 @@ export function AppShell({
   return (
     <div className="app-shell-bg" dir="rtl">
       <TopBar
+        serverStatus={serverStatus}
         authUser={authUser}
         authChecking={authChecking}
         navMode={navMode}
@@ -50,10 +50,7 @@ export function AppShell({
         onLogout={onLogout}
         onOpenNav={() => setNavOpen(true)}
       />
-      <div className="mx-auto w-full max-w-[1520px] px-4 pt-3 lg:px-6">
-        <SystemStatusBar serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} />
-      </div>
-      <div className={`app-content-shell app-content-shell-${navMode} mx-auto flex w-full max-w-[1520px] gap-5 px-4 py-5 lg:min-h-[calc(100vh-116px)] lg:px-6`}>
+      <div className={`app-content-shell app-content-shell-${navMode} mx-auto flex w-full max-w-[1520px] gap-5 px-4 py-5 lg:min-h-[calc(100vh-76px)] lg:px-6`}>
         <Sidebar mobileOpen={navOpen} onMobileClose={() => setNavOpen(false)} />
         {showDesktopSidebar ? (
           <Sidebar

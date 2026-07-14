@@ -69,7 +69,7 @@ beforeEach(() => {
 describe("Mongo-native site creation planning", () => {
   it("builds a plan with exact physical paths, Mongo backend steps, runtime config, seed docs, and no raw API key", async () => {
     mocks.Site.findOne.mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
-    const { buildMongoSiteCreationPlanFromInput } = await import("../server/src/services/mongoSiteCreation.service");
+    const { buildMongoRuntimeConfigPayload, buildMongoSiteCreationPlanFromInput } = await import("../server/src/services/mongoSiteCreation.service");
 
     const plan = await buildMongoSiteCreationPlanFromInput(siteDoc());
 
@@ -104,6 +104,14 @@ describe("Mongo-native site creation planning", () => {
       "gantt_data.txt"
     ]));
     expect(JSON.stringify(plan)).not.toContain("builder-secret");
+    const runtimePayload = buildMongoRuntimeConfigPayload(plan);
+    expect(runtimePayload).toMatchObject({
+      storageBackend: "mongo",
+      siteId: "alphateam",
+      allowedSiteRoot: "https://portal.army.idf/sites/main-site/subsite",
+      sharePointSiteUrl: "https://portal.army.idf/sites/main-site/subsite"
+    });
+    expect(JSON.stringify(runtimePayload)).not.toMatch(/apiKey|builder-secret/);
     expect(plan.summary.createsApprovalJob).toBe(false);
   });
 
@@ -287,7 +295,7 @@ describe("TXT to Mongo migration", () => {
     return {};
   };
 
-  it("imports browser-read TXT snapshot into Builder Mongo and switches the site to Mongo", async () => {
+  it("imports browser-read TXT snapshot into Builder Mongo without cutting over the site", async () => {
     const site = siteDoc({
       storageBackend: "txt",
       creationMode: "track-existing",
@@ -352,16 +360,16 @@ describe("TXT to Mongo migration", () => {
       }))
     });
 
-    expect(result.finalStatus).toBe("runtime-config-required");
+    expect(result.finalStatus).toBe("activation-required");
     expect(result.import.status).toBe("ok");
     expect(result.import.written).toEqual(expect.arrayContaining(legacyKeys));
-    expect(site.storageBackend).toBe("mongo");
+    expect(site.storageBackend).toBe("txt");
     expect(site.creationMode).toBe("migration");
-    expect(site.authoritativeAdminSource).toBe("mongo");
+    expect(site.authoritativeAdminSource).not.toBe("mongo");
     expect(site.safeCollectionName).toBe("site_alphateam_123");
     expect(batchWriteBodies).toHaveLength(1);
     expect(batchWriteBodies[0].items.find((item: any) => item.key === "users_data.txt")).toMatchObject({
-      expectedVersion: 7,
+      expectedVersion: 0,
       allowEmptyOverwrite: true,
       data: [{ id: "admin-1", name: "Admin One" }]
     });
@@ -385,5 +393,29 @@ describe("TXT to Mongo migration", () => {
         parseStatus: "json"
       }))
     })).rejects.toThrow("txt-to-mongo-migration-snapshot-invalid");
+  });
+
+  it("requires backend activation to be a separate explicit deploy", async () => {
+    const site = siteDoc({ storageBackend: "txt", creationMode: "track-existing" });
+    mocks.Site.findById.mockResolvedValue(site);
+    mocks.Site.findOne.mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
+    const { executeTxtToMongoMigration } = await import("../server/src/services/mongoSiteCreation.service");
+
+    await expect(executeTxtToMongoMigration("hub-site-1", {
+      connectorMode: "browser-sharepoint",
+      switchSiteToMongo: true,
+      files: legacyKeys.map((key) => ({
+        key,
+        fileName: key,
+        sourcePath: `/sites/main-site/subsite/siteDB/siteAssets/${key}`,
+        exists: true,
+        status: "read",
+        data: dataForKey(key),
+        parseStatus: "json"
+      }))
+    })).rejects.toThrow("txt-to-mongo-activation-must-be-a-separate-explicit-deploy");
+
+    expect(site.storageBackend).toBe("txt");
+    expect(site.save).not.toHaveBeenCalled();
   });
 });

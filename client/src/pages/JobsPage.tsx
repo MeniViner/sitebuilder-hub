@@ -103,12 +103,12 @@ const jobErrorSummary = (job: Job) => {
     humanExplanation: browserRequired
       ? "הפעולה ממתינה להרצה דרך הדפדפן המחובר ל־SharePoint."
       : sharePoint401
-      ? "הפעולה נוצרה במסלול שרתי ישן שכבר מושבת. SharePoint רץ עכשיו דרך הדפדפן בלבד."
+      ? "הפעולה צריכה לרוץ דרך Browser SharePoint עם המשתמש המחובר."
       : exact ? "הפעולה נכשלה בזמן הרצה. בדקו את השגיאה המדויקת ואת פרטי החיבור." : "לא נשמרה שגיאה מפורשת.",
     suggestedFix: browserRequired
       ? "פתחו את מסך הפעולה המתאים והריצו אותה דרך הדפדפן. ה־worker לא יריץ אותה מהשרת."
       : sharePoint401
-      ? "פתחו את המסך הרלוונטי והריצו את הפעולה מחדש דרך הדפדפן המחובר. אין fallback שרת ל־SharePoint."
+      ? "פתחו את המסך הרלוונטי והריצו את הפעולה מחדש דרך הדפדפן המחובר."
       : "הריצו אבחון במסך בעיות וחיבורים ובדקו את הלוגים הטכניים.",
     exact
   };
@@ -578,7 +578,7 @@ export function JobsPage() {
               ? "פתחו את המסך הרלוונטי והריצו דרך הדפדפן המחובר."
               : "אפשר לרענן, לסנן, או לפתוח פעולה כדי לקרוא Evidence בלי לשנות דבר."}
         blocked={counts.serviceAuthBlocked
-          ? `${formatNumber(counts.serviceAuthBlocked)} פעולות היסטוריות מסומנות כמסלול שרתי מושבת. הפעולות החדשות צריכות לרוץ דרך הדפדפן המחובר.`
+          ? `${formatNumber(counts.serviceAuthBlocked)} פעולות ממתינות למימוש Browser SharePoint או להרצה ידנית דרך הדפדפן המחובר.`
           : undefined}
         tone={counts.failed || counts.serviceAuthBlocked ? "danger" : counts.awaiting || counts.browserRequired ? "warning" : "success"}
       />
@@ -644,7 +644,7 @@ export function JobsPage() {
                   <option value="awaiting-approval">אישור מתקדם</option>
                   <option value="browser-required">ממתין להרצה דרך הדפדפן</option>
                   <option value="browser-in-progress">רץ דרך הדפדפן</option>
-                  <option value="blocked-service-auth-required">היסטורי: שרת מושבת</option>
+                  <option value="blocked-service-auth-required">נדרש מימוש דפדפן</option>
                   <option value="active">בתהליך</option>
                   <option value="queued">בתור</option>
                   <option value="preflight">בדיקה מקדימה</option>

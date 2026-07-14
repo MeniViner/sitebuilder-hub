@@ -25,14 +25,48 @@ export type RuntimeConfigValidationResult = {
     connectorMode?: "browser-sharepoint";
     sizeBytes?: number;
     httpStatus?: number;
+    statusText?: string;
+    contentType?: string;
+    sha256?: string;
+    authBlocked?: boolean;
+    ok?: boolean;
     error?: string;
+  };
+};
+
+export type BrowserRuntimeConfigEvidenceInput = {
+  checkedAt?: string;
+  connectorMode?: "browser-sharepoint";
+  targetSharePointSiteUrl?: string;
+  runtimeConfigPath?: string;
+  runtimeConfigUrl?: string;
+  readStatus?: RuntimeConfigReadStatus;
+  storageBackend?: "txt" | "mongo" | "unknown" | "";
+  backendApiUrl?: string;
+  backendApiUrlHost?: string;
+  builderSiteId?: string;
+  apiKeyStatus?: RuntimeConfigApiKeyStatus;
+  belongsToSite?: boolean;
+  warnings?: string[];
+  evidence?: {
+    attemptedPaths?: string[];
+    selectedPath?: string;
+    connectorMode?: "browser-sharepoint";
+    sizeBytes?: number;
+    httpStatus?: number;
+    statusText?: string;
+    contentType?: string;
+    sha256?: string;
+    error?: string;
+    authBlocked?: boolean;
+    ok?: boolean;
   };
 };
 
 const RUNTIME_CONFIG_FILENAMES = ["sitebuilder-runtime-config.json", "runtime-config.json"];
 
 const normalizeBackend = (value: unknown): "txt" | "mongo" | "unknown" | "" => {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "").trim();
   if (normalized === "mongo" || normalized === "txt" || normalized === "unknown") return normalized;
   return normalized ? "unknown" : "";
 };
@@ -93,7 +127,7 @@ const resultFromError = (
     belongsToSite: false,
     warnings: status === "missing"
       ? ["קובץ runtime config לא נמצא בנתיב המדויק שהוגדר לאתר."]
-      : ["לא ניתן לקרוא את קובץ runtime config דרך חיבור השרת ל־SharePoint."],
+      : ["קריאת runtime config צריכה לרוץ דרך Browser SharePoint עבור אתר היעד."],
     evidence: {
       attemptedPaths,
       selectedPath,
@@ -169,7 +203,7 @@ export async function validateRuntimeConfig(siteId: string): Promise<RuntimeConf
     builderSiteId: "",
     apiKeyStatus: "unknown",
     belongsToSite: false,
-    warnings: ["בדיקת runtime config מתבצעת דרך הדפדפן בלבד; השרת לא קורא SharePoint."],
+    warnings: ["נדרש רענון runtime config דרך Browser SharePoint; ה־Hub שומר Evidence בלבד."],
     evidence: {
       attemptedPaths,
       selectedPath,
@@ -178,8 +212,95 @@ export async function validateRuntimeConfig(siteId: string): Promise<RuntimeConf
     }
   };
 
-  await persistRuntimeConfigResult(site, paths, result);
   logger.info("sites", "Runtime config validation completed", {
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    runtimeConfigPath: result.runtimeConfigPath,
+    readStatus: result.readStatus,
+    storageBackend: result.storageBackend,
+    backendApiUrlHost: result.backendApiUrlHost,
+    builderSiteId: result.builderSiteId,
+    apiKeyStatus: result.apiKeyStatus,
+    warningsCount: result.warnings.length
+  });
+  return result;
+}
+
+const shouldPreserveStoredRuntimeConfig = (stored: any, result: RuntimeConfigValidationResult) => {
+  const storedGood = stored?.evidence?.connectorMode === "browser-sharepoint" && stored.readStatus === "configured";
+  const refreshFailed = ["unknown", "auth-blocked", "error", "browser-required"].includes(result.readStatus)
+    || result.evidence?.authBlocked === true
+    || (result.evidence?.ok === false && Boolean(result.evidence?.error));
+  return Boolean(storedGood && refreshFailed);
+};
+
+export async function recordBrowserRuntimeConfigEvidence(
+  siteId: string,
+  input: BrowserRuntimeConfigEvidenceInput
+): Promise<RuntimeConfigValidationResult & { preservedLastGoodEvidence?: boolean; refreshFailure?: RuntimeConfigValidationResult }> {
+  logger.info("sites", "Browser runtime config evidence record started", { siteId });
+  const site = await Site.findById(siteId);
+  if (!site) throw new Error("site-not-found");
+
+  const paths = resolveSiteBuilderPaths({
+    siteCode: site.siteCode,
+    sharePointHost: site.sharePointHost,
+    sharePointSiteUrl: site.sharePointSiteUrl,
+    siteDbLibrary: site.siteDbLibrary,
+    usersDbLibrary: site.usersDbLibrary,
+    bootstrapLibrary: site.bootstrapLibrary,
+    bootstrapFolder: site.bootstrapFolder,
+    widgetsDbTarget: site.widgetsDbTarget,
+    runtimeConfigPath: site.runtimeConfigPath
+  });
+
+  const attemptedPaths = input.evidence?.attemptedPaths?.length ? input.evidence.attemptedPaths : candidatePaths(site, paths);
+  const selectedPath = input.runtimeConfigPath || input.evidence?.selectedPath || attemptedPaths[0] || paths.runtimeConfigPath;
+  const readStatus = input.readStatus || "unknown";
+  const checkedAt = input.checkedAt ? new Date(input.checkedAt) : new Date();
+  const validCheckedAt = Number.isNaN(checkedAt.getTime()) ? new Date() : checkedAt;
+  const backendApiUrl = String(input.backendApiUrl || "").trim();
+  const result: RuntimeConfigValidationResult = {
+    checkedAt: validCheckedAt.toISOString(),
+    siteId: site._id.toString(),
+    siteCode: site.siteCode,
+    runtimeConfigPath: selectedPath,
+    runtimeConfigUrl: input.runtimeConfigUrl || runtimeConfigUrl(paths, selectedPath),
+    readStatus,
+    storageBackend: input.storageBackend || "",
+    backendApiUrl,
+    backendApiUrlHost: input.backendApiUrlHost || redactBackendApiUrl(backendApiUrl),
+    builderSiteId: input.builderSiteId || "",
+    apiKeyStatus: input.apiKeyStatus || "unknown",
+    belongsToSite: Boolean(input.belongsToSite),
+    warnings: Array.isArray(input.warnings) ? input.warnings.filter(Boolean) : [],
+    evidence: {
+      attemptedPaths,
+      selectedPath,
+      ...(input.evidence || {}),
+      connectorMode: "browser-sharepoint"
+    }
+  };
+
+  if (shouldPreserveStoredRuntimeConfig(site.runtimeConfigStatus, result)) {
+    const storedResult = resultFromStoredRuntimeConfig(site, paths, attemptedPaths, selectedPath);
+    if (storedResult) {
+      logger.info("sites", "Browser runtime config refresh failed; preserved last good evidence", {
+        siteId: site._id.toString(),
+        siteCode: site.siteCode,
+        refreshReadStatus: result.readStatus,
+        storedCheckedAt: storedResult.checkedAt
+      });
+      return {
+        ...storedResult,
+        preservedLastGoodEvidence: true,
+        refreshFailure: result
+      };
+    }
+  }
+
+  await persistRuntimeConfigResult(site, paths, result);
+  logger.info("sites", "Browser runtime config evidence recorded", {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     runtimeConfigPath: result.runtimeConfigPath,

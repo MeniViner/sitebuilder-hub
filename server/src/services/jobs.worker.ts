@@ -297,7 +297,7 @@ async function processJob(job: any) {
     throw new Error("browser-required-job-cannot-run-in-worker");
   }
   if (SHAREPOINT_BROWSER_ONLY_JOB_TYPES.has(String(job.type))) {
-    logger.warn("jobs", "Worker refused to process SharePoint job because server SharePoint is disabled", {
+    logger.warn("jobs", "Worker refused to process SharePoint job because Browser SharePoint execution is required", {
       jobId: job._id.toString(),
       type: job.type,
       siteId: job.siteId?.toString(),

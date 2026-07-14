@@ -437,4 +437,24 @@ describe("Browser SharePoint connector", () => {
       expect(init).toEqual(expect.objectContaining({ credentials: "include" }));
     }
   });
+
+  it("preserves nested SharePoint site paths when listing backup inventory", async () => {
+    const fetchSpy = vi.fn((url: string) => {
+      if (String(url).includes("/Folders?")) return Promise.resolve(new Response(JSON.stringify({ d: { results: [] } }), { status: 200 }));
+      return Promise.resolve(new Response(JSON.stringify({ d: { Name: "Backups" } }), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const inventory = await listBrowserSharePointBackupInventory(
+      makeSite("schedule", "https://portal.army.idf/sites/main/subsite"),
+      true
+    );
+
+    expect(inventory.root.serverRelativePath).toBe("/sites/main/subsite/siteDB/siteAssets/Backups");
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("GetFolderByServerRelativeUrl('/sites/main/subsite/siteDB/siteAssets/Backups')");
+    expect(String(fetchSpy.mock.calls[0][0])).not.toContain("/sites/subsite/siteDB");
+    for (const [, init] of fetchSpy.mock.calls) {
+      expect(init).toEqual(expect.objectContaining({ credentials: "include" }));
+    }
+  });
 });

@@ -224,9 +224,9 @@ export async function buildReadOnlyBackupPlan(siteId: string): Promise<SiteBacku
     "browser-sharepoint-plan-required"
   ].filter(Boolean);
   const notes = [
-    "השרת לא קורא קבצי TXT מ־SharePoint. תוכנית זו מציגה נתיבים בלבד.",
+    "תוכנית זו מציגה נתיבי TXT/SharePoint על בסיס metadata שמור.",
     "אימות קיום/גודל קבצים והרצת הגיבוי מתבצעים דרך הדפדפן המחובר ל־SharePoint.",
-    "אין צורך בהזדהות SharePoint בצד השרת."
+    "הדפדפן משתמש בחיבור SharePoint הפעיל שלך."
   ].filter(Boolean);
 
   return {
@@ -315,8 +315,8 @@ export async function listReadOnlyBackupInventory(
     },
     notes: [
       "Inventory של תיקיות גיבוי ב־SharePoint צריך להיקרא דרך הדפדפן.",
-      includeFiles ? "קריאת קבצים בתוך תיקיות הגיבוי לא בוצעה בשרת." : "קריאת שורש הגיבויים לא בוצעה בשרת.",
-      "השרת לא משתמש ב־SharePoint REST גם לא לקריאה."
+      includeFiles ? "קריאת קבצים בתוך תיקיות הגיבוי לא בוצעה עדיין דרך Browser SharePoint." : "קריאת שורש הגיבויים לא בוצעה עדיין דרך Browser SharePoint.",
+      "המידע עדיין לא נבדק בדפדפן המחובר."
     ].filter(Boolean)
   };
 }

@@ -265,7 +265,7 @@ export type TxtToMongoMigrationResult = {
     evidence: unknown;
   };
   health: unknown;
-  finalStatus: "runtime-config-required" | "failed";
+  finalStatus: "activation-required" | "failed";
   warnings: string[];
 };
 
@@ -386,17 +386,18 @@ const runtimeConfigFileName = (path: string) => {
   return ["sitebuilder-runtime-config.json", "runtime-config.json"].includes(file) ? file : "sitebuilder-runtime-config.json";
 };
 
-export const buildMongoRuntimeConfigPayload = (plan: MongoSiteCreationPlan, apiKey: string) => ({
+export const buildMongoRuntimeConfigPayload = (plan: MongoSiteCreationPlan) => ({
   storageBackend: "mongo",
   backendApiUrl: plan.builderBackend.backendApiUrl,
   siteId: plan.builderBackend.siteId,
-  apiKey,
+  allowedSiteRoot: plan.resolvedPaths.sharePointSiteUrl,
+  sharePointSiteUrl: plan.resolvedPaths.sharePointSiteUrl,
   generatedBy: "sitebuilder-hub",
   generatedAt: new Date().toISOString()
 });
 
-export const buildMongoRuntimeConfigText = (plan: MongoSiteCreationPlan, apiKey: string) =>
-  `${JSON.stringify(buildMongoRuntimeConfigPayload(plan, apiKey), null, 2)}\n`;
+export const buildMongoRuntimeConfigText = (plan: MongoSiteCreationPlan) =>
+  `${JSON.stringify(buildMongoRuntimeConfigPayload(plan), null, 2)}\n`;
 
 const sha256 = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -1002,18 +1003,9 @@ export async function executeTxtToMongoMigration(
 
   const credential = resolveBuilderApiCredential(site);
   const startedAt = new Date();
-  const switchSiteToMongo = input.switchSiteToMongo !== false;
-
-  site.storageBackend = "mongo";
-  site.creationMode = "migration";
-  site.lifecycleStatus = "provisioning";
-  site.provisioningStatus = "running";
-  site.dataBackendStatus = "unknown";
-  site.builderSiteId = plan.builderBackend.siteId;
-  site.mongoSiteId = plan.builderBackend.siteId;
-  site.authoritativeAdminSource = "mongo";
-  site.lastError = "";
-  await site.save();
+  if (input.switchSiteToMongo === true) {
+    throw new Error("txt-to-mongo-activation-must-be-a-separate-explicit-deploy");
+  }
 
   const registryCreate = await requestBuilderJson(plan.builderBackend.backendApiUrl, "/api/sites", credential.value, {
     method: "POST",
@@ -1047,7 +1039,7 @@ export async function executeTxtToMongoMigration(
     }
   );
   const currentVersions = batchReadVersions(beforeBatch.payload);
-  const overwriteMongo = input.overwriteMongo !== false;
+  const overwriteMongo = input.overwriteMongo === true;
   const migrationItems = snapshot.docs.map((doc) => ({
     key: doc.key,
     data: doc.data,
@@ -1074,12 +1066,9 @@ export async function executeTxtToMongoMigration(
     saved.safeCollectionName = safeCollectionName || saved.safeCollectionName;
     saved.mongoSiteId = plan.builderBackend.siteId;
     saved.builderSiteId = plan.builderBackend.siteId;
-    saved.storageBackend = switchSiteToMongo ? "mongo" : saved.storageBackend;
     saved.creationMode = "migration";
-    saved.authoritativeAdminSource = "mongo";
     saved.lifecycleStatus = importStatus === "ok" && registryOk ? "partially-created" : "failed";
     saved.provisioningStatus = importStatus === "ok" && registryOk ? "partially-created" : "failed";
-    saved.status = "draft";
     saved.lastError = importStatus === "ok" && registryOk ? "" : "TXT to Mongo migration did not complete cleanly";
     saved.health = {
       ...(saved.health as Partial<SiteHealth>),
@@ -1143,11 +1132,11 @@ export async function executeTxtToMongoMigration(
       }
     },
     health,
-    finalStatus: importStatus === "ok" && registryOk ? "runtime-config-required" : "failed",
+    finalStatus: importStatus === "ok" && registryOk ? "activation-required" : "failed",
     warnings: [
       ...plan.warnings,
       "הנתונים הועתקו מ־TXT ל־Mongo דרך Snapshot שהדפדפן קרא מ־SharePoint.",
-      "כדי שהאתר החי ישתמש ב־Mongo צריך להעלות runtime config ואז לפרוס Release תואם Mongo דרך הדפדפן."
+      "הייבוא אינו משנה את backend האתר. הפעלת Mongo דורשת שינוי מפורש של SITE_BUILDER_PRODUCTION_STORAGE_BACKEND ופריסה נפרדת."
     ]
   };
 
@@ -1167,9 +1156,7 @@ export async function buildMongoRuntimeConfigContent(siteId: string) {
   const plan = await buildMongoSiteCreationPlan(siteId);
   const site = await Site.findById(siteId);
   if (!site) throw new Error("site-not-found");
-  const credential = resolveBuilderApiCredential(site);
-  if (!credential.configured) throw new Error("mongo-site-runtime-config-credential-missing");
-  const text = buildMongoRuntimeConfigText(plan, credential.value);
+  const text = buildMongoRuntimeConfigText(plan);
   return {
     siteId,
     siteCode: plan.siteCode,

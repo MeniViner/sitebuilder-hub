@@ -31,9 +31,12 @@ describe("browser admin live-read UI wiring", () => {
     const siteDetails = read("client/src/pages/SiteDetailsPage.tsx");
 
     expect(siteDetails).toContain("useBrowserAdminsLiveRead");
-    expect(siteDetails).toContain("activeTab === \"admins\"");
+    expect(siteDetails).toContain("admins: \"access\"");
+    expect(siteDetails).toContain("auto: activeTab === \"access\"");
+    expect(siteDetails).toContain("activeTab === \"access\"");
     expect(siteDetails).toContain("runAdminsLiveRead");
-    expect(siteDetails).toContain("רענן מנהלים עכשיו");
+    expect(siteDetails).toContain("admin-live-read");
+    expect(siteDetails).toContain("פעולות גישה ומנהלים");
     expect(siteDetails).toContain("AdminSourceSummaryCards");
     expect(siteDetails).toContain("AdminSourceStatusTable");
   });
@@ -43,7 +46,15 @@ describe("browser admin live-read UI wiring", () => {
     const accessService = read("server/src/services/accessDirectory.service.ts");
 
     expect(component).toContain("הקריאה נכשלה");
+    expect(component).toContain("לא רלוונטי");
+    expect(component).toContain("isSkipped");
+    expect(component).toContain("מנהלי TXT");
+    expect(component).toContain("מנהלי Site Collection");
+    expect(component).toContain("קבוצת Owners");
     expect(component).toContain("לא נקרא עדיין");
+    expect(component).toContain("סוג מקור");
+    expect(component).toContain("סמכות");
+    expect(component).toContain("admin-source-row-details");
     expect(component).toContain("נמשך מ־SharePoint דרך הדפדפן");
     expect(component).toContain("נשמר ב־Mongo");
     expect(accessService).toContain("קריאת users_data.txt נכשלה; אין לספור זאת כאפס משתמשים.");

@@ -44,7 +44,7 @@ const importSharePointClient = async (envOverrides: Record<string, string> = {})
   return import("../server/src/services/sharepointOperationClient");
 };
 
-describe("server SharePoint client disabled by architecture", () => {
+describe("backend SharePoint client is blocked by browser-first architecture", () => {
   it("reports SharePoint REST as unavailable even when legacy env vars are present", async () => {
     const client = await importSharePointClient({
       SHAREPOINT_WRITE_ENABLED: "true",
@@ -68,7 +68,7 @@ describe("server SharePoint client disabled by architecture", () => {
         requiredForWrites: true,
         endpointSuffix: "/_api/contextinfo"
       },
-      reason: "Server-side SharePoint REST is disabled. Use the active browser SharePoint session for SharePoint reads and writes."
+      reason: "SharePoint operations use the active Browser SharePoint session. The Hub backend stores metadata and evidence only."
     });
   });
 

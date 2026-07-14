@@ -57,7 +57,7 @@ import {
   requestBrowserDigest,
   type BrowserSharePointDeployResult
 } from "../utils/sharepointBrowserConnector";
-import { buildDeploymentMetadataFile, DEPLOYMENT_METADATA_FILE } from "../utils/deploymentMetadata";
+import { buildDeploymentMetadataFile } from "../utils/deploymentMetadata";
 
 type ReleaseType = Release["releaseType"];
 type ParsedVersion = { major: number; minor: number; patch: number };
@@ -934,7 +934,7 @@ function DeploymentPlanResults({ plan }: { plan: BatchDeployPlan }) {
           Browser Digest: ייבדק בזמן Execute
         </StatusChip>
         <StatusChip tone="success">Browser Upload: מוכן</StatusChip>
-        <StatusChip tone="info">Server SharePoint: מושבת</StatusChip>
+        <StatusChip tone="info">SharePoint: Browser connector</StatusChip>
         {plan.allowDeployWithoutBackup ? <StatusChip tone="warning">גיבוי: Override מסוכן פעיל</StatusChip> : null}
       </div>
       <div className="grid gap-3 md:grid-cols-4">
@@ -2057,7 +2057,11 @@ export function ReleasesPage() {
             site,
             targetSiteUrl,
             targetDistPath,
-            finalAppUrl: row.plan.target?.finalAppUrl
+            finalAppUrl: row.plan.target?.finalAppUrl,
+            storageBackend: row.plan.target?.storageBackend === "mongo" ? "mongo" : "txt",
+            storageBackendSource: row.plan.target?.storageBackendSource || "safe-production-default",
+            storageSiteId: row.plan.target?.storageSiteId || site.siteCode,
+            backendApiUrl: row.plan.target?.backendApiUrl || ""
           });
           const browserDeploy = await deployArtifactToSharePointBrowser({
             releaseId: selectedReleaseId,
@@ -2066,11 +2070,10 @@ export function ReleasesPage() {
             targetSiteUrl,
             targetDistPath,
             finalAppUrl: row.plan.target?.finalAppUrl,
-            files: [...deployFiles, deploymentMetadata.file],
-            loadArtifactFile: (relativePath) =>
-              relativePath === DEPLOYMENT_METADATA_FILE
-                ? Promise.resolve(deploymentMetadata.response)
-                : sitesApi.releaseArtifactFile(selectedReleaseId, relativePath),
+            files: [...deployFiles, ...deploymentMetadata.files],
+            loadArtifactFile: (relativePath) => deploymentMetadata.responses[relativePath]
+              ? Promise.resolve(deploymentMetadata.responses[relativePath])
+              : sitesApi.releaseArtifactFile(selectedReleaseId, relativePath),
             onFileProgress: (event) => {
               updateBrowserDeployResult({
                 ...running,
@@ -2100,7 +2103,8 @@ export function ReleasesPage() {
             completedAt: browserDeploy.completedAt,
             finalStatus: browserDeploy.finalStatus,
             versionBefore: row.currentVersion,
-            versionAfter: browserDeploy.finalStatus === "success" ? row.targetVersion : row.currentVersion
+            versionAfter: browserDeploy.finalStatus === "success" ? row.targetVersion : row.currentVersion,
+            deploymentConfig: deploymentMetadata.snapshot
           };
           const evidenceResponse = await sitesApi.recordBrowserDeployEvidence(site._id, evidencePayload);
           const siteResult = resultFromBrowserDeploy(row, site, browserDeploy, evidenceResponse.data.deployment._id);
@@ -2267,7 +2271,11 @@ export function ReleasesPage() {
             site,
             targetSiteUrl,
             targetDistPath,
-            finalAppUrl: row.plan.target?.finalAppUrl
+            finalAppUrl: row.plan.target?.finalAppUrl,
+            storageBackend: row.plan.target?.storageBackend === "mongo" ? "mongo" : "txt",
+            storageBackendSource: row.plan.target?.storageBackendSource || "safe-production-default",
+            storageSiteId: row.plan.target?.storageSiteId || site.siteCode,
+            backendApiUrl: row.plan.target?.backendApiUrl || ""
           });
           const browserDeploy = await deployArtifactToSharePointBrowser({
             releaseId: rollbackReleaseId,
@@ -2276,11 +2284,10 @@ export function ReleasesPage() {
             targetSiteUrl,
             targetDistPath,
             finalAppUrl: row.plan.target?.finalAppUrl,
-            files: [...deployFiles, deploymentMetadata.file],
-            loadArtifactFile: (relativePath) =>
-              relativePath === DEPLOYMENT_METADATA_FILE
-                ? Promise.resolve(deploymentMetadata.response)
-                : sitesApi.releaseArtifactFile(rollbackReleaseId, relativePath)
+            files: [...deployFiles, ...deploymentMetadata.files],
+            loadArtifactFile: (relativePath) => deploymentMetadata.responses[relativePath]
+              ? Promise.resolve(deploymentMetadata.responses[relativePath])
+              : sitesApi.releaseArtifactFile(rollbackReleaseId, relativePath)
           });
           const payload: BrowserDeployEvidencePayload = {
             releaseId: rollbackReleaseId,
@@ -2303,7 +2310,8 @@ export function ReleasesPage() {
             completedAt: browserDeploy.completedAt,
             finalStatus: browserDeploy.finalStatus,
             versionBefore,
-            versionAfter: browserDeploy.finalStatus === "success" ? versionAfter : versionBefore
+            versionAfter: browserDeploy.finalStatus === "success" ? versionAfter : versionBefore,
+            deploymentConfig: deploymentMetadata.snapshot
           };
           await sitesApi.recordBrowserDeployEvidence(site._id, payload);
           if (browserDeploy.finalStatus === "success") successCount += 1;

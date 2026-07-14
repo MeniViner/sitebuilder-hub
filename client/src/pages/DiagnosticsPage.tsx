@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Cable, CheckCircle2, RefreshCcw, ShieldAlert } from "lucide-react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
@@ -13,6 +13,8 @@ import { SectionCard } from "../components/SectionCard";
 import { API_BASE_URL, DiagnosticsResult, getHubPersonalNumber, SharePointDiagnosticsCheck, sitesApi } from "../api/sitesApi";
 import { Site } from "../types/site";
 import { formatDateTime } from "../utils/format";
+import { SAFE_READ_TTL_MS, useAutoSafeRead } from "../hooks/useAutoSafeRead";
+import { useOperationalStatus } from "../components/OperationalStatusProvider";
 import {
   BrowserSharePointDiagnosticsResult,
   combineSharePointConnectorDiagnostics,
@@ -20,7 +22,7 @@ import {
 } from "../utils/sharepointBrowserConnector";
 
 const boolLabel = (value?: boolean) => value ? "כן" : "לא";
-const sharePoint401Explanation = "הדפדפן הוא מסלול SharePoint; השרת המקומי לא אמור להתחבר ל־SharePoint";
+const sharePoint401Explanation = "SharePoint נבדק דרך הדפדפן; Hub API ו־Builder backend מוצגים בנפרד";
 
 const probeSummary = (probe?: Record<string, unknown>) => {
   if (!probe) return { ok: false, label: "לא נבדק", status: "" };
@@ -39,8 +41,9 @@ export function DiagnosticsPage() {
   const [busyAction, setBusyAction] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const operationalStatus = useOperationalStatus();
 
-  const load = async (selectedSiteId = siteId) => {
+  const load = useCallback(async (selectedSiteId = siteId) => {
     setLoading(true);
     setError("");
     try {
@@ -57,12 +60,13 @@ export function DiagnosticsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [siteId]);
 
   useEffect(() => { load(); }, []);
 
-  const runSharePointCheck = async () => {
+  const runSharePointCheck = useCallback(async () => {
     setBusyAction("sharepoint-check");
+    operationalStatus.setBrowserSharePointRefreshing(true);
     setMessage("");
     setError("");
     const selectedSite = sites.find((site) => site._id === siteId) || sites.find((site) => site.status !== "archived") || null;
@@ -83,6 +87,16 @@ export function DiagnosticsPage() {
 
       const browserResult = await runBrowserSharePointDiagnostics(selectedSite);
       setBrowserSharePointCheck(browserResult);
+      operationalStatus.recordBrowserSharePointStatus({
+        status: browserResult.overall.reachable || browserResult.overall.authenticated || browserResult.overall.digestWorks ? "connected" : "failed",
+        checkedAt: browserResult.generatedAt,
+        source: "Browser SharePoint",
+        targetSharePointSiteUrl: browserResult.targetSharePointSiteUrl,
+        siteId: selectedSite._id,
+        siteCode: selectedSite.siteCode,
+        message: browserResult.overall.digestWorks ? "Browser SharePoint מחובר ומצליח לקבל Digest" : "חיבור SharePoint דרך הדפדפן נכשל",
+        nextStep: browserResult.overall.digestWorks ? "אפשר להריץ פעולות Browser SharePoint לפי הרשאות" : browserResult.overall.suggestedFix || "פתחו את אתר SharePoint והתחברו מחדש"
+      });
       console.log("Target SharePoint URL:", browserResult.targetSharePointSiteUrl);
       console.log("Connector mode:", browserResult.connectorMode);
       console.log("Browser currentuser URL:", browserResult.currentUser.url, "status:", browserResult.currentUser.status);
@@ -93,34 +107,12 @@ export function DiagnosticsPage() {
         status: browserResult.digestTest.status
       });
 
-      let backendResult: SharePointDiagnosticsCheck | null = null;
-      try {
-        const result = await sitesApi.runSharePointDiagnostics(selectedSite._id);
-        backendResult = result.data;
-      } catch (backendError) {
-        backendResult = {
-          generatedAt: new Date().toISOString(),
-          connectorMode: "browser-sharepoint",
-          ok: false,
-          errorCode: "BACKEND_DIAGNOSTICS_API_FAILED",
-          humanExplanation: backendError instanceof Error ? backendError.message : String(backendError)
-        };
-      }
-      setBackendSharePointCheck(backendResult);
-      console.log("Backend diagnostics status:", {
-        source: "backend",
-        ok: backendResult?.ok,
-        currentUserStatus: backendResult?.currentUser?.status,
-        readTestStatus: backendResult?.readTest?.status,
-        digestStatus: backendResult?.digestTest?.status,
-        failedStatus: backendResult?.overall?.failedStatus,
-        failedBackendErrorCode: backendResult?.overall?.failedBackendErrorCode
-      });
-      const combined = combineSharePointConnectorDiagnostics(browserResult, backendResult);
+      setBackendSharePointCheck(null);
+      const combined = combineSharePointConnectorDiagnostics(browserResult, null);
       console.log("Connector mode:", combined.preferredConnectorMode);
       console.log("Per-test result object:", {
         browser: browserResult,
-        backend: backendResult,
+        backend: null,
         combined
       });
       setMessage(combined.message);
@@ -132,9 +124,25 @@ export function DiagnosticsPage() {
       setError(err instanceof Error ? err.message : "שגיאה בהרצת בדיקת SharePoint");
     } finally {
       console.groupEnd();
+      operationalStatus.setBrowserSharePointRefreshing(false);
       setBusyAction("");
     }
-  };
+  }, [browserSharePointCheck, diagnostics, operationalStatus, siteId, sites]);
+
+  const selectedSiteForAutoCheck = useMemo(
+    () => sites.find((site) => site._id === siteId) || sites.find((site) => site.status !== "archived") || null,
+    [siteId, sites]
+  );
+
+  useAutoSafeRead({
+    guardKey: selectedSiteForAutoCheck ? `diagnostics:browser-sharepoint:${selectedSiteForAutoCheck._id}` : "",
+    checkedAt: browserSharePointCheck?.generatedAt,
+    ttlMs: SAFE_READ_TTL_MS.browserSharePointDiagnostics,
+    enabled: Boolean(selectedSiteForAutoCheck && diagnostics && !loading),
+    inFlight: busyAction === "sharepoint-check",
+    run: runSharePointCheck,
+    onError: setError
+  });
 
   const pathRows = useMemo(() => backendSharePointCheck?.paths?.checks || diagnostics?.paths?.checks || [], [diagnostics, backendSharePointCheck]);
   const browserCurrentUser = probeSummary(browserSharePointCheck?.currentUser);
@@ -156,23 +164,23 @@ export function DiagnosticsPage() {
     <div className="space-y-5">
       <PageHeader
         title="בעיות וחיבורים"
-        subtitle="האם הדפדפן מחובר, האם השרת מחובר, ומה באמת חוסם פעולה"
+        subtitle="האם הדפדפן מחובר ל־SharePoint, מה מצב Hub API, ומה מצב Builder backend"
         helpKey="diagnostics"
         actions={<button className="btn btn-secondary" type="button" onClick={() => load(siteId)}><RefreshCcw size={15} />רענון</button>}
       />
 
       <OperationalSummary
         title="אבחון בלי לערבב חיבורים"
-        purpose="המסך מפריד בין חיבור הדפדפן ל־SharePoint לבין חיבור השרת. חיבור אחד יכול לעבוד גם כשהשני חסום."
+        purpose="המסך מפריד בין Browser SharePoint, Hub API/Mongo ו־Builder backend כדי שלא לערבב מקורות."
         state={diagnostics
           ? `מצב אפליקציה: ${diagnostics.appMode} · אתר נבחר: ${diagnostics.selectedSite?.displayName || "לא נבחר"}`
           : "טוען אבחון חיבורים וזהות."}
         attention={combinedConnectorStatus.backendBlockedBy401 && browserSharePointCheck?.overall.digestWorks
-          ? "הדפדפן מחובר ומוכן לפעולות דפדפן; השרת המקומי עדיין חסום ב־SharePoint."
+          ? "הדפדפן מחובר ומוכן לפעולות Browser SharePoint."
           : browserSharePointCheck && !browserSharePointCheck.overall.digestWorks
             ? "הדפדפן לא הצליח לקבל Digest. פעולות SharePoint דרך הדפדפן חסומות עד התחברות."
             : backendSharePointCheck && !backendSharePointCheck.overall?.writeVerified
-              ? "השרת אינו מסלול SharePoint. פעולות SharePoint ממשיכות דרך הדפדפן בלבד."
+              ? "עדיין אין ראיית דפדפן עדכנית שמוכיחה את חיבור SharePoint."
               : "אין חסם SharePoint ברור מהבדיקות האחרונות."}
         attentionTone={browserSharePointCheck && !browserSharePointCheck.overall.digestWorks ? "danger" : backendSharePointCheck && !backendSharePointCheck.overall?.writeVerified ? "warning" : "success"}
         nextAction={browserSharePointCheck || backendSharePointCheck
@@ -187,8 +195,8 @@ export function DiagnosticsPage() {
         subtitle="המטרה היא להבין מה חסום לפני שנוגעים בפריסה, שחזור או הרשאות."
         steps={[
           { title: "בחר אתר", description: "בדקו את אותו אתר שבו הפעולה נכשלה.", status: siteId ? "done" : "pending" },
-          { title: "בדוק SharePoint עכשיו", description: "מריץ בדיקת דפדפן ומציג שהשרת אינו מסלול SharePoint.", status: browserSharePointCheck || backendSharePointCheck ? "done" : "active" },
-          { title: "קרא את המחבר המועדף", description: "אם הדפדפן תקין, פעולות SharePoint רצות דרכו. אין fallback שרת.", status: browserSharePointCheck || backendSharePointCheck ? "active" : "pending" },
+          { title: "בדוק SharePoint עכשיו", description: "מריץ בדיקת Browser SharePoint מול אתר היעד.", status: browserSharePointCheck || backendSharePointCheck ? "done" : "active" },
+          { title: "קרא את המחבר המועדף", description: "אם הדפדפן תקין, פעולות SharePoint רצות דרכו.", status: browserSharePointCheck || backendSharePointCheck ? "active" : "pending" },
           { title: "תקן במסך המתאים", description: "פריסה, גיבוי, Health או הרשאות מטופלים במסכים שלהם.", status: "pending" }
         ]}
       />
@@ -197,7 +205,7 @@ export function DiagnosticsPage() {
         title="גבולות חיבור"
         items={[
           { label: "Browser SharePoint", description: "משתמש בהתחברות של הדפדפן. מתאים לפעולות שמוגדרות להרצה בדפדפן.", tone: "success" },
-          { label: "Server SharePoint", description: "מושבת בכוונה. אין SharePoint בשרת.", tone: "neutral" },
+          { label: "Hub API/Mongo", description: "שומר metadata/evidence ואינו מקור SharePoint חי.", tone: "neutral" },
           { label: "Mongo / Builder", description: "בודק נתוני backend ו־seed. זה לא אותו דבר כמו SharePoint hosting.", tone: "info" },
           { label: "Advanced", description: "נתיבים, headers ו־URLs מלאים מיועדים לתחקור טכני בלבד.", tone: "neutral" }
         ]}
@@ -219,7 +227,7 @@ export function DiagnosticsPage() {
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard title="מצב אפליקציה" value={diagnostics.appMode} icon={<Cable size={18} />} tone="info" helpKey="mode.localDevOwner" />
             <KpiCard title="זהות פעילה" value={diagnostics.auth.activeBackendUser?.name || "לא ידוע"} icon={<CheckCircle2 size={18} />} tone={diagnostics.auth.activeBackendUser?.source === "sharepoint" ? "success" : diagnostics.auth.localFallbackActive ? "warning" : "neutral"} helpKey="sharepoint.currentUser" />
-            <KpiCard title="SharePoint בשרת" value="מושבת" icon={<ShieldAlert size={18} />} tone="neutral" helpKey="sharepoint.write" />
+            <KpiCard title="Browser SharePoint" value={browserSharePointCheck ? browserCurrentUser.label : "לא נבדק"} icon={<ShieldAlert size={18} />} tone={browserSharePointCheck ? browserCurrentUser.ok ? "success" : "danger" : "neutral"} helpKey="sharepoint.browserConnector" />
             <KpiCard title="מקור נתונים" value={diagnostics.selectedSite?.storageBackend || "unknown"} icon={<CheckCircle2 size={18} />} tone={diagnostics.selectedSite?.storageBackend === "mongo" ? "info" : diagnostics.selectedSite?.storageBackend === "txt" ? "success" : "neutral"} helpKey="mode.owner" />
           </div>
 
@@ -241,7 +249,7 @@ export function DiagnosticsPage() {
 
           <SectionCard
             title="בחירת אתר לבדיקת SharePoint"
-            subtitle="הבדיקה תריץ Browser SharePoint Connector ותציג שהשרת אינו מחבר SharePoint."
+            subtitle="הבדיקה תריץ Browser SharePoint Connector מול אתר היעד."
             helpKey="sharepoint.browserConnector"
             actions={<button className="btn btn-primary" type="button" disabled={busyAction === "sharepoint-check"} onClick={runSharePointCheck}><RefreshCcw size={15} />בדוק SharePoint עכשיו</button>}
           >
@@ -278,7 +286,7 @@ export function DiagnosticsPage() {
                   <p className="font-bold" style={{ color: "var(--text-strong)" }}>{browserSharePointCheck.overall.humanExplanation}</p>
                   <p className="mt-1 muted">{browserSharePointCheck.overall.suggestedFix}</p>
                   {combinedConnectorStatus.backendBlockedBy401 && browserSharePointCheck.overall.digestWorks ? (
-                    <p className="mt-2 font-bold" style={{ color: "var(--success)" }}>הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. אין SharePoint בשרת; המערכת משתמשת בחיבור דרך הדפדפן.</p>
+                    <p className="mt-2 font-bold" style={{ color: "var(--success)" }}>הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. פעולות SharePoint ירוצו דרך Browser SharePoint.</p>
                   ) : null}
                 </div>
 
@@ -297,16 +305,16 @@ export function DiagnosticsPage() {
           </SectionCard>
 
           <SectionCard
-            title="אין SharePoint בשרת"
-            subtitle="השרת לא מבצע בדיקות או פעולות SharePoint. הנתונים כאן מסבירים שהמסלול מושבת בכוונה."
-            helpKey="sharepoint.backendConnector"
+            title="Hub API ו־Builder backend"
+            subtitle="מידע תפעולי שאינו בדיקת SharePoint חיה. SharePoint עצמו נבדק דרך Browser SharePoint."
+            helpKey="system.apiBaseUrl"
           >
             {backendSharePointCheck ? (
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <KpiCard title="משתמש בשרת" value="מושבת" icon={<CheckCircle2 size={18} />} tone="neutral" description="לא נבדק מהשרת" helpKey="sharepoint.currentUser" />
-                  <KpiCard title="קריאת שרת" value="מושבת" icon={<CheckCircle2 size={18} />} tone="neutral" description="לא נשלחות בקשות GET" helpKey="sharepoint.read" />
-                  <KpiCard title="Digest שרת" value="מושבת" icon={<CheckCircle2 size={18} />} tone="neutral" description="Digest נבדק בדפדפן" helpKey="sharepoint.digest" />
+                  <KpiCard title="Hub API" value={diagnostics.currentApiBaseUrl ? "מוגדר" : "לא ידוע"} icon={<CheckCircle2 size={18} />} tone="info" description={diagnostics.currentApiBaseUrl} helpKey="system.apiBaseUrl" />
+                  <KpiCard title="Hub Mongo" value={diagnostics.mongo || "לא ידוע"} icon={<CheckCircle2 size={18} />} tone={diagnostics.mongo === "connected" ? "success" : "warning"} description="מטא־דאטה וראיות" helpKey="site.mongodb" />
+                  <KpiCard title="Digest" value="בדפדפן" icon={<CheckCircle2 size={18} />} tone="neutral" description="נדרש רק לפעולות כתיבה בדפדפן" helpKey="sharepoint.digest" />
                   <KpiCard title="כתיבת SharePoint" value="בדפדפן בלבד" icon={<ShieldAlert size={18} />} tone="warning" helpKey="sharepoint.write" />
                 </div>
 
@@ -323,13 +331,13 @@ export function DiagnosticsPage() {
                   <LinkRow label="אתר SharePoint שנבדק" value={backendSharePointCheck.targetSharePointSiteUrl} isUrl />
                   <LinkRow label="כתובת שנכשלה" value={backendSharePointCheck.overall?.failedUrl || "-"} />
                   <LinkRow label="סטטוס HTTP" value={backendSharePointCheck.overall?.failedStatus ? String(backendSharePointCheck.overall.failedStatus) : "-"} />
-                  <LinkRow label="קוד שגיאת שרת" value={backendSharePointCheck.overall?.failedBackendErrorCode || backendSharePointCheck.errorCode || "-"} />
-                  <LinkRow label="SharePoint בשרת מושבת" value={boolLabel(Boolean(backendSharePointCheck.configured?.serverSharePointDisabled))} />
-                  <LinkRow label="הגדרת SharePoint שרתית" value="לא נדרשת ולא בשימוש" />
+                  <LinkRow label="קוד חסם" value={backendSharePointCheck.overall?.failedBackendErrorCode || backendSharePointCheck.errorCode || "-"} />
+                  <LinkRow label="מקור SharePoint נתמך" value="Browser SharePoint" />
+                  <LinkRow label="מקור Mongo נתמך" value="Builder backend כאשר מוגדר" />
                 </div>
               </div>
             ) : (
-              <EmptyState title="מסלול השרת מושבת" description="לחצו על בדיקה כדי לראות שהשרת לא משמש כחיבור SharePoint ושפעולות SharePoint רצות בדפדפן." />
+              <EmptyState title="אין ראיית backend נוספת" description="בדיקת SharePoint החיה רצה דרך הדפדפן. Hub API/Mongo ו־Builder backend מוצגים בסעיפים האחרים." />
             )}
           </SectionCard>
 

@@ -6,13 +6,15 @@ export function LinkRow({
   value,
   isUrl = false,
   description,
-  showCopy = true
+  showCopy = true,
+  copyMode = "text"
 }: {
   label: string;
   value?: string;
   isUrl?: boolean;
   description?: string;
   showCopy?: boolean;
+  copyMode?: "text" | "icon";
 }) {
   const hasActions = showCopy || (isUrl && Boolean(value));
 
@@ -33,7 +35,7 @@ export function LinkRow({
       </div>
       {hasActions ? (
         <div className="flex flex-wrap items-center gap-2">
-          {showCopy ? <CopyButton value={value} /> : null}
+          {showCopy ? <CopyButton value={value} iconOnly={copyMode === "icon"} /> : null}
           {isUrl && value ? (
             <a className="btn btn-secondary min-h-0 px-2 py-1 text-xs" href={value} target="_blank" rel="noreferrer">
               <ExternalLink size={13} />

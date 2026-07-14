@@ -2,6 +2,16 @@
 
 Central management Hub for multiple existing Site Builder sites. This project is the Hub only; regular Site Builder apps are external managed targets.
 
+## Deployed Storage Backend Authority
+
+`SITE_BUILDER_PRODUCTION_STORAGE_BACKEND` is the single deployment-time selector and accepts only `txt` or `mongo`. If it is missing or blank, deployments safely resolve to `txt`. Mongo is activated only when the production environment explicitly sets:
+
+```env
+SITE_BUILDER_PRODUCTION_STORAGE_BACKEND=mongo
+```
+
+Site registry metadata, export/import completion, existing Mongo data, and health results do not switch a deployed site to Mongo.
+
 ## Local Quick Start
 
 ```bash
@@ -53,6 +63,16 @@ Set the API CORS origins without code changes:
 CLIENT_ORIGIN=https://portal.army.idf
 CLIENT_ORIGINS=https://portal.army.idf,http://localhost:5177,http://127.0.0.1:5177
 ```
+
+The SharePoint-hosted frontend must point to the Hub API, not to SharePoint. After `npm run build`, edit `client/dist/hub-config.js` before uploading the dist folder:
+
+```js
+window.SiteBuilderHubConfig = {
+  apiBaseUrl: "https://sitebuilderhub.idf/api"
+};
+```
+
+If DevTools shows `/api/releases` returning HTML or `Unexpected token '<'`, the frontend is hitting the wrong host. Fix `hub-config.js` or rebuild with `VITE_API_BASE_URL=https://sitebuilderhub.idf/api`.
 
 Use `בעיות וחיבורים` in the sidebar to inspect app mode, frontend origin, API base URL, current user detection, SharePoint current user, read test, digest/contextinfo, write verification, env flags, exact failing URL/status, and resolved SharePoint paths.
 

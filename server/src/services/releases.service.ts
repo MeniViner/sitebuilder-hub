@@ -173,6 +173,22 @@ const assertDeployPolicyUsable = (deployPolicy: DeployPolicySnapshot) => {
   }
 };
 
+const assertDeployPlanExecutionReady = (plan: Awaited<ReturnType<typeof buildSiteDeployPlan>>) => {
+  const blockers = dedupeMessages([
+    ...(plan.blockers || []),
+    ...actionableDeployMissingRequirements(plan.missingRequirements || []),
+    plan.summary.readyForDeployExecution ? "" : "deploy-plan-not-ready"
+  ]);
+  if (blockers.length > 0) throw new Error(`deploy-plan-blocked:${blockers.join(",")}`);
+};
+
+const deploymentStorageSnapshot = (plan?: Awaited<ReturnType<typeof buildSiteDeployPlan>>) => ({
+  storageBackend: plan?.target?.storageBackend || "txt",
+  storageBackendSource: plan?.target?.storageBackendSource || "safe-production-default",
+  storageSiteId: plan?.target?.storageSiteId || plan?.target?.siteCode || "",
+  backendApiUrl: plan?.target?.storageBackend === "mongo" ? plan.target.backendApiUrl : ""
+});
+
 const getSiteCurrentVersion = (site: any) => site.currentVersion || site.version || "0.1.0";
 
 const getSiteEnvironment = (site: any) => String(site.environment || "unknown");
@@ -627,12 +643,15 @@ const queueBatchDeployForSite = async (params: {
   deployPlan?: Awaited<ReturnType<typeof buildSiteDeployPlan>>;
   createdBy: string;
 }) => {
+  if (!params.deployPlan) throw new Error("deploy-plan-required-for-queue");
+  assertDeployPlanExecutionReady(params.deployPlan);
   const deployment = await SiteVersionDeployment.create({
     siteId: params.site._id,
     releaseId: params.release._id,
     fromVersion: getSiteCurrentVersion(params.site),
     toVersion: params.release.version,
     deploymentKind: "deploy",
+    ...deploymentStorageSnapshot(params.deployPlan),
     status: "queued",
     triggeredBy: params.createdBy,
     logLines: [{
@@ -813,6 +832,7 @@ export async function enqueueDeployAll(params: {
       deployMode: deployPolicy.mode,
       connectorMode: "browser-sharepoint"
     });
+    assertDeployPlanExecutionReady(deployPlan);
     deployPlanBySiteId.set(site._id.toString(), deployPlan);
   }
 
@@ -824,6 +844,7 @@ export async function enqueueDeployAll(params: {
       fromVersion: getSiteCurrentVersion(site),
       toVersion: release.version,
       deploymentKind: "deploy",
+      ...deploymentStorageSnapshot(deployPlanBySiteId.get(site._id.toString())),
       status: "queued",
       triggeredBy: params.createdBy,
       logLines: [{ level: "info", message: "Deployment queued", at: new Date() }]
@@ -934,6 +955,7 @@ export async function enqueueDeploySite(params: {
     ? { deployMode: deployPolicy.mode, connectorMode }
     : { deployMode: deployPolicy.mode };
   const deployPlan = await buildSiteDeployPlan(site._id.toString(), release._id.toString(), deployPlanOptions);
+  assertDeployPlanExecutionReady(deployPlan);
   const backupSafety = deployPolicy.requiresRecentVerifiedBackup && !backupOverrideAllowed
     ? await assertRecentVerifiedBackupForDangerousWrite({
         siteId: site._id,
@@ -949,6 +971,7 @@ export async function enqueueDeploySite(params: {
     fromVersion: getSiteCurrentVersion(site),
     toVersion: release.version,
     deploymentKind: "deploy",
+    ...deploymentStorageSnapshot(deployPlan),
     status: "queued",
     triggeredBy: params.createdBy,
     logLines: [{
@@ -1053,6 +1076,7 @@ export async function enqueueRollbackSite(params: {
     deployMode: "local-dev-owner",
     connectorMode: "browser-sharepoint"
   });
+  assertDeployPlanExecutionReady(deployPlan);
   const deployPolicy = buildDeployPolicy("local-dev-owner");
   const deployment = await SiteVersionDeployment.create({
     siteId: site._id,
@@ -1060,6 +1084,7 @@ export async function enqueueRollbackSite(params: {
     fromVersion: currentVersion,
     toVersion: release.version,
     deploymentKind: "rollback",
+    ...deploymentStorageSnapshot(deployPlan),
     rollbackReason: reason,
     status: "queued",
     triggeredBy: params.createdBy,
@@ -1072,7 +1097,7 @@ export async function enqueueRollbackSite(params: {
     createdBy: params.createdBy,
     mode: "rollback",
     reason,
-    backupSafety: buildBackupOverrideSafety("rollback", "Fast browser rollback flow selected; no server SharePoint restore path exists."),
+    backupSafety: buildBackupOverrideSafety("rollback", "Fast browser rollback flow selected; restore execution requires Browser SharePoint evidence."),
     deployPolicy,
     deployPlan
   });

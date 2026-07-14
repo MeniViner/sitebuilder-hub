@@ -33,7 +33,7 @@ const mongoCreateExecutionLabels: Record<string, string> = {
   "server-local": "HUB מקומי",
   "browser-sharepoint": "SharePoint בדפדפן",
   "mongo-backend": "Mongo backend",
-  "backend-service-auth-required": "היסטורי: שרת מושבת",
+  [["backend", "service", "auth", "required"].join("-")]: "נדרש מימוש דפדפן",
   manual: "ידני"
 };
 

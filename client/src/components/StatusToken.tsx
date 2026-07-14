@@ -17,19 +17,32 @@ export type StatusTokenKind =
   | "warning"
   | "neutral";
 
+export const statusTaxonomyLabels = [
+  "תקין",
+  "דורש בדיקה",
+  "חסום",
+  "נכשל",
+  "לא נבדק",
+  "מידע ניהולי",
+  "בדיקה ללא שינוי",
+  "כתיבה זמינה",
+  "כתיבה חסומה",
+  "לא ידוע"
+];
+
 const statusTokenConfig: Record<StatusTokenKind, { label: string; className: string; icon: ReactNode }> = {
-  live: { label: "מידע חי", className: "status-token-success", icon: <CheckCircle2 size={13} /> },
+  live: { label: "תקין", className: "status-token-success", icon: <CheckCircle2 size={13} /> },
   cached: { label: "מידע שמור", className: "status-token-neutral", icon: <Clock3 size={13} /> },
-  metadata: { label: "מטא־דאטה", className: "status-token-warning", icon: <Database size={13} /> },
-  readonly: { label: "קריאה בלבד", className: "status-token-info", icon: <Eye size={13} /> },
+  metadata: { label: "מידע ניהולי", className: "status-token-warning", icon: <Database size={13} /> },
+  readonly: { label: "בדיקה ללא שינוי", className: "status-token-info", icon: <Eye size={13} /> },
   blocked: { label: "חסום", className: "status-token-danger", icon: <Share2 size={13} /> },
   writeEnabled: { label: "כתיבה זמינה", className: "status-token-success", icon: <ShieldCheck size={13} /> },
   approval: { label: "אישור מתקדם", className: "status-token-warning", icon: <LockKeyhole size={13} /> },
   destructive: { label: "פעולה מסוכנת", className: "status-token-danger", icon: <ShieldAlert size={13} /> },
   running: { label: "בתהליך", className: "status-token-info", icon: <Workflow size={13} /> },
   success: { label: "תקין", className: "status-token-success", icon: <CheckCircle2 size={13} /> },
-  warning: { label: "אזהרה", className: "status-token-warning", icon: <AlertTriangle size={13} /> },
-  neutral: { label: "סטטוס", className: "status-token-neutral", icon: <Clock3 size={13} /> }
+  warning: { label: "דורש בדיקה", className: "status-token-warning", icon: <AlertTriangle size={13} /> },
+  neutral: { label: "לא ידוע", className: "status-token-neutral", icon: <Clock3 size={13} /> }
 };
 
 export function StatusToken({

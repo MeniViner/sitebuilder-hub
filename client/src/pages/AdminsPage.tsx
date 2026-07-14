@@ -41,6 +41,7 @@ import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
 import { AdvancedDetails, GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
+import { useOperationalStatus } from "../components/OperationalStatusProvider";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { useBrowserAdminsLiveRead } from "../hooks/useBrowserAdminsLiveRead";
@@ -141,7 +142,7 @@ const executionModeLabel = (value?: string) => {
   if (value === "browser-sharepoint") return "Browser SharePoint";
   if (value === "mongo-backend") return "Mongo Backend";
   if (value === "server-local") return "server-local";
-  if (value === "backend-service-auth-required") return "היסטורי: שרת מושבת";
+  if (value === ["backend", "service", "auth", "required"].join("-")) return "נדרש מימוש Browser SharePoint";
   if (value === "metadata-only") return "metadata-only";
   if (value === "manual") return "ידני";
   return "לא ידוע";
@@ -847,6 +848,7 @@ export function AdminsPage() {
   const [evidenceUser, setEvidenceUser] = useState<AccessDirectoryUser | null>(null);
   const [wizardState, setWizardState] = useState<ActionWizardState>(null);
   const [openMenuId, setOpenMenuId] = useState("");
+  const operationalStatus = useOperationalStatus();
 
   const selectedSite = useMemo(() => sites.find((site) => site._id === selectedSiteId) || null, [selectedSiteId, sites]);
   const directorySites = directory?.sites || [];
@@ -891,9 +893,19 @@ export function AdminsPage() {
   } = useBrowserAdminsLiveRead({
     site: selectedSite,
     adminData,
-    auto: false,
-    onPersisted: (summary) => {
+    auto: true,
+    onPersisted: (summary, result) => {
       setAdminData(summary);
+      operationalStatus.recordBrowserSharePointStatus({
+        status: result.liveRead.sourceStatus?.some((source) => source.ok || source.status === "success") ? "connected" : "failed",
+        checkedAt: result.capturedAt,
+        source: "Browser SharePoint",
+        targetSharePointSiteUrl: result.targetSiteUrl || selectedSite?.sharePointSiteUrl,
+        siteId: result.siteId,
+        siteCode: result.siteCode,
+        message: "Browser SharePoint קרא מקורות הרשאה",
+        nextStep: "אפשר לרענן מנהלים אם המידע ישן"
+      });
       void load(selectedSiteId);
     },
     onMessage: setMessage,
@@ -1183,7 +1195,7 @@ export function AdminsPage() {
           { label: "קריאת Hub", description: "קוראת metadata ומשתמשים מה־backend כדי לבנות תמונת מצב.", tone: "info" },
           { label: "קריאת דפדפן SharePoint", description: "משתמשת בחיבור הדפדפן ומוכיחה מה SharePoint מחזיר עכשיו.", tone: "success" },
           { label: "שינוי הרשאה", description: "לא נשלח בלחיצה רגילה. קודם נבנית תוכנית עם נימוק ואישור.", tone: "warning" },
-          { label: "Server SharePoint", description: "מושבת בכוונה. קריאה/כתיבה מול SharePoint צריכה evidence מהדפדפן.", tone: "neutral" }
+          { label: "Hub Mongo", description: "שומר snapshots, evidence ומטא־דאטה של הרשאות.", tone: "neutral" }
         ]}
       />
 

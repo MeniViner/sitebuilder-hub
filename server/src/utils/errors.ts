@@ -81,6 +81,15 @@ export function normalizeError(error: unknown): { code: string; message: string;
     };
   }
 
+  if (error instanceof Error && error.message === "mongo-restore-endpoint-not-confirmed") {
+    return {
+      code: "MONGO_RESTORE_ENDPOINT_NOT_CONFIRMED",
+      message: "שחזור Mongo לא הופעל כי אין endpoint Restore מאומת ב־Builder backend.",
+      status: 409,
+      details: { nextStep: "Expose and confirm a Builder backend restore endpoint before enabling Mongo restore execution." }
+    };
+  }
+
   if (error instanceof Error && error.message === "mongo-site-create-plan-not-ready") {
     return {
       code: "MONGO_SITE_CREATE_PLAN_NOT_READY",
@@ -127,13 +136,33 @@ export function normalizeError(error: unknown): { code: string; message: string;
       "browser-backup-source-path-mismatch",
       "browser-backup-target-path-mismatch",
       "browser-backup-success-evidence-invalid",
-      "backup-verification-evidence-missing"
+      "backup-verification-evidence-missing",
+      "browser-backup-inventory-connector-mode-required",
+      "browser-backup-inventory-not-for-mongo",
+      "browser-backup-inventory-root-mismatch",
+      "browser-backup-inventory-site-mismatch"
     ].includes(error.message)
   ) {
     return {
       code: "BROWSER_BACKUP_EVIDENCE_INVALID",
       message: "Evidence של browser backup אינו תקין או אינו מספיק לאימות גיבוי.",
       status: 400
+    };
+  }
+
+  if (error instanceof Error && error.message === "restore-reason-required") {
+    return {
+      code: "RESTORE_REASON_REQUIRED",
+      message: "Restore דורש נימוק לפני יצירת Job.",
+      status: 400
+    };
+  }
+
+  if (error instanceof Error && error.message === "restore-backup-not-verified") {
+    return {
+      code: "RESTORE_BACKUP_NOT_VERIFIED",
+      message: "Restore דורש Backup מאומת לפני ביצוע.",
+      status: 409
     };
   }
 
@@ -172,7 +201,7 @@ export function normalizeError(error: unknown): { code: string; message: string;
   if (error instanceof Error && error.message === "browser-sharepoint-required") {
     return {
       code: "BROWSER_SHAREPOINT_REQUIRED",
-      message: "פעולת SharePoint חייבת לרוץ דרך הדפדפן הפעיל. השרת שומר רק סטטוס ו־Evidence.",
+      message: "פעולת SharePoint חייבת לרוץ דרך הדפדפן הפעיל. ה־Hub שומר סטטוס ו־Evidence.",
       status: 409
     };
   }
@@ -180,7 +209,7 @@ export function normalizeError(error: unknown): { code: string; message: string;
   if (error instanceof Error && error.message === "sharepoint-browser-execution-required") {
     return {
       code: "SHAREPOINT_BROWSER_EXECUTION_REQUIRED",
-      message: "פעולת SharePoint לא רצה בשרת. יש להפעיל אותה דרך הדפדפן המחובר ולשמור Evidence.",
+      message: "יש להפעיל את פעולת SharePoint דרך הדפדפן המחובר ולשמור Evidence.",
       status: 409
     };
   }
@@ -188,7 +217,7 @@ export function normalizeError(error: unknown): { code: string; message: string;
   if (error instanceof Error && error.message === "browser-backup-verification-required") {
     return {
       code: "BROWSER_BACKUP_VERIFICATION_REQUIRED",
-      message: "אימות גיבוי SharePoint מתבצע דרך הדפדפן בלבד. השרת לא קורא קבצים מ־SharePoint.",
+      message: "אימות גיבוי SharePoint מתבצע דרך Browser SharePoint ומעדכן Evidence.",
       status: 409
     };
   }
@@ -410,7 +439,7 @@ export function normalizeError(error: unknown): { code: string; message: string;
   if (error instanceof Error && error.name === "SharePointWriteCapabilityError") {
     return {
       code: "SHAREPOINT_WRITE_NOT_CONFIGURED",
-      message: "מסלול SharePoint מהשרת מושבת. השתמשו בפעולת דפדפן מחובר.",
+      message: "פעולת SharePoint דורשת Browser SharePoint מחובר.",
       status: 409,
       details: { reason: error.message }
     };

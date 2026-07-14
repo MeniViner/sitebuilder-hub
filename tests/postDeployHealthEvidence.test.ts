@@ -56,7 +56,14 @@ const writeArtifact = async () => {
   await fs.mkdir(path.join(artifactRoot, "assets"), { recursive: true });
   await fs.writeFile(path.join(artifactRoot, "index.html"), "index");
   await fs.writeFile(path.join(artifactRoot, "assets", "app.js"), "app");
-  await fs.writeFile(path.join(artifactRoot, "sharepoint-deploy-manifest.json"), JSON.stringify(["index.html", "assets/app.js"]));
+  await fs.writeFile(path.join(artifactRoot, "sharepoint-deploy-manifest.json"), JSON.stringify({
+    schemaVersion: 2,
+    artifactKind: "site-builder-frontend",
+    storageCompatibility: ["txt", "mongo"],
+    requiresRuntimeConfig: true,
+    preservesRuntimeConfig: false,
+    files: ["index.html", "assets/app.js"]
+  }));
   return artifactRoot;
 };
 
@@ -125,7 +132,7 @@ describe("post-deploy browser evidence", () => {
     expect(mocks.readSharePointFileEvidence).not.toHaveBeenCalled();
   });
 
-  it("persists final app URL evidence supplied by the browser without server SharePoint reads", async () => {
+  it("persists final app URL evidence supplied by the browser without backend SharePoint reads", async () => {
     const release = makeRelease(await writeArtifact());
     const site = makeSite();
     mocks.Release.findById.mockResolvedValue(release);
@@ -141,6 +148,16 @@ describe("post-deploy browser evidence", () => {
         finalStatus: "success",
         versionBefore: "1.2.3",
         versionAfter: "1.2.4",
+        deploymentConfig: {
+          storageBackend: "txt",
+          storageBackendSource: "environment:SITE_BUILDER_PRODUCTION_STORAGE_BACKEND",
+          siteId: "alpha",
+          backendApiUrl: "",
+          allowedSiteRoot: "https://portal.army.idf/sites/alpha",
+          sharePointSiteUrl: "https://portal.army.idf/sites/alpha",
+          deployedAt: "2026-06-30T10:00:00.000Z",
+          operation: "deploy"
+        },
         finalAppUrlVerification: {
           key: "indexExists",
           label: "Final index.html",
@@ -173,6 +190,30 @@ describe("post-deploy browser evidence", () => {
             sizeMatches: true,
             sha256Matches: true,
             httpStatus: 200
+          },
+          {
+            relativePath: "sitebuilder-runtime-config.json",
+            targetPath: "/sites/alpha/siteDB/dist/sitebuilder-runtime-config.json",
+            status: "verified",
+            expectedSizeBytes: 7,
+            actualSizeBytes: 7,
+            expectedSha256: sha256("runtime"),
+            actualSha256: sha256("runtime"),
+            sizeMatches: true,
+            sha256Matches: true,
+            httpStatus: 200
+          },
+          {
+            relativePath: "sitebuilder-deployment.json",
+            targetPath: "/sites/alpha/siteDB/dist/sitebuilder-deployment.json",
+            status: "verified",
+            expectedSizeBytes: 10,
+            actualSizeBytes: 10,
+            expectedSha256: sha256("deployment"),
+            actualSha256: sha256("deployment"),
+            sizeMatches: true,
+            sha256Matches: true,
+            httpStatus: 200
           }
         ]
       }
@@ -181,7 +222,7 @@ describe("post-deploy browser evidence", () => {
     expect(result.summary).toMatchObject({
       connectorMode: "browser-sharepoint",
       finalStatus: "success",
-      verifiedFilesCount: 2,
+      verifiedFilesCount: 4,
       failedFilesCount: 0,
       siteVersionUpdated: true
     });

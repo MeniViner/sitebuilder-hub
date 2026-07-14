@@ -174,7 +174,7 @@ describe("version rollback browser flow", () => {
     expect(mocks.createJob).not.toHaveBeenCalled();
   });
 
-  it("queues version-rollback jobs as browser-required without server SharePoint or backup preflight", async () => {
+  it("queues version-rollback jobs as browser-required without backend SharePoint execution or backup preflight", async () => {
     const site = makeSite();
     const release = makeRelease("1.1.0");
     const deployment = makeDeployment({ rollbackReason: "bad deploy" });
@@ -239,7 +239,7 @@ describe("version rollback browser flow", () => {
         operation: "rollback",
         required: false,
         satisfied: true,
-        reason: "Fast browser rollback flow selected; no server SharePoint restore path exists."
+        reason: "Fast browser rollback flow selected; restore execution requires Browser SharePoint evidence."
       })
     });
     expect(jobInput.approvalSnapshot.writeOperations).toContain(

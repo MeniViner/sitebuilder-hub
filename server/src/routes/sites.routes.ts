@@ -12,6 +12,7 @@ import {
   queueSiteProvision,
   queuePermissionsSetup,
   browserSharePointHealthCheckEvidence,
+  browserRuntimeConfigEvidence,
   recordBrowserSiteOperationEvidenceEndpoint,
   readOnlySharePointHealthCheck,
   runtimeConfigValidation,
@@ -36,8 +37,12 @@ import {
 import {
   getSiteBackups,
   getSiteBackupInventory,
+  getSiteBackupSchedule,
   planSiteBackup,
   recordBrowserBackupEvidence,
+  recordBrowserBackupInventoryEvidence,
+  postSiteBackupCapability,
+  putSiteBackupSchedule,
   runSiteBackup
 } from "../controllers/backups.controller";
 import {
@@ -66,6 +71,7 @@ router.post("/:id/health-check/manual", requireRole("operator"), manualHealthChe
 router.post("/:id/health-check/sharepoint-readonly", requireRole("operator"), readOnlySharePointHealthCheck);
 router.post("/:id/health-check/browser-sharepoint", requireRole("operator"), browserSharePointHealthCheckEvidence);
 router.post("/:id/runtime-config/validate", requireRole("operator"), runtimeConfigValidation);
+router.post("/:id/runtime-config/browser-evidence", requireRole("operator"), browserRuntimeConfigEvidence);
 router.post("/:id/health-check/mongo-backend", requireRole("operator"), builderMongoHealthCheck);
 router.get("/:id/mongo-create/plan", requireRole("operator"), getMongoSiteCreationPlan);
 router.post("/:id/mongo-create/execute", requireRole("admin"), executeMongoSiteCreationEndpoint);
@@ -92,6 +98,10 @@ router.get("/:id/deployments", getSiteDeployments);
 
 router.get("/:id/backups", getSiteBackups);
 router.get("/:id/backups/inventory", requireRole("operator"), getSiteBackupInventory);
+router.post("/:id/backups/capability", requireRole("operator"), postSiteBackupCapability);
+router.post("/:id/backups/inventory/browser-evidence", requireRole("operator"), recordBrowserBackupInventoryEvidence);
+router.get("/:id/backups/schedule", requireRole("operator"), getSiteBackupSchedule);
+router.put("/:id/backups/schedule", requireRole("operator"), putSiteBackupSchedule);
 router.post("/:id/backups/plan", requireRole("operator"), planSiteBackup);
 router.post("/:id/backups/browser-evidence", requireRole("admin"), recordBrowserBackupEvidence);
 router.post("/:id/backups", requireRole("operator"), runSiteBackup);

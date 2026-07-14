@@ -112,7 +112,7 @@ describe("admin TXT repair browser flow", () => {
     });
   });
 
-  it("queues TXT repair as browser-required without SharePoint server writes", async () => {
+  it("queues TXT repair as browser-required without backend SharePoint writes", async () => {
     const { enqueueAdminTxtRepair } = await import("../server/src/services/admins.service");
 
     const result = await enqueueAdminTxtRepair({

@@ -23,7 +23,7 @@ import { buildSiteBootstrapPlan, normalizeSiteBootstrapOptions } from "../servic
 import { recordBrowserSiteOperationEvidence } from "../services/browserSharePointEvidence.service";
 import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "../services/dangerousBackupBypass.service";
 import { getBrowserRequiredJobMessage, getSharePointOperationPolicy, shouldBlockBackendSharePointByDefault } from "../services/sharepointOperationPolicy.service";
-import { validateRuntimeConfig } from "../services/runtimeConfig.service";
+import { recordBrowserRuntimeConfigEvidence, validateRuntimeConfig } from "../services/runtimeConfig.service";
 import { runBuilderMongoHealthCheck } from "../services/builderMongoHealth.service";
 import {
   buildMongoRuntimeConfigContent,
@@ -251,6 +251,35 @@ export const runtimeConfigValidation = async (req: Request, res: Response) => {
         backendApiUrlHost: result.backendApiUrlHost,
         builderSiteId: result.builderSiteId,
         apiKeyStatus: result.apiKeyStatus,
+        warnings: result.warnings
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, req, res);
+  }
+};
+
+export const browserRuntimeConfigEvidence = async (req: Request, res: Response) => {
+  try {
+    const result = await recordBrowserRuntimeConfigEvidence(req.params.id, req.body || {});
+
+    await writeAuditLog({
+      req,
+      action: "sites.runtime-config.browser-evidence",
+      entityType: "Site",
+      entityId: result.siteId,
+      metadata: {
+        siteCode: result.siteCode,
+        connectorMode: "browser-sharepoint",
+        runtimeConfigPath: result.runtimeConfigPath,
+        readStatus: result.readStatus,
+        storageBackend: result.storageBackend,
+        backendApiUrlHost: result.backendApiUrlHost,
+        builderSiteId: result.builderSiteId,
+        apiKeyStatus: result.apiKeyStatus,
+        preservedLastGoodEvidence: Boolean(result.preservedLastGoodEvidence),
         warnings: result.warnings
       }
     });

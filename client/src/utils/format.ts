@@ -61,7 +61,7 @@ export const jobStatusLabel = (status?: string) => {
     queued: "בתור",
     "browser-required": "ממתין להרצה דרך הדפדפן",
     "browser-in-progress": "רץ דרך הדפדפן",
-    "blocked-service-auth-required": "היסטורי: שרת מושבת",
+    "blocked-service-auth-required": "נדרש מימוש דפדפן",
     preflight: "בדיקה מקדימה",
     running: "רץ",
     verifying: "מאמת",

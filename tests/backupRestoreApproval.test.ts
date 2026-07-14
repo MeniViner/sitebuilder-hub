@@ -80,6 +80,7 @@ const makeSite = () => ({
   bootstrapFolder: "sitebuilder-bootstrap",
   widgetsDbTarget: "users",
   lastError: "",
+  recoveryState: {},
   save: vi.fn().mockResolvedValue(undefined)
 });
 
@@ -125,6 +126,26 @@ beforeEach(() => {
   mocks.Site.findById.mockResolvedValue(makeSite());
   mocks.SiteBackup.findById.mockResolvedValue(makeBackup());
   mocks.SiteBackup.findOne.mockResolvedValue(makeBackup());
+  mocks.assertDistinctRecentVerifiedBackupForRestore.mockResolvedValue({
+    policy: "pre-restore-current-state-backup",
+    operation: "restore",
+    required: true,
+    satisfied: true,
+    maxAgeHours: 24,
+    checkedAt: "2026-07-02T07:00:00.000Z",
+    backup: {
+      id: "pre-restore-backup",
+      backupId: "pre-restore-current",
+      status: "verified",
+      verificationStatus: "verified",
+      storagePath: "/sites/alpha/siteDB/siteAssets/Backups/current",
+      filesCount: 2,
+      sizeBytes: 192,
+      createdAt: "2026-07-02T06:00:00.000Z",
+      verificationCheckedAt: "2026-07-02T06:05:00.000Z",
+      ageHours: 1
+    }
+  });
   mocks.createJob.mockImplementation(async (input) => ({
     _id: idOf(jobObjectId),
     ...input,
@@ -144,17 +165,26 @@ describe("backup restore browser flow", () => {
 
     expect(mocks.assertSharePointWriteAvailable).not.toHaveBeenCalled();
     expect(mocks.assertRecentVerifiedBackupForDangerousWrite).not.toHaveBeenCalled();
-    expect(mocks.assertDistinctRecentVerifiedBackupForRestore).not.toHaveBeenCalled();
+    expect(mocks.assertDistinctRecentVerifiedBackupForRestore).toHaveBeenCalledWith(expect.objectContaining({
+      siteId: expect.anything(),
+      restoreBackupObjectId: expect.anything(),
+      restoreBackupExternalId: "backup-2026-05-14"
+    }));
     expect(mocks.createJob).toHaveBeenCalledWith(expect.objectContaining({
       type: "restore",
       siteId: "site-1",
       createdBy: "operator",
+      requiresApproval: true,
+      approvalSummary: expect.objectContaining({ operation: "restore" }),
+      approvalSnapshot: expect.objectContaining({ operation: "restore" }),
       executionMode: "browser-required",
       connectorMode: "browser-sharepoint",
       operationPolicy: "restore",
       payload: expect.objectContaining({
         connectorMode: "browser-sharepoint",
         executionMode: "browser-required",
+        notes: "restore after deploy",
+        preRestoreBackupSafety: expect.objectContaining({ policy: "pre-restore-current-state-backup" }),
         browserOperationPlan: expect.objectContaining({
           operation: "restore",
           connectorMode: "browser-sharepoint",
@@ -173,6 +203,46 @@ describe("backup restore browser flow", () => {
     });
     expect(result.backup.restoreStatus).toBe("running");
     expect(result.backup.save).toHaveBeenCalled();
+  });
+
+  it("requires a reason before queueing restore", async () => {
+    const { enqueueBackupRestore } = await import("../server/src/services/backups.service");
+
+    await expect(enqueueBackupRestore({
+      backupId: backupObjectId,
+      createdBy: "operator",
+      notes: ""
+    })).rejects.toThrow("restore-reason-required");
+
+    expect(mocks.createJob).not.toHaveBeenCalled();
+    expect(mocks.assertDistinctRecentVerifiedBackupForRestore).not.toHaveBeenCalled();
+  });
+
+  it("builds a protected restore review with blockers when current-state backup is missing", async () => {
+    mocks.assertDistinctRecentVerifiedBackupForRestore.mockRejectedValue(new Error("pre-restore-backup-required"));
+    const site = makeSite();
+    mocks.Site.findById.mockResolvedValue(site);
+
+    const { buildBackupRestoreReview } = await import("../server/src/services/backups.service");
+    const review = await buildBackupRestoreReview({
+      backupId: backupObjectId,
+      actor: "operator",
+      reason: "restore drill"
+    });
+
+    expect(review.canExecute).toBe(false);
+    expect(review.blockers).toContain("pre-restore-backup-required");
+    expect(review.impactPreview).toMatchObject({
+      requireCurrentStateBackup: true,
+      requireTypedConfirmation: "שחזר",
+      requireReason: true,
+      willOverwriteCount: 2
+    });
+    expect(site.recoveryState.restoreAudit).toMatchObject({
+      readinessStatus: "blocked",
+      blockers: expect.arrayContaining(["pre-restore-backup-required"])
+    });
+    expect(site.save).toHaveBeenCalled();
   });
 
   it("records browser restore evidence and completes the restore job", async () => {
@@ -244,11 +314,14 @@ describe("restore-specific error normalization", () => {
     ["restore-unsupported-storage-provider:local", "RESTORE_UNSUPPORTED_STORAGE_PROVIDER"],
     ["restore-backup-file-verification-failed:/backups/users_data.txt", "RESTORE_BACKUP_FILE_VERIFICATION_FAILED"],
     ["restore-target-verification-failed:/live/users_data.txt", "RESTORE_TARGET_VERIFICATION_FAILED"],
+    ["restore-reason-required", "RESTORE_REASON_REQUIRED"],
+    ["restore-backup-not-verified", "RESTORE_BACKUP_NOT_VERIFIED"],
+    ["mongo-restore-endpoint-not-confirmed", "MONGO_RESTORE_ENDPOINT_NOT_CONFIRMED"],
     ["browser-sharepoint-required", "BROWSER_SHAREPOINT_REQUIRED"]
   ])("maps %s to a restore conflict", (message, code) => {
     expect(normalizeError(new Error(message))).toMatchObject({
       code,
-      status: 409
+      status: message === "restore-reason-required" ? 400 : 409
     });
   });
 });

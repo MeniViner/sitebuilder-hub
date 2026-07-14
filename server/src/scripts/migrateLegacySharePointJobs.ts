@@ -85,7 +85,7 @@ async function migrate() {
         $push: {
           logs: {
             level: "info",
-            message: "Legacy server SharePoint job migrated to browser-required architecture",
+            message: "Legacy SharePoint job migrated to browser-required architecture",
             at: now
           }
         }

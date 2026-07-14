@@ -1,16 +1,28 @@
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync, statSync } from "fs";
 import path from "path";
 import { describe, expect, it } from "vitest";
 import { isHubHelpIconsEnabled } from "../client/src/help/helpConfig";
 
 const root = process.cwd();
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
+const collectFiles = (relativeDir: string): string[] => {
+  const absoluteDir = path.join(root, relativeDir);
+  return readdirSync(absoluteDir).flatMap((entry) => {
+    const absolutePath = path.join(absoluteDir, entry);
+    const relativePath = path.join(relativeDir, entry);
+    if (entry === "dist" || entry.endsWith(".tsbuildinfo")) return [];
+    return statSync(absolutePath).isDirectory() ? collectFiles(relativePath) : [relativePath];
+  });
+};
 
 describe("Hub SharePoint-hosted UI config", () => {
   it("uses HashRouter routes and relative Vite assets for SharePoint folder hosting", () => {
     expect(read("client/src/App.tsx")).toContain("HashRouter");
     expect(read("client/src/App.tsx")).not.toContain("BrowserRouter");
     expect(read("client/vite.config.ts")).toContain("base: \"./\"");
+    expect(read("client/index.html")).toContain("./hub-config.js");
+    expect(read("client/public/hub-config.js")).toContain("window.SiteBuilderHubConfig");
+    expect(read("client/src/config/hubConfig.ts")).toContain("sitebuilderHub.apiBaseUrl");
   });
 
   it("keeps archive copy natural and exposes archive tabs", () => {
@@ -22,7 +34,8 @@ describe("Hub SharePoint-hosted UI config", () => {
       read("client/src/components/SitesTable.tsx")
     ].join("\n");
 
-    expect(sitesPage).toContain("אתרים פעילים");
+    expect(sitesPage).toContain("sites-tab-switch");
+    expect(sitesPage).toContain("פעילים");
     expect(sitesPage).toContain("ארכיון");
     expect(clientSource).not.toContain("ארכב");
     expect(clientSource).not.toContain("בארכב");
@@ -34,12 +47,58 @@ describe("Hub SharePoint-hosted UI config", () => {
     const styles = read("client/src/styles/index.css");
 
     expect(diagnostics).toContain("בעיות וחיבורים");
-    expect(diagnostics).toContain("אין SharePoint בשרת");
-    expect(diagnostics).toContain("השרת אינו מסלול SharePoint");
+    expect(diagnostics).toContain("Browser SharePoint");
+    expect(diagnostics).toContain("Hub API ו־Builder backend");
     expect(releases).toContain("Release & Deployment Control Center");
     expect(releases).toContain("Target mode");
     expect(releases).toContain("Rollback נשאר חסום");
     expect(styles).toContain("direction: rtl");
+  });
+
+  it("wires global operational status to Browser SharePoint, Builder backend, and Hub Mongo evidence", () => {
+    const app = read("client/src/App.tsx");
+    const provider = read("client/src/components/OperationalStatusProvider.tsx");
+    const sidebar = read("client/src/components/Sidebar.tsx");
+    const systemStatusBar = read("client/src/components/SystemStatusBar.tsx");
+    const operationsRoutes = read("server/src/routes/operations.routes.ts");
+    const operationsService = read("server/src/services/operations.service.ts");
+
+    expect(app).toContain("OperationalStatusProvider");
+    expect(provider).toContain("sitebuilderHub.operationalStatus");
+    expect(provider).toContain("recordBrowserSharePointHealth");
+    expect(provider).toContain("recordRuntimeConfigEvidence");
+    expect(provider).toContain("recordBuilderMongoHealth");
+    expect(sidebar).toContain("SharePoint דרך הדפדפן עדיין לא נבדק");
+    expect(sidebar).toContain("חיבור SharePoint דרך הדפדפן נכשל");
+    expect(sidebar).toContain("Hub Mongo");
+    expect(systemStatusBar).toContain("Browser SharePoint");
+    expect(systemStatusBar).toContain("Builder backend");
+    expect(operationsRoutes).toContain("router.get(\"/status\"");
+    expect(operationsService).toContain("OperationalStatusSnapshot");
+    expect(operationsService).toContain("DATA_SOURCE_MATRIX");
+  });
+
+  it("auto-loads safe page evidence without requiring the first manual click", () => {
+    const dashboard = read("client/src/pages/DashboardPage.tsx");
+    const siteDetails = read("client/src/pages/SiteDetailsPage.tsx");
+    const health = read("client/src/pages/HealthPage.tsx");
+    const diagnostics = read("client/src/pages/DiagnosticsPage.tsx");
+    const backups = read("client/src/pages/BackupsPage.tsx");
+    const admins = read("client/src/pages/AdminsPage.tsx");
+    const settings = read("client/src/pages/SettingsPage.tsx");
+
+    expect(siteDetails).toContain("useAutoSafeRead");
+    expect(siteDetails).toContain("readBrowserRuntimeConfig");
+    expect(siteDetails).toContain("buildBrowserSharePointBackupPlan");
+    expect(health).toContain("useAutoSafeRead");
+    expect(health).toContain("readBrowserRuntimeConfig");
+    expect(diagnostics).toContain("useAutoSafeRead");
+    expect(diagnostics).toContain("runBrowserSharePointDiagnostics");
+    expect(backups).toContain("useAutoSafeRead");
+    expect(backups).toContain("recordBrowserSharePointStatus");
+    expect(admins).toContain("auto: true");
+    expect(settings).toContain("sitesApi.operationCapabilities");
+    expect(dashboard).toContain("Storage backends");
   });
 
   it("lets operators edit release identity and deployment metadata without recreating releases", () => {
@@ -152,7 +211,9 @@ describe("Hub SharePoint-hosted UI config", () => {
   it("surfaces storage-backend-aware UI for Mongo and TXT sites", () => {
     const dashboard = read("client/src/pages/DashboardPage.tsx");
     const sitesTable = read("client/src/components/SitesTable.tsx");
+    const sitesPage = read("client/src/pages/SitesPage.tsx");
     const siteDetails = read("client/src/pages/SiteDetailsPage.tsx");
+    const siteDetailsActionPolicy = read("client/src/utils/siteDetailsActionPolicy.ts");
     const health = read("client/src/pages/HealthPage.tsx");
     const diagnostics = read("client/src/pages/DiagnosticsPage.tsx");
     const admins = read("client/src/pages/AdminsPage.tsx");
@@ -160,16 +221,73 @@ describe("Hub SharePoint-hosted UI config", () => {
     const settings = read("client/src/pages/SettingsPage.tsx");
 
     expect(dashboard).toContain("Storage backends");
+    expect(dashboard).toContain("storageCounts.txt");
+    expect(dashboard).toContain("storageCounts.mongo");
+    expect(dashboard).toContain("/sites?storageBackend=txt");
+    expect(dashboard).toContain("/sites?storageBackend=mongo");
+    expect(dashboard).not.toContain("writeAvailable = true");
+    expect(sitesPage).toContain("storageBackendFilter");
+    expect(sitesPage).toContain("searchParams.get(\"storageBackend\")");
+    ["/releases", "/backups", "/admins", "/jobs", "/monitoring", "/audit", "/diagnostics", "/analytics"].forEach((route) =>
+      expect(dashboard).toContain(`to: "${route}"`)
+    );
     expect(sitesTable).toContain("נתוני התחלה");
     expect(sitesTable).not.toContain("Runtime:");
     expect(sitesTable).not.toContain("Data:");
-    expect(siteDetails).toContain("בדוק runtime config");
-    expect(siteDetails).toContain("בדוק Mongo backend");
+    expect(siteDetails).toContain("runtime-config-read");
+    expect(siteDetailsActionPolicy).toContain("בדוק קובץ הגדרות טעינה");
+    expect(siteDetailsActionPolicy).toContain("בדוק מקור נתונים Mongo");
     expect(health).toContain("TXT / Seed");
     expect(diagnostics).toContain("Builder / Mongo backend connector");
     expect(admins).toContain("מקור אמת: Mongo / Builder backend");
-    expect(backups).toContain("Mongo מגובה דרך Builder backend");
+    expect(backups).toContain("Recovery Center");
+    expect(backups).toContain("Builder backend");
+    expect(backups).toContain("Browser SharePoint");
     expect(settings).toContain("Storage backend rules");
+  });
+
+  it("renders Backups as a Recovery Center without duplicate plan actions or disabled-server copy", () => {
+    const backups = read("client/src/pages/BackupsPage.tsx");
+
+    expect(backups).toContain("RecoveryTabShell");
+    expect(backups).toContain("RecoveryCommandPanel");
+    expect(backups).toContain("recovery-scroll-region");
+    expect(backups).toContain("data-recovery-tab");
+    expect(backups).toContain("הרצת גיבוי");
+    expect(backups).toContain("מלאי גיבויים");
+    expect(backups).toContain("היסטוריה ו-Evidence");
+    expect(backups).toContain("ProtectedActionDialog");
+    expect(backups).toContain("confirmWord=\"שחזר\"");
+    expect(backups).toContain("queueRestoreBackup");
+    expect(backups).not.toContain("plan for site");
+    expect(backups).not.toContain("plan for all sites");
+    expect(backups).not.toContain("תוכנית לאתר");
+    expect(backups).not.toContain("תוכנית לכל האתרים");
+  });
+
+  it("keeps forbidden legacy SharePoint server copy out of user-facing client source", () => {
+    const userFacingFiles = [
+      ...collectFiles("client/src/pages"),
+      ...collectFiles("client/src/components"),
+      ...collectFiles("client/src/help"),
+      ...collectFiles("client/src/utils")
+    ].filter((file) => !file.endsWith(".test.ts") && !file.endsWith(".test.tsx"));
+    const userFacingSource = userFacingFiles.map(read).join("\n");
+    const forbidden = [
+      ["אין", "SharePoint", "בשרת"].join(" "),
+      ["אין", "שרפוינט", "בשרת"].join(" "),
+      ["שרת", "SharePoint", "מושבת"].join(" "),
+      ["שרת", "שרפוינט", "מושבת"].join(" "),
+      ["מסלול", "השרת", "מושבת"].join(" "),
+      ["SharePoint", "server", "disabled"].join(" "),
+      ["backend", "SharePoint", "disabled"].join(" "),
+      ["backend", "service", "auth", "required"].join("-"),
+      ["חסר", "חיבור", "ל־SharePoint"].join(" ")
+    ];
+
+    for (const phrase of forbidden) {
+      expect(userFacingSource, phrase).not.toContain(phrase);
+    }
   });
 
   it("surfaces the create-new Mongo-backed site wizard and APIs", () => {
@@ -192,11 +310,14 @@ describe("Hub SharePoint-hosted UI config", () => {
 
   it("surfaces TXT to Mongo migration from site details and API routes", () => {
     const siteDetails = read("client/src/pages/SiteDetailsPage.tsx");
+    const siteDetailsPolicy = read("client/src/utils/siteDetailsActionPolicy.ts");
     const browserOps = read("client/src/utils/sharepointBrowserSiteOperations.ts");
     const api = read("client/src/api/sitesApi.ts");
     const routes = read("server/src/routes/sites.routes.ts");
 
-    expect(siteDetails).toContain("מיגרציית TXT ל־Mongo");
+    expect(siteDetailsPolicy).toContain("label: \"העברת אתר TXT ל־Mongo\"");
+    expect(siteDetails).toContain("actionFromPolicy(txtMigrationPolicy");
+    expect(siteDetailsPolicy).toContain("פעולה רגישה שמשנה את מקור הנתונים");
     expect(siteDetails).toContain("runTxtToMongoMigrationInBrowser");
     expect(browserOps).toContain("readBrowserTxtSnapshotForMongoMigration");
     expect(browserOps).toContain("runBrowserMongoRuntimeConfigUpload");

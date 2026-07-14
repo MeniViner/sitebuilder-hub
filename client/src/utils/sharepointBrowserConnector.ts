@@ -1598,10 +1598,10 @@ export function combineSharePointConnectorDiagnostics(
   const preferredConnectorMode: SharePointConnectorMode = "browser-sharepoint";
   const globalBlocked = !browserHealthy && !backendHealthy;
   const message = browser?.overall?.digestWorks && backendBlockedBy401
-    ? "הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. אין SharePoint בשרת; המערכת תשתמש בחיבור דרך הדפדפן."
+    ? "הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. המערכת תשתמש ב־Browser SharePoint."
     : browser?.overall?.digestWorks
       ? "הדפדפן מחובר ל־SharePoint ומצליח לקבל Digest. המערכת תעדיף browser-sharepoint עבור אתר היעד."
-      : "לא נמצא חיבור SharePoint תקין דרך הדפדפן. השרת לא משמש כחיבור חלופי ל־SharePoint.";
+      : "לא נמצא חיבור SharePoint תקין דרך הדפדפן. נדרש רענון Browser SharePoint מול אתר היעד.";
 
   return {
     preferredConnectorMode,

@@ -33,6 +33,6 @@ describe("SharePoint capability truthfulness", () => {
     expect(capabilities.writeAvailable).toBe(false);
     expect(capabilities.writeVerified).toBe(false);
     expect(capabilities.digest.canRequest).toBe(false);
-    expect(capabilities.reason).toContain("Server-side SharePoint REST is disabled");
+    expect(capabilities.reason).toContain("active Browser SharePoint session");
   });
 });

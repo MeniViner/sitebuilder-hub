@@ -186,7 +186,7 @@ export class SharePointWriteCapabilityError extends Error {
 }
 
 const SERVER_SHAREPOINT_REST_DISABLED_REASON =
-  "Server-side SharePoint REST is disabled. Use the active browser SharePoint session for SharePoint reads and writes.";
+  "SharePoint operations use the active Browser SharePoint session. The Hub backend stores metadata and evidence only.";
 
 const assertServerSharePointRestDisabled = () => {
   throw new Error("server-sharepoint-rest-disabled");
@@ -368,7 +368,7 @@ export const getSharePointOperationCapabilities = (): SharePointOperationCapabil
   const dangerousWriteGateBypassEnvVar = getDangerousValidationBypassEnvVar("sharepoint-write-gates");
   const dangerousWriteGateBypass = Boolean(dangerousWriteGateBypassEnvVar);
   const reason = dangerousWriteGateBypass
-    ? `${dangerousWriteGateBypassEnvVar}=true is ignored. ${SERVER_SHAREPOINT_REST_DISABLED_REASON}`
+    ? `${dangerousWriteGateBypassEnvVar}=true does not change connector policy. ${SERVER_SHAREPOINT_REST_DISABLED_REASON}`
     : SERVER_SHAREPOINT_REST_DISABLED_REASON;
 
   const capabilities: SharePointOperationCapabilities = {
@@ -412,7 +412,7 @@ export const getSharePointOperationCapabilities = (): SharePointOperationCapabil
 
 export const assertSharePointWriteAvailable = () => {
   const capabilities = getSharePointOperationCapabilities();
-  logger.warn("sharepoint", "Server SharePoint write capability is disabled", capabilities);
+  logger.warn("sharepoint", "Backend SharePoint write attempt blocked by browser-first connector policy", capabilities);
   throw new SharePointWriteCapabilityError(capabilities.reason || SERVER_SHAREPOINT_REST_DISABLED_REASON);
 };
 

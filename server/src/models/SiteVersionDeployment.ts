@@ -85,6 +85,10 @@ const siteVersionDeploymentSchema = new Schema(
     toVersion: { type: String, required: true },
     deploymentKind: { type: String, enum: ["deploy", "rollback"], default: "deploy", index: true },
     rollbackReason: { type: String, default: "" },
+    storageBackend: { type: String, enum: ["txt", "mongo"], default: "txt" },
+    storageBackendSource: { type: String, default: "safe-production-default" },
+    storageSiteId: { type: String, default: "" },
+    backendApiUrl: { type: String, default: "" },
 
     status: {
       type: String,

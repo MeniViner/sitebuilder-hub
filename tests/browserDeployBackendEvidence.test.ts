@@ -61,7 +61,14 @@ const writeArtifact = async (manifest: string[] = ["index.html", "assets/app.js"
   await fs.mkdir(path.join(artifactRoot, "assets"), { recursive: true });
   await fs.writeFile(path.join(artifactRoot, "index.html"), "index");
   await fs.writeFile(path.join(artifactRoot, "assets", "app.js"), "app");
-  await fs.writeFile(path.join(artifactRoot, "sharepoint-deploy-manifest.json"), JSON.stringify(manifest));
+  await fs.writeFile(path.join(artifactRoot, "sharepoint-deploy-manifest.json"), JSON.stringify({
+    schemaVersion: 2,
+    artifactKind: "site-builder-frontend",
+    storageCompatibility: ["txt", "mongo"],
+    requiresRuntimeConfig: true,
+    preservesRuntimeConfig: false,
+    files: manifest
+  }));
   return artifactRoot;
 };
 
@@ -145,6 +152,16 @@ describe("browser deploy artifact access and evidence storage", () => {
         versionBefore: "1.2.3",
         versionAfter: "1.2.4",
         targetSite: { siteId: "site-1", siteCode: "schedule", sharePointSiteUrl: "https://portal.army.idf/sites/schedule" },
+        deploymentConfig: {
+          storageBackend: "txt",
+          storageBackendSource: "environment:SITE_BUILDER_PRODUCTION_STORAGE_BACKEND",
+          siteId: "schedule",
+          backendApiUrl: "",
+          allowedSiteRoot: "https://portal.army.idf/sites/schedule",
+          sharePointSiteUrl: "https://portal.army.idf/sites/schedule",
+          deployedAt: "2026-06-18T10:00:00.000Z",
+          operation: "deploy"
+        },
         finalAppUrlVerification: {
           key: "finalAppUrl",
           label: "Final app URL",
@@ -179,6 +196,30 @@ describe("browser deploy artifact access and evidence storage", () => {
             sizeMatches: true,
             sha256Matches: true,
             httpStatus: 200
+          },
+          {
+            relativePath: "sitebuilder-runtime-config.json",
+            targetPath: "/sites/schedule/siteDB/dist/sitebuilder-runtime-config.json",
+            status: "verified",
+            expectedSizeBytes: 7,
+            actualSizeBytes: 7,
+            expectedSha256: sha256("runtime"),
+            actualSha256: sha256("runtime"),
+            sizeMatches: true,
+            sha256Matches: true,
+            httpStatus: 200
+          },
+          {
+            relativePath: "sitebuilder-deployment.json",
+            targetPath: "/sites/schedule/siteDB/dist/sitebuilder-deployment.json",
+            status: "verified",
+            expectedSizeBytes: 10,
+            actualSizeBytes: 10,
+            expectedSha256: sha256("deployment"),
+            actualSha256: sha256("deployment"),
+            sizeMatches: true,
+            sha256Matches: true,
+            httpStatus: 200
           }
         ]
       }
@@ -188,7 +229,7 @@ describe("browser deploy artifact access and evidence storage", () => {
       connectorMode: "browser-sharepoint",
       finalStatus: "success",
       siteVersionUpdated: true,
-      verifiedFilesCount: 2,
+      verifiedFilesCount: 4,
       failedFilesCount: 0
     });
     expect(mocks.SiteVersionDeployment.create).toHaveBeenCalledWith(expect.objectContaining({

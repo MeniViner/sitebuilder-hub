@@ -17,6 +17,7 @@ import {
 } from "./sharepointHealth.service";
 import { buildDeployPolicy, DeployMode, DeployPolicySnapshot } from "./deployPolicy.service";
 import { getDangerousValidationBypassEnvVar, isDangerousValidationBypassEnabled } from "./dangerousBackupBypass.service";
+import { resolveProductionStorageBackendPolicy } from "./storageBackendPolicy.service";
 
 type DeployConnectorMode = "browser-sharepoint";
 export type ArtifactStorageCompatibility = "txt" | "mongo";
@@ -223,7 +224,10 @@ export type SiteDeployPlan = {
     siteCode: string;
     siteDisplayName: string;
     environment: string;
-    storageBackend: string;
+    storageBackend: ArtifactStorageCompatibility;
+    storageBackendSource: string;
+    storageSiteId: string;
+    backendApiUrl: string;
     runtimeConfigPath: string;
     dataBackendStatus: string;
     sharePointSiteUrl: string;
@@ -288,6 +292,7 @@ export type ArtifactCompatibilityMetadata = {
 
 const MANIFEST_NAME = "sharepoint-deploy-manifest.json";
 const RUNTIME_CONFIG_FILENAMES = new Set(["sitebuilder-runtime-config.json", "runtime-config.json"]);
+const AUTHORITATIVE_DEPLOYMENT_CONFIG_FILENAMES = new Set([...RUNTIME_CONFIG_FILENAMES, "sitebuilder-deployment.json"]);
 const SKIP_DIRS = new Set(["node_modules", ".git"]);
 const TEXT_SIGNAL_EXTENSIONS = new Set([".html", ".js", ".mjs", ".cjs", ".css", ".json", ".txt"]);
 const MAX_SIGNAL_SCAN_BYTES = 2 * 1024 * 1024;
@@ -325,7 +330,7 @@ const isRuntimeConfigDeployFile = (relativePath: string, resolvedPaths: SiteBuil
   const normalized = normalizeRelative(relativePath);
   const configuredRelative = runtimeConfigRelativePath(resolvedPaths, site);
   const filename = normalized.split("/").pop() || normalized;
-  return Boolean((configuredRelative && normalized === configuredRelative) || RUNTIME_CONFIG_FILENAMES.has(filename));
+  return Boolean((configuredRelative && normalized === configuredRelative) || AUTHORITATIVE_DEPLOYMENT_CONFIG_FILENAMES.has(filename));
 };
 
 const filterRuntimeConfigDeployFiles = <T extends { relativePath: string }>(
@@ -333,7 +338,6 @@ const filterRuntimeConfigDeployFiles = <T extends { relativePath: string }>(
   resolvedPaths: SiteBuilderResolvedPaths,
   site: any
 ) => {
-  if (String(site.storageBackend || "unknown") !== "mongo") return { files, skippedRuntimeConfigFiles: [] as T[] };
   const skippedRuntimeConfigFiles = files.filter((file) => isRuntimeConfigDeployFile(file.relativePath, resolvedPaths, site));
   return {
     files: files.filter((file) => !isRuntimeConfigDeployFile(file.relativePath, resolvedPaths, site)),
@@ -665,7 +669,7 @@ async function readTargetDistInventory(
 ): Promise<TargetDistInventory> {
   const checkedAt = new Date().toISOString();
 
-  logger.info("releases", "Skipping server SharePoint target dist inventory before deploy", {
+  logger.info("releases", "Target dist inventory requires Browser SharePoint evidence before deploy", {
     siteCode: resolvedPaths.siteCode,
     distRoot: resolvedPaths.finalDistRoot,
     artifactFilesCount: artifactFiles.length,
@@ -1064,6 +1068,16 @@ export type BrowserSharePointDeploymentEvidenceInput = {
   finalStatus: "success" | "failed";
   versionBefore?: string;
   versionAfter?: string;
+  deploymentConfig?: {
+    storageBackend?: string;
+    storageBackendSource?: string;
+    siteId?: string;
+    backendApiUrl?: string;
+    allowedSiteRoot?: string;
+    sharePointSiteUrl?: string;
+    deployedAt?: string;
+    operation?: "deploy" | "rollback";
+  };
 };
 
 const stringValue = (value: unknown) => String(value || "").trim();
@@ -1135,14 +1149,35 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
   if (!params.input.releaseId) throw new Error("releaseId-required");
 
   const { site, release, resolvedPaths } = await resolveSiteAndRelease(params.siteId, params.input.releaseId);
+  const storagePolicy = resolveProductionStorageBackendPolicy();
   const manifest = await getReleaseArtifactManifest(release._id.toString());
   if (!manifest.summary.readyForDeploy) throw new Error("release-artifact-not-ready");
+  if (!manifest.compatibility.storageCompatibility.includes(storagePolicy.storageBackend)) {
+    throw new Error(`artifact-storage-incompatible:${storagePolicy.storageBackend}`);
+  }
   if (params.input.targetSite?.siteId && params.input.targetSite.siteId !== site._id.toString()) throw new Error("browser-deploy-site-mismatch");
   if (params.input.versionAfter && params.input.finalStatus === "success" && params.input.versionAfter !== release.version) {
     throw new Error("browser-deploy-version-after-mismatch");
   }
 
-  const plannedManifestFiles = filterRuntimeConfigDeployFiles(manifest.files.filter((file) => file.deployable), resolvedPaths, site).files;
+  const artifactManifestFiles = filterRuntimeConfigDeployFiles(manifest.files.filter((file) => file.deployable), resolvedPaths, site).files;
+  const evidencePayloads = new Map(
+    (params.input.readBackEvidence || params.input.uploadedFilesEvidence || [])
+      .map((item) => [stringValue(item.relativePath), item] as const)
+      .filter(([relativePath]) => Boolean(relativePath))
+  );
+  const generatedManifestFiles = ["sitebuilder-runtime-config.json", "sitebuilder-deployment.json"].map((relativePath) => {
+    const payload = evidencePayloads.get(relativePath);
+    return {
+      relativePath,
+      targetRelativePath: relativePath,
+      sizeBytes: numberValue(payload?.expectedSizeBytes),
+      contentType: stringValue(payload?.contentType) || "application/json;charset=utf-8",
+      sha256: stringValue(payload?.expectedSha256),
+      deployable: true
+    };
+  });
+  const plannedManifestFiles = [...artifactManifestFiles, ...generatedManifestFiles];
   const planFiles = plannedManifestFiles.map((file) => ({
     relativePath: file.relativePath,
     sourcePath: `artifact:${file.relativePath}`,
@@ -1151,11 +1186,6 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
     sha256: file.sha256
   }));
   const planFilesByRelativePath = new Map(planFiles.map((file) => [file.relativePath, file]));
-  const evidencePayloads = new Map(
-    (params.input.readBackEvidence || params.input.uploadedFilesEvidence || [])
-      .map((item) => [stringValue(item.relativePath), item] as const)
-      .filter(([relativePath]) => Boolean(relativePath))
-  );
   const verificationEvidence = plannedManifestFiles
     .map((file) => browserEvidenceFromPayload(file, planFilesByRelativePath.get(file.relativePath), evidencePayloads.get(file.relativePath)));
   const totalSizeBytes = plannedManifestFiles.reduce((sum, file) => sum + file.sizeBytes, 0);
@@ -1164,6 +1194,35 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
     verificationEvidence.length > 0 &&
     verificationEvidence.every((item) => item.status === "verified" && item.sizeMatches && item.sha256Matches);
   const successRequested = params.input.finalStatus === "success";
+  const deploymentConfig = params.input.deploymentConfig;
+  if (successRequested) {
+    const expectedStorageSiteId = String(
+      storagePolicy.storageBackend === "mongo"
+        ? (site as any).mongoSiteId || (site as any).builderSiteId || site.siteCode
+        : site.siteCode
+    ).trim();
+    const expectedBackendApiUrl = storagePolicy.storageBackend === "mongo"
+      ? String((site as any).backendApiUrl || "").trim().replace(/\/+$/g, "")
+      : "";
+    if (!deploymentConfig) throw new Error("browser-deploy-generated-config-evidence-required");
+    if (deploymentConfig.storageBackend !== storagePolicy.storageBackend) throw new Error("browser-deploy-storage-backend-mismatch");
+    if (deploymentConfig.storageBackendSource !== storagePolicy.source) throw new Error("browser-deploy-storage-backend-source-mismatch");
+    if (!stringValue(deploymentConfig.siteId)) throw new Error("browser-deploy-storage-site-id-required");
+    if (stringValue(deploymentConfig.siteId) !== expectedStorageSiteId) throw new Error("browser-deploy-storage-site-id-mismatch");
+    if (storagePolicy.storageBackend === "mongo" && !stringValue(deploymentConfig.backendApiUrl)) {
+      throw new Error("browser-deploy-mongo-backend-api-url-required");
+    }
+    if (stringValue(deploymentConfig.backendApiUrl).replace(/\/+$/g, "") !== expectedBackendApiUrl) {
+      throw new Error("browser-deploy-backend-api-url-mismatch");
+    }
+    const expectedSharePointSiteUrl = String(site.sharePointSiteUrl || "").replace(/\/+$/g, "");
+    if (stringValue(deploymentConfig.sharePointSiteUrl).replace(/\/+$/g, "") !== expectedSharePointSiteUrl) {
+      throw new Error("browser-deploy-sharepoint-site-root-mismatch");
+    }
+    if (stringValue(deploymentConfig.allowedSiteRoot).replace(/\/+$/g, "") !== expectedSharePointSiteUrl) {
+      throw new Error("browser-deploy-allowed-site-root-mismatch");
+    }
+  }
   const browserEvidenceBypassEnvVar = getDangerousValidationBypassEnvVar("browser-evidence-gates");
   const browserEvidenceBypassed = successRequested && !allVerified && isDangerousValidationBypassEnabled("browser-evidence-gates");
   if (successRequested && !allVerified && !browserEvidenceBypassed) throw new Error("browser-deploy-success-evidence-invalid");
@@ -1191,7 +1250,11 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
     releaseId: release._id,
     fromVersion,
     toVersion: release.version,
-    deploymentKind: "deploy",
+    deploymentKind: deploymentConfig?.operation === "rollback" ? "rollback" : "deploy",
+    storageBackend: storagePolicy.storageBackend,
+    storageBackendSource: storagePolicy.source,
+    storageSiteId: stringValue(deploymentConfig?.siteId),
+    backendApiUrl: storagePolicy.storageBackend === "mongo" ? stringValue(deploymentConfig?.backendApiUrl) : "",
     status: deploymentStatus,
     startedAt,
     finishedAt,
@@ -1242,7 +1305,8 @@ export async function recordBrowserSharePointDeploymentEvidence(params: {
     site.lastError = "";
 
     const health = site.health as any;
-    const storageBackend = String((site as any).storageBackend || "unknown");
+    const storageBackend = storagePolicy.storageBackend;
+    (site as any).storageBackend = storageBackend;
     const createFlow = String((site as any).creationMode || "") === "create-new";
     const sharePointReady = health.siteDbExists === true && health.usersDbExists === true && health.distExists === true && health.indexExists === true;
     const txtReady = storageBackend === "txt" && sharePointReady && health.txtFilesExist === true;
@@ -1336,6 +1400,16 @@ export async function buildSiteDeployPlan(
   const artifactValidationBypassEnvVar = getDangerousValidationBypassEnvVar("release-artifact-validation");
   const artifactValidationBypassed = Boolean(artifactValidationBypassEnvVar);
   const artifactValidation = await validateAndPersistReleaseArtifact(release, "deploy-plan");
+  const storagePolicy = resolveProductionStorageBackendPolicy();
+  const resolvedStorageBackend = storagePolicy.storageBackend;
+  const storageSiteId = String(
+    resolvedStorageBackend === "mongo"
+      ? (site as any).mongoSiteId || (site as any).builderSiteId || site.siteCode
+      : site.siteCode
+  ).trim();
+  const backendApiUrl = resolvedStorageBackend === "mongo"
+    ? String((site as any).backendApiUrl || "").trim().replace(/\/+$/g, "")
+    : "";
   const mappedFiles: DeployPlanFile[] = artifactValidation.files.map((file) => ({
     ...file,
     targetPath: `${resolvedPaths.finalDistRoot}/${file.relativePath}`
@@ -1349,23 +1423,35 @@ export async function buildSiteDeployPlan(
     reason: staticCapabilities.reason
   };
   const readyForDeploy = artifactValidation.summary.readyForDeploy || artifactValidationBypassed;
-  const mongoDeployBlockers = String((site as any).storageBackend || "unknown") === "mongo"
+  const compatibilityBlockers = artifactValidation.summary.storageCompatibility.includes(resolvedStorageBackend)
+    ? []
+    : [`artifact-storage-incompatible:${resolvedStorageBackend}`];
+  const mongoDeployBlockers = resolvedStorageBackend === "mongo"
     ? [
-        (site as any).health?.runtimeConfigExists !== true ? "mongo-runtime-config-missing" : "",
-        (site as any).health?.runtimeConfigValid !== true ? "mongo-runtime-config-invalid-or-mismatch" : "",
+        storagePolicy.explicit !== true ? "mongo-production-selection-not-explicit" : "",
+        !backendApiUrl ? "mongo-backend-api-url-missing" : "",
+        !storageSiteId ? "mongo-site-id-missing" : "",
         (site as any).health?.dataBackendReachable !== true ? "mongo-backend-not-verified" : "",
         (site as any).health?.mongoRegistryOk !== true ? "mongo-site-registry-not-verified" : "",
         (site as any).health?.mongoCollectionOk !== true ? "mongo-safe-collection-not-verified" : "",
         (site as any).health?.mongoSeedOk !== true ? "mongo-seed-docs-not-verified" : ""
       ].filter(Boolean)
     : [];
-  const readyForDeployExecution =
-    readyForDeploy && deployPolicy.blockers.length === 0 && mongoDeployBlockers.length === 0;
+  const txtDeployBlockers = resolvedStorageBackend === "txt"
+    ? [
+        (site as any).health?.siteDbExists !== true ? "txt-site-db-not-verified" : "",
+        (site as any).health?.usersDbExists !== true ? "txt-users-db-not-verified" : "",
+        (site as any).health?.txtFilesExist !== true ? "txt-payload-not-verified" : ""
+      ].filter(Boolean)
+    : [];
   const blockers = [
     ...deployPolicy.blockers,
+    ...compatibilityBlockers,
     ...mongoDeployBlockers,
+    ...txtDeployBlockers,
     ...(artifactValidationBypassed ? [] : artifactValidation.blockers)
   ].filter(Boolean);
+  const readyForDeployExecution = readyForDeploy && blockers.length === 0;
   const currentKnownVersion = site.currentVersion || site.version || "";
   const targetDistPath = resolvedPaths.finalDistRoot;
   const missingRequirements = [
@@ -1374,6 +1460,8 @@ export async function buildSiteDeployPlan(
       ? `Deploy cannot run because the release artifact is invalid: ${artifactValidation.blockers.join(", ")}`
       : "",
     ...mongoDeployBlockers.map((blocker) => `Mongo deploy readiness blocker: ${blocker}`),
+    ...txtDeployBlockers.map((blocker) => `TXT deploy readiness blocker: ${blocker}`),
+    ...compatibilityBlockers.map((blocker) => `Artifact compatibility blocker: ${blocker}`),
     ...deployPolicy.blockers
   ].filter(Boolean);
 
@@ -1403,7 +1491,10 @@ export async function buildSiteDeployPlan(
       siteCode: site.siteCode,
       siteDisplayName: site.displayName,
       environment: String((site as any).environment || "unknown"),
-      storageBackend: String((site as any).storageBackend || "unknown"),
+      storageBackend: resolvedStorageBackend,
+      storageBackendSource: storagePolicy.source,
+      storageSiteId,
+      backendApiUrl,
       runtimeConfigPath: String((site as any).runtimeConfigPath || resolvedPaths.runtimeConfigPath || ""),
       dataBackendStatus: String((site as any).dataBackendStatus || "unknown"),
       sharePointSiteUrl: site.sharePointSiteUrl,
@@ -1457,8 +1548,9 @@ export async function buildSiteDeployPlan(
       artifactValidationBypassed ? `${artifactValidationBypassEnvVar}=true: release artifact validation blockers are not blocking this dry-run/queue path.` : "",
       artifactValidation.summary.hasManifest ? "Deploy file list was loaded from sharepoint-deploy-manifest.json." : "No deploy manifest was found; file inventory was generated from the artifact folder.",
       skippedRuntimeConfigFiles.length
-        ? `Mongo runtime config preservation: skipped ${skippedRuntimeConfigFiles.length} runtime config file(s) from deploy plan.`
+        ? `Artifact runtime selector ignored: ${skippedRuntimeConfigFiles.length} runtime config file(s) will be replaced by the Hub-generated ${resolvedStorageBackend} selector.`
         : "",
+      `Deployment backend resolved to ${resolvedStorageBackend} by ${storagePolicy.source}.`,
       artifactValidation.summary.storageCompatibility.length
         ? `Artifact compatibility: ${artifactValidation.summary.storageCompatibility.join(", ")} (${artifactValidation.summary.artifactKind}).`
         : "Artifact storage compatibility is unknown; Create New Site will not auto-select it.",
@@ -1466,7 +1558,7 @@ export async function buildSiteDeployPlan(
       ...targetInventory.notes,
       "Deploy execution reads every uploaded file back from SharePoint and compares sha256/size before marking success.",
       "Browser deploy uses the user's SharePoint browser session, per-site contextinfo Digest, Files/add upload, and browser read-back evidence.",
-      staticCapabilities.reason ? `Server SharePoint is disabled and not required for browser deploy: ${staticCapabilities.reason}` : ""
+      staticCapabilities.reason ? `Browser deploy is the supported SharePoint path: ${staticCapabilities.reason}` : ""
     ]
       .filter(Boolean)
   };
@@ -1637,7 +1729,7 @@ export async function executeSharePointDeploy(input: {
   releaseId: string;
   deploymentId: string;
 }): Promise<never> {
-  logger.info("releases", "Server SharePoint deploy execution blocked", {
+  logger.info("releases", "Backend deploy execution blocked because Browser SharePoint execution is required", {
     siteId: input.siteId,
     releaseId: input.releaseId,
     deploymentId: input.deploymentId

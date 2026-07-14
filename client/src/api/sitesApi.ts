@@ -1,8 +1,9 @@
 import { Site, SitesStats, SiteHealth } from "../types/site";
+import { API_BASE_URL } from "../config/hubConfig";
 import { clientLogger } from "../utils/logger";
 import { normalizePersonalNumber as normalizeHubPersonalNumber } from "../utils/personalNumber";
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4100/api";
+export { API_BASE_URL } from "../config/hubConfig";
 export const HUB_PERSONAL_NUMBER_STORAGE_KEY = "sitebuilderHubPersonalNumber";
 
 type ApiSuccess<T> = { ok: true; data: T; meta?: Record<string, unknown> };
@@ -514,10 +515,35 @@ export type RuntimeConfigValidationResult = {
   evidence?: {
     attemptedPaths?: string[];
     selectedPath?: string;
+    connectorMode?: "browser-sharepoint";
     sizeBytes?: number;
     httpStatus?: number;
+    statusText?: string;
+    contentType?: string;
+    sha256?: string;
+    authBlocked?: boolean;
+    ok?: boolean;
     error?: string;
   };
+  preservedLastGoodEvidence?: boolean;
+  refreshFailure?: RuntimeConfigValidationResult;
+};
+
+export type BrowserRuntimeConfigEvidenceInput = {
+  checkedAt?: string;
+  connectorMode: "browser-sharepoint";
+  targetSharePointSiteUrl?: string;
+  runtimeConfigPath?: string;
+  runtimeConfigUrl?: string;
+  readStatus?: RuntimeConfigValidationResult["readStatus"];
+  storageBackend?: RuntimeConfigValidationResult["storageBackend"];
+  backendApiUrl?: string;
+  backendApiUrlHost?: string;
+  builderSiteId?: string;
+  apiKeyStatus?: RuntimeConfigValidationResult["apiKeyStatus"];
+  belongsToSite?: boolean;
+  warnings?: string[];
+  evidence?: RuntimeConfigValidationResult["evidence"];
 };
 
 export type BuilderMongoHealthResult = {
@@ -666,6 +692,9 @@ export type MongoCreateBrowserEvidenceInput = {
     uploaded?: boolean;
     verified?: boolean;
     storageBackend?: string;
+    storageBackendSource?: string;
+    storageSiteId?: string;
+    backendApiUrl?: string;
     backendApiUrlHost?: string;
     siteId?: string;
     apiKeyConfigured?: boolean;
@@ -744,7 +773,7 @@ export type TxtToMongoMigrationResult = {
     evidence?: unknown;
   };
   health?: BuilderMongoHealthResult;
-  finalStatus: "runtime-config-required" | "failed";
+  finalStatus: "activation-required" | "failed";
   warnings: string[];
 };
 
@@ -846,6 +875,95 @@ export type SharePointBackupInventory = {
     readOk: boolean;
   };
   notes: string[];
+};
+
+export type BackupCapabilityResult = {
+  site: Site;
+  capability: NonNullable<Site["recoveryState"]>["backupCapability"];
+  latestInventoryRefresh?: NonNullable<Site["recoveryState"]>["latestInventoryRefresh"];
+  mongoBackupInventory?: NonNullable<Site["recoveryState"]>["mongoBackupInventory"];
+};
+
+export type BrowserBackupInventoryEvidencePayload = SharePointBackupInventory & {
+  connectorMode: "browser-sharepoint";
+  targetSiteUrl?: string;
+};
+
+export type BrowserBackupInventoryEvidenceResult = {
+  site: Site;
+  latestInventoryRefresh: NonNullable<Site["recoveryState"]>["latestInventoryRefresh"];
+  lastSuccessfulInventorySnapshot?: unknown;
+};
+
+export type BackupScheduleSettings = {
+  enabled: boolean;
+  paused?: boolean;
+  frequency: "daily" | "weekly" | "monthly" | "custom";
+  daysOfWeek?: number[];
+  dayOfMonth?: number;
+  timeOfDay: string;
+  timezone: string;
+  intervalMinutes?: number;
+  retention?: {
+    mode: "none" | "count" | "days" | "count-and-days";
+    keepLast?: number;
+    deleteOlderThanDays?: number;
+  };
+  executionMode?: "browser-manual" | "builder-backend" | "backend-service-auth-required" | "not-configured";
+  nextRunAt?: string;
+  lastRunAt?: string;
+  lastRunStatus?: "unknown" | "queued" | "succeeded" | "failed" | "blocked";
+  lastQueuedAt?: string;
+  lastJobId?: string;
+  failureCount?: number;
+  lastError?: string;
+  savedAt?: string;
+  savedBy?: string;
+};
+
+export type BackupScheduleResult = {
+  site: Site;
+  schedule: BackupScheduleSettings;
+  execution: {
+    mode: "browser-manual" | "builder-backend" | "backend-service-auth-required" | "not-configured";
+    unattendedSupported: boolean;
+    blocker?: string;
+  };
+};
+
+export type RestoreReviewResult = {
+  generatedAt: string;
+  requestedBy: string;
+  reason?: string;
+  site: {
+    id: string;
+    siteCode: string;
+    displayName: string;
+    storageBackend?: string;
+  };
+  backup: Backup;
+  sourceType: "mongo" | "txt-sharepoint";
+  connectorMode: "builder-backend" | "browser-sharepoint";
+  canExecute: boolean;
+  blockers: string[];
+  nextStep: string;
+  impactPreview: {
+    sourceType: "mongo" | "txt-sharepoint";
+    connectorMode: "builder-backend" | "browser-sharepoint";
+    backupId: string;
+    backupExternalId: string;
+    backupStatus?: string;
+    verificationStatus?: string;
+    willOverwriteCount: number;
+    willOverwrite: string[];
+    backupSources: string[];
+    requireCurrentStateBackup: boolean;
+    requireTypedConfirmation: string;
+    requireReason: boolean;
+    risks: string[];
+  };
+  preRestoreBackupSafety?: unknown;
+  files: BrowserRestoreOperationPlan["files"];
 };
 
 export type SiteProvisionPlan = {
@@ -952,11 +1070,14 @@ export type OperationCapabilities = {
     reason?: string;
   };
   storageBackends?: {
+    sourceMatrix?: DataSourceMatrix;
     supported: Array<"txt" | "mongo" | "unknown" | string>;
     txt?: {
       sourceOfTruth?: string;
       backupMode?: string;
       adminSource?: string;
+      hostingRuntimeConfig?: string;
+      hubEvidence?: string;
     };
     mongo?: {
       sourceOfTruth?: string;
@@ -968,6 +1089,9 @@ export type OperationCapabilities = {
       rawApiKeysExposed?: boolean;
       backupMode?: string;
       adminSource?: string;
+      hostingRuntimeConfig?: string;
+      sharePointAccessChecks?: string;
+      hubEvidence?: string;
     };
   };
   sharePointOperationInventory?: Array<{
@@ -995,6 +1119,74 @@ export type OperationCapabilities = {
     gates: Array<{ gate: string; envVar: string; active: true; description: string }>;
   };
   operations: Record<string, { available: boolean; writeRequired: boolean; reason?: string }>;
+};
+
+export type BrowserSharePointStatus = "connected" | "failed" | "not_checked" | "refreshing";
+export type BuilderBackendStatus = "configured" | "reachable" | "failed" | "not_configured" | "not_relevant";
+
+export type DataSourceMatrix = {
+  txt: {
+    appData: "browser-sharepoint-txt";
+    backupInventory: "browser-sharepoint";
+    adminReads: "browser-sharepoint";
+    hostingRuntimeConfig: "browser-sharepoint";
+    hubEvidence: "hub-mongo";
+  };
+  mongo: {
+    appData: "builder-backend-mongo";
+    seedRuntimeData: "builder-backend-mongo";
+    backupCapabilityInventory: "builder-backend-mongo";
+    hostingRuntimeConfig: "browser-sharepoint";
+    sharePointAccessChecks: "browser-sharepoint";
+    hubEvidence: "hub-mongo";
+  };
+};
+
+export type OperationalStatusSnapshot = {
+  generatedAt: string;
+  hubApi: {
+    status: "connected" | "failed";
+    checkedAt: string;
+    message: string;
+  };
+  hubMongo: {
+    status: "connected" | "failed" | "unknown";
+    checkedAt: string;
+    message: string;
+  };
+  browserSharePoint: {
+    status: BrowserSharePointStatus;
+    checkedAt?: string;
+    source: "Browser SharePoint" | "cached evidence";
+    targetSharePointSiteUrl?: string;
+    siteId?: string;
+    siteCode?: string;
+    message: string;
+    nextStep: string;
+  };
+  builderBackend: {
+    status: BuilderBackendStatus;
+    checkedAt?: string;
+    configured: boolean;
+    reachable?: boolean;
+    backendApiUrlHost?: string;
+    siteId?: string;
+    message: string;
+    nextStep: string;
+  };
+  currentIdentity: {
+    mode: "sharepoint-user" | "explicit-owner" | "local-dev-fallback" | "api-key" | "unknown";
+    label: string;
+    source?: string;
+  };
+  operationMode: {
+    readOnlyBrowserChecksAvailable: boolean;
+    browserSharePointWritesAvailable: boolean;
+    builderBackendMongoOperationsAvailable: boolean;
+    legacyBackendSharePointAvailable: false;
+    label: string;
+  };
+  dataSourceMatrix: DataSourceMatrix;
 };
 
 export type BuilderBackendOption = {
@@ -1069,6 +1261,9 @@ export type DeployPlan = {
     siteDisplayName: string;
     environment: string;
     storageBackend?: string;
+    storageBackendSource?: string;
+    storageSiteId?: string;
+    backendApiUrl?: string;
     runtimeConfigPath?: string;
     dataBackendStatus?: string;
     sharePointSiteUrl: string;
@@ -1458,6 +1653,16 @@ export type BrowserDeployEvidencePayload = {
   finalStatus: "success" | "failed";
   versionBefore?: string;
   versionAfter?: string;
+  deploymentConfig?: {
+    storageBackend: "txt" | "mongo";
+    storageBackendSource: string;
+    siteId: string;
+    backendApiUrl: string;
+    allowedSiteRoot: string;
+    sharePointSiteUrl: string;
+    deployedAt: string;
+    operation: "deploy" | "rollback";
+  };
 };
 
 export type BrowserBackupEvidencePayload = {
@@ -1995,6 +2200,23 @@ async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
 
 async function parseResponse<T>(response: Response): Promise<ApiSuccess<T>> {
   const requestId = response.headers.get("x-request-id") || "";
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.toLowerCase().includes("json")) {
+    const body = await response.text().catch(() => "");
+    const looksLikeHtml = body.trimStart().startsWith("<");
+    clientLogger.error("api", "API response was not JSON", {
+      requestId,
+      url: response.url,
+      status: response.status,
+      contentType,
+      looksLikeHtml,
+      apiBaseUrl: API_BASE_URL
+    });
+    if (looksLikeHtml) {
+      throw new Error(`כתובת ה־API שגויה: התקבלה תשובת HTML במקום JSON. כרגע ה־Hub פונה אל ${API_BASE_URL}. עדכנו hub-config.js או VITE_API_BASE_URL לכתובת שרת ה־Hub.`);
+    }
+    throw new Error("תגובת ה־API אינה JSON תקין");
+  }
   let payload: ApiSuccess<T> | ApiError;
   try {
     payload = (await response.json()) as ApiSuccess<T> | ApiError;
@@ -2140,6 +2362,13 @@ export const sitesApi = {
       await apiFetch(`${API_BASE_URL}/sites/${id}/runtime-config/validate`, {
         method: "POST",
         ...asJson({})
+      })
+    ),
+  recordBrowserRuntimeConfigEvidence: async (id: string, evidence: BrowserRuntimeConfigEvidenceInput) =>
+    parseResponse<RuntimeConfigValidationResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${id}/runtime-config/browser-evidence`, {
+        method: "POST",
+        ...asJson(evidence)
       })
     ),
   runMongoBackendHealth: async (id: string) =>
@@ -2359,6 +2588,29 @@ export const sitesApi = {
     parseResponse<SharePointBackupInventory>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/backups/inventory?includeFiles=${includeFiles ? "true" : "false"}`)
     ),
+  refreshBackupCapability: async (siteId: string) =>
+    parseResponse<BackupCapabilityResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${siteId}/backups/capability`, {
+        method: "POST",
+        ...asJson({})
+      })
+    ),
+  recordBrowserBackupInventoryEvidence: async (siteId: string, payload: BrowserBackupInventoryEvidencePayload) =>
+    parseResponse<BrowserBackupInventoryEvidenceResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${siteId}/backups/inventory/browser-evidence`, {
+        method: "POST",
+        ...asJson(payload)
+      })
+    ),
+  getBackupSchedule: async (siteId: string) =>
+    parseResponse<BackupScheduleResult>(await apiFetch(`${API_BASE_URL}/sites/${siteId}/backups/schedule`)),
+  saveBackupSchedule: async (siteId: string, schedule: BackupScheduleSettings) =>
+    parseResponse<BackupScheduleResult>(
+      await apiFetch(`${API_BASE_URL}/sites/${siteId}/backups/schedule`, {
+        method: "PUT",
+        ...asJson(schedule)
+      })
+    ),
   siteBackupPlan: async (siteId: string) =>
     parseResponse<BackupPlan>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/backups/plan`, {
@@ -2367,7 +2619,7 @@ export const sitesApi = {
       })
     ),
   runSiteBackup: async (siteId: string) =>
-    parseResponse<{ job: Job; browserOperationPlan?: BrowserBackupOperationPlan; connectorMode?: "browser-sharepoint" | "backend-sharepoint"; executionMode?: string; message?: string }>(
+    parseResponse<{ job: Job; browserOperationPlan?: BrowserBackupOperationPlan; connectorMode?: "browser-sharepoint" | "backend-sharepoint"; executionMode?: string; message?: string; requiresApproval?: boolean; approvalStatus?: string }>(
       await apiFetch(`${API_BASE_URL}/sites/${siteId}/backups`, {
         method: "POST",
         ...asJson({})
@@ -2415,11 +2667,18 @@ export const sitesApi = {
         ...asJson({ notes })
       })
     ),
+  restoreReview: async (backupId: string, reason = "") =>
+    parseResponse<RestoreReviewResult>(
+      await apiFetch(`${API_BASE_URL}/backups/${backupId}/restore-review`, {
+        method: "POST",
+        ...asJson(reason ? { reason } : {})
+      })
+    ),
   queueRestoreBackup: async (backupId: string, notes = "") =>
-    parseResponse<{ job: Job; backup: Backup; browserOperationPlan?: BrowserRestoreOperationPlan; connectorMode?: "browser-sharepoint"; executionMode?: string; message?: string }>(
+    parseResponse<{ job: Job; backup: Backup; browserOperationPlan?: BrowserRestoreOperationPlan; connectorMode?: "browser-sharepoint"; executionMode?: string; message?: string; requiresApproval?: boolean; approvalStatus?: string }>(
       await apiFetch(`${API_BASE_URL}/backups/${backupId}/restore`, {
         method: "POST",
-        ...asJson(notes ? { notes } : {})
+        ...asJson({ notes })
       })
     ),
   recordBrowserRestoreEvidence: async (backupId: string, payload: BrowserRestoreEvidencePayload) =>
@@ -2557,6 +2816,7 @@ export const sitesApi = {
       })
     ),
   operationCapabilities: async () => parseResponse<OperationCapabilities>(await apiFetch(`${API_BASE_URL}/operations/capabilities`)),
+  operationalStatus: async () => parseResponse<OperationalStatusSnapshot>(await apiFetch(`${API_BASE_URL}/operations/status`)),
   siteOperationsSummary: async (siteId: string) => parseResponse<SiteOperationsSummary>(await apiFetch(`${API_BASE_URL}/operations/sites/${siteId}/summary`)),
   diagnostics: async (siteId?: string) => parseResponse<DiagnosticsResult>(await apiFetch(`${API_BASE_URL}/diagnostics${siteId ? `?siteId=${encodeURIComponent(siteId)}` : ""}`)),
   runSharePointDiagnostics: async (siteId?: string) =>

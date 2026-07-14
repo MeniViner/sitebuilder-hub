@@ -2,6 +2,7 @@ import type {
   AdminTxtRepairPlan,
   Backup,
   BackupRestoreEvidence,
+  BrowserRuntimeConfigEvidenceInput,
   BrowserRestoreOperationPlan,
   BrowserSiteOperationEvidencePayload,
   DeploymentVerificationEvidence,
@@ -82,6 +83,183 @@ const defaultTxtSeedFiles = (site: Site, paths: SiteBuilderResolvedPaths) => [
   { path: paths.txtFiles.externalLinks, content: JSON.stringify([], null, 2) },
   { path: paths.txtFiles.gantt, content: JSON.stringify([], null, 2) }
 ];
+
+const RUNTIME_CONFIG_FILENAMES = ["sitebuilder-runtime-config.json", "runtime-config.json"];
+
+const uniqueRuntimeConfigCandidates = (site: Site, paths: SiteBuilderResolvedPaths) =>
+  [
+    site.runtimeConfigPath,
+    paths.runtimeConfigPath,
+    ...RUNTIME_CONFIG_FILENAMES.map((filename) => `${paths.finalDistRoot}/${filename}`)
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((item, index, values) => values.indexOf(item) === index);
+
+const absoluteRuntimeConfigUrl = (paths: SiteBuilderResolvedPaths, serverRelativePath: string) =>
+  `https://${paths.host}${serverRelativePath.startsWith("/") ? serverRelativePath : `/${serverRelativePath}`}`;
+
+const redactBackendApiUrl = (value: unknown) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return raw.replace(/[?#].*$/g, "").replace(/\/+$/g, "");
+  }
+};
+
+const normalizeRuntimeStorageBackend = (value: unknown): BrowserRuntimeConfigEvidenceInput["storageBackend"] => {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "txt" || normalized === "mongo" || normalized === "unknown" ? normalized : normalized ? "unknown" : "";
+};
+
+const runtimeApiKeyStatus = (parsed: Record<string, unknown>) => {
+  const value = String(parsed.apiKey || parsed.api_key || parsed.backendApiKey || parsed.builderApiKey || "").trim();
+  return value ? "configured" as const : "missing" as const;
+};
+
+const runtimeConfigBelongsToSite = (site: Site, builderSiteId: string, storageBackend: string) => {
+  const expectedIds = [site.builderSiteId, site.mongoSiteId, site.siteCode].map((item) => String(item || "").trim()).filter(Boolean);
+  if (builderSiteId) return expectedIds.includes(builderSiteId);
+  return storageBackend === "txt" || storageBackend === "";
+};
+
+export async function readBrowserRuntimeConfig(site: Site): Promise<BrowserRuntimeConfigEvidenceInput> {
+  const paths = resolveSiteBuilderPaths({
+    siteCode: site.siteCode,
+    sharePointHost: site.sharePointHost,
+    sharePointSiteUrl: site.sharePointSiteUrl || site.resolvedPaths?.sharePointSiteUrl,
+    siteDbLibrary: site.siteDbLibrary || site.resolvedPaths?.siteDbLibrary,
+    usersDbLibrary: site.usersDbLibrary || site.resolvedPaths?.usersDbLibrary,
+    bootstrapLibrary: site.bootstrapLibrary || site.resolvedPaths?.bootstrapLibrary,
+    bootstrapFolder: site.bootstrapFolder || site.resolvedPaths?.bootstrapFolder,
+    widgetsDbTarget: site.widgetsDbTarget || site.resolvedPaths?.widgetsDbTarget,
+    runtimeConfigPath: site.runtimeConfigPath || site.resolvedPaths?.runtimeConfigPath
+  });
+  if (!paths) throw new Error("לא ניתן לחשב נתיב runtime config לאתר");
+
+  const targetSiteUrl = normalizeSharePointSiteUrl(paths.sharePointSiteUrl || site.sharePointSiteUrl);
+  const attemptedPaths = uniqueRuntimeConfigCandidates(site, paths);
+  const selectedPath = attemptedPaths[0] || paths.runtimeConfigPath;
+  const checkedAt = new Date().toISOString();
+
+  for (const path of attemptedPaths) {
+    const read = await readFileForBrowserOperation(targetSiteUrl, path);
+    const baseEvidence = {
+      attemptedPaths,
+      selectedPath: path,
+      connectorMode: "browser-sharepoint" as const,
+      sizeBytes: read.sizeBytes,
+      httpStatus: read.status,
+      statusText: read.statusText,
+      contentType: read.contentType,
+      sha256: read.sha256,
+      authBlocked: read.authBlocked,
+      ok: read.ok,
+      error: read.error
+    };
+
+    if (!read.ok) {
+      if (read.authBlocked) {
+        return {
+          checkedAt,
+          connectorMode: "browser-sharepoint",
+          targetSharePointSiteUrl: targetSiteUrl,
+          runtimeConfigPath: path,
+          runtimeConfigUrl: absoluteRuntimeConfigUrl(paths, path),
+          readStatus: "auth-blocked",
+          apiKeyStatus: "unknown",
+          belongsToSite: false,
+          warnings: ["הדפדפן לא מורשה לקרוא את runtime config באתר היעד."],
+          evidence: baseEvidence
+        };
+      }
+      if (read.status === 404) continue;
+      return {
+        checkedAt,
+        connectorMode: "browser-sharepoint",
+        targetSharePointSiteUrl: targetSiteUrl,
+        runtimeConfigPath: path,
+        runtimeConfigUrl: absoluteRuntimeConfigUrl(paths, path),
+        readStatus: "error",
+        apiKeyStatus: "unknown",
+        belongsToSite: false,
+        warnings: ["קריאת runtime config דרך הדפדפן נכשלה."],
+        evidence: baseEvidence
+      };
+    }
+
+    let parsed: Record<string, unknown>;
+    try {
+      const text = new TextDecoder("utf-8").decode(read.bytes || new ArrayBuffer(0));
+      parsed = JSON.parse(text || "{}");
+    } catch (error) {
+      return {
+        checkedAt,
+        connectorMode: "browser-sharepoint",
+        targetSharePointSiteUrl: targetSiteUrl,
+        runtimeConfigPath: path,
+        runtimeConfigUrl: absoluteRuntimeConfigUrl(paths, path),
+        readStatus: "invalid",
+        apiKeyStatus: "invalid",
+        belongsToSite: false,
+        warnings: ["runtime config נקרא דרך הדפדפן אבל אינו JSON תקין."],
+        evidence: {
+          ...baseEvidence,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      };
+    }
+
+    const storageBackend = normalizeRuntimeStorageBackend(parsed.storageBackend || parsed.dataSource || parsed.backend);
+    const backendApiUrl = String(parsed.backendApiUrl || parsed.apiBaseUrl || parsed.siteBuilderBackendUrl || "").trim();
+    const builderSiteId = String(parsed.siteId || parsed.builderSiteId || parsed.mongoSiteId || "").trim();
+    const belongsToSite = runtimeConfigBelongsToSite(site, builderSiteId, storageBackend || "");
+    const warnings = [
+      storageBackend === "mongo" && !backendApiUrl ? "runtime config של Mongo חסר backendApiUrl." : "",
+      storageBackend === "mongo" && !builderSiteId ? "runtime config של Mongo חסר siteId." : "",
+      builderSiteId && !belongsToSite ? "runtime config שייך ל־siteId אחר מהאתר שנבחר." : ""
+    ].filter(Boolean);
+
+    return {
+      checkedAt,
+      connectorMode: "browser-sharepoint",
+      targetSharePointSiteUrl: targetSiteUrl,
+      runtimeConfigPath: path,
+      runtimeConfigUrl: absoluteRuntimeConfigUrl(paths, path),
+      readStatus: belongsToSite || !builderSiteId ? "configured" : "mismatch",
+      storageBackend,
+      backendApiUrl,
+      backendApiUrlHost: redactBackendApiUrl(backendApiUrl),
+      builderSiteId,
+      apiKeyStatus: runtimeApiKeyStatus(parsed),
+      belongsToSite,
+      warnings,
+      evidence: baseEvidence
+    };
+  }
+
+  return {
+    checkedAt,
+    connectorMode: "browser-sharepoint",
+    targetSharePointSiteUrl: targetSiteUrl,
+    runtimeConfigPath: selectedPath,
+    runtimeConfigUrl: absoluteRuntimeConfigUrl(paths, selectedPath),
+    readStatus: "missing",
+    apiKeyStatus: "unknown",
+    belongsToSite: false,
+    warnings: ["לא נמצא runtime config בנתיבי היעד שנבדקו דרך הדפדפן."],
+    evidence: {
+      attemptedPaths,
+      selectedPath,
+      connectorMode: "browser-sharepoint",
+      ok: false,
+      httpStatus: 404,
+      error: "runtime-config-not-found"
+    }
+  };
+}
 
 const resolvePathsForSite = (site: Site): SiteBuilderResolvedPaths => {
   const generated = resolveSiteBuilderPaths({
@@ -215,8 +393,8 @@ export async function readBrowserTxtSnapshotForMongoMigration(site: Site): Promi
     connectorMode: "browser-sharepoint",
     sourceSharePointSiteUrl: targetSiteUrl,
     capturedAt: new Date().toISOString(),
-    overwriteMongo: true,
-    switchSiteToMongo: true,
+    overwriteMongo: false,
+    switchSiteToMongo: false,
     files
   };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, RefreshCcw, Search, SlidersHorizontal } from "lucide-react";
+import { Database, GitBranch, Globe2, HardDrive, Plus, RefreshCcw, Search, ShieldAlert, SlidersHorizontal } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { sitesApi, type BrowserDeployEvidencePayload, type DeploymentVerificationEvidence, type OperationCapabilities, type Release, type WhoAmIResult } from "../api/sitesApi";
 import { DerivedHealthStatus, Site, SiteStatus, SitesStats } from "../types/site";
@@ -7,16 +7,13 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DetailsDrawer } from "../components/DetailsDrawer";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
-import { FilterBar } from "../components/FilterBar";
-import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
 import { MetadataOnlyBadge } from "../components/MetadataOnlyBadge";
-import { GuidedFlow, ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { SiteFormModal, SiteFormSaveOptions } from "../components/SiteFormModal";
 import { SitesTable } from "../components/SitesTable";
-import { formatMb, formatNumber } from "../utils/format";
+import { formatNumber, healthStatusLabel, siteStatusLabel, versionStatusLabel } from "../utils/format";
 import { resolveSiteBuilderPaths, type SiteBuilderResolvedPaths } from "../utils/sitebuilderPaths";
 import {
   ensureSharePointDocumentLibraryBrowser,
@@ -30,9 +27,11 @@ import {
   deriveRequiredFoldersFromArtifactFilePaths,
   manifestFilesForPlan
 } from "../utils/artifactCompatibility";
-import { buildDeploymentMetadataFile, DEPLOYMENT_METADATA_FILE } from "../utils/deploymentMetadata";
+import { buildDeploymentMetadataFile, DEPLOYMENT_METADATA_FILE, RUNTIME_CONFIG_FILE } from "../utils/deploymentMetadata";
 
 type AuthUser = NonNullable<WhoAmIResult["user"]>;
+type StorageBackendFilter = "all" | "txt" | "mongo" | "unknown";
+type FocusFilter = "all" | "attention" | "backupRisk";
 
 const defaultStats: SitesStats = {
   total: 0,
@@ -114,6 +113,37 @@ const displayBackendHost = (value?: string) => {
   }
 };
 
+const storageBackendLabels: Record<StorageBackendFilter, string> = {
+  all: "כל המקורות",
+  txt: "TXT",
+  mongo: "Mongo",
+  unknown: "Unknown"
+};
+
+const focusFilterLabels: Record<FocusFilter, string> = {
+  all: "כל האתרים",
+  attention: "דורשים טיפול",
+  backupRisk: "סיכון גיבוי"
+};
+
+const validStorageBackendFilter = (value: string | null): StorageBackendFilter =>
+  value === "txt" || value === "mongo" || value === "unknown" ? value : "all";
+
+const validStatusFilter = (value: string | null): "all" | SiteStatus =>
+  value === "active" || value === "warning" || value === "failed" || value === "draft" || value === "archived" ? value : "all";
+
+const validHealthFilter = (value: string | null): "all" | DerivedHealthStatus =>
+  value === "healthy" || value === "warning" || value === "failed" || value === "unknown" ? value : "all";
+
+const validVersionFilter = (value: string | null): "all" | "outdated" | "up_to_date" | "unknown" =>
+  value === "outdated" || value === "up_to_date" || value === "unknown" ? value : "all";
+
+const validSortBy = (value: string | null): "updatedAt" | "createdAt" | "lastHealthCheckAt" | "displayName" =>
+  value === "createdAt" || value === "lastHealthCheckAt" || value === "displayName" ? value : "updatedAt";
+
+const validFocusFilter = (value: string | null): FocusFilter =>
+  value === "attention" || value === "backupRisk" ? value : "all";
+
 export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -125,6 +155,9 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
   const [statusFilter, setStatusFilter] = useState<"all" | SiteStatus>("all");
   const [healthFilter, setHealthFilter] = useState<"all" | DerivedHealthStatus>("all");
   const [versionFilter, setVersionFilter] = useState<"all" | "outdated" | "up_to_date" | "unknown">("all");
+  const [storageBackendFilter, setStorageBackendFilter] = useState<StorageBackendFilter>("all");
+  const [environmentFilter, setEnvironmentFilter] = useState("all");
+  const [focusFilter, setFocusFilter] = useState<FocusFilter>("all");
   const [sortBy, setSortBy] = useState<"updatedAt" | "createdAt" | "lastHealthCheckAt" | "displayName">("updatedAt");
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedSite, setSelectedSite] = useState<Site | null>(null);
@@ -146,7 +179,7 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
       setAllSites(response.data);
       setStats(response.meta?.stats ?? defaultStats);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "שגיאה בטעינת רשימת אתרים");
+      setError(err instanceof Error ? `לא הצלחנו לטעון את Registry האתרים. ${err.message}` : "לא הצלחנו לטעון את Registry האתרים. בדקו API או נסו שוב.");
     } finally {
       setLoading(false);
     }
@@ -178,13 +211,29 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
   useEffect(() => { void loadReleases(); }, []);
 
   useEffect(() => {
+    const query = searchParams.get("q");
+    const tab = searchParams.get("tab");
+    setSearch(query || "");
+    setStorageBackendFilter(validStorageBackendFilter(searchParams.get("storageBackend") || searchParams.get("storage")));
+    setEnvironmentFilter(searchParams.get("environment") || "all");
+    setFocusFilter(validFocusFilter(searchParams.get("focus")));
+    setStatusFilter(validStatusFilter(searchParams.get("status")));
+    setHealthFilter(validHealthFilter(searchParams.get("health")));
+    setVersionFilter(validVersionFilter(searchParams.get("version")));
+    setSortBy(validSortBy(searchParams.get("sort")));
+    if (tab === "archive" || tab === "active") setActiveTab(tab);
+  }, [searchParams]);
+
+  useEffect(() => {
     const editId = searchParams.get("edit");
     if (!editId || allSites.length === 0) return;
     const found = allSites.find((site) => site._id === editId);
     if (found) {
       setSelectedSite(found);
       setModalOpen(true);
-      setSearchParams({});
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("edit");
+      setSearchParams(nextParams, { replace: true });
     }
   }, [searchParams, allSites, setSearchParams]);
 
@@ -193,6 +242,15 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
     return allSites
       .filter((site) => activeTab === "archive" ? site.status === "archived" : site.status !== "archived")
       .filter((site) => !needle || [site.displayName, site.siteCode, site.ownerName, site.ownerPersonalNumber, site.unitName, site.ownerEmail].some((value) => (value || "").toLowerCase().includes(needle)))
+      .filter((site) => (storageBackendFilter === "all" ? true : (site.storageBackend || "unknown") === storageBackendFilter))
+      .filter((site) => (environmentFilter === "all" ? true : (site.environment || "unknown") === environmentFilter))
+      .filter((site) => {
+        if (focusFilter === "attention") {
+          return site.status === "warning" || site.status === "failed" || site.derivedHealthStatus === "warning" || site.derivedHealthStatus === "failed";
+        }
+        if (focusFilter === "backupRisk") return site.backupStatus === "failed" || !site.lastBackupAt;
+        return true;
+      })
       .filter((site) => (statusFilter === "all" ? true : site.status === statusFilter))
       .filter((site) => (healthFilter === "all" ? true : site.derivedHealthStatus === healthFilter))
       .filter((site) => (versionFilter === "all" ? true : (site.versionStatus || "unknown") === versionFilter))
@@ -200,18 +258,89 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
         if (sortBy === "displayName") return a.displayName.localeCompare(b.displayName, "he");
         return new Date((b as any)[sortBy] || 0).getTime() - new Date((a as any)[sortBy] || 0).getTime();
       });
-  }, [activeTab, allSites, search, statusFilter, healthFilter, versionFilter, sortBy]);
+  }, [activeTab, allSites, search, storageBackendFilter, environmentFilter, focusFilter, statusFilter, healthFilter, versionFilter, sortBy]);
 
   const clearFilters = () => {
     setSearch("");
+    setStorageBackendFilter("all");
+    setEnvironmentFilter("all");
+    setFocusFilter("all");
     setStatusFilter("all");
     setHealthFilter("all");
     setVersionFilter("all");
     setSortBy("updatedAt");
+    setSearchParams({}, { replace: true });
   };
 
-  const activeFilterCount = [statusFilter !== "all", healthFilter !== "all", versionFilter !== "all", sortBy !== "updatedAt"].filter(Boolean).length;
+  const activeFilterCount = [storageBackendFilter !== "all", environmentFilter !== "all", focusFilter !== "all", statusFilter !== "all", healthFilter !== "all", versionFilter !== "all", sortBy !== "updatedAt"].filter(Boolean).length;
   const hasVisibleFilters = Boolean(search.trim()) || activeFilterCount > 0;
+  const activeSites = useMemo(() => allSites.filter((site) => site.status !== "archived"), [allSites]);
+  const storageCounts = useMemo(() => ({
+    txt: activeSites.filter((site) => site.storageBackend === "txt").length,
+    mongo: activeSites.filter((site) => site.storageBackend === "mongo").length,
+    unknown: activeSites.filter((site) => !site.storageBackend || site.storageBackend === "unknown").length
+  }), [activeSites]);
+  const environmentOptions = useMemo(() =>
+    Array.from(new Set(allSites.map((site) => site.environment || "unknown"))).sort((a, b) => a.localeCompare(b, "he")),
+    [allSites]
+  );
+  const attentionSitesCount = useMemo(() => activeSites.filter((site) =>
+    site.status === "warning" || site.status === "failed" || site.derivedHealthStatus === "warning" || site.derivedHealthStatus === "failed"
+  ).length, [activeSites]);
+  const outdatedSitesCount = useMemo(() => activeSites.filter((site) => site.versionStatus === "outdated").length, [activeSites]);
+  const backupRiskCount = useMemo(() => activeSites.filter((site) => site.backupStatus === "failed" || !site.lastBackupAt).length, [activeSites]);
+  const activeListTotal = activeTab === "archive" ? stats.archived : activeSites.length;
+
+  const setStorageFilterFromUi = (value: StorageBackendFilter) => {
+    setStorageBackendFilter(value);
+    const nextParams = new URLSearchParams(searchParams);
+    if (value === "all") nextParams.delete("storageBackend");
+    else nextParams.set("storageBackend", value);
+    nextParams.delete("storage");
+    setSearchParams(nextParams, { replace: true });
+  };
+
+  const setFocusFilterFromUi = (value: FocusFilter) => {
+    setFocusFilter(value);
+    const nextParams = new URLSearchParams(searchParams);
+    if (value === "all") nextParams.delete("focus");
+    else nextParams.set("focus", value);
+    setSearchParams(nextParams, { replace: true });
+  };
+
+  const setEnvironmentFilterFromUi = (value: string) => {
+    setEnvironmentFilter(value);
+    const nextParams = new URLSearchParams(searchParams);
+    if (value === "all") nextParams.delete("environment");
+    else nextParams.set("environment", value);
+    setSearchParams(nextParams, { replace: true });
+  };
+
+  const applySiteShortcut = ({
+    storageBackend = "all",
+    focus = "all",
+    version = "all"
+  }: {
+    storageBackend?: StorageBackendFilter;
+    focus?: FocusFilter;
+    version?: "all" | "outdated" | "up_to_date" | "unknown";
+  }) => {
+    setActiveTab("active");
+    setSearch("");
+    setStorageBackendFilter(storageBackend);
+    setEnvironmentFilter("all");
+    setFocusFilter(focus);
+    setStatusFilter("all");
+    setHealthFilter("all");
+    setVersionFilter(version);
+    setSortBy("updatedAt");
+
+    const nextParams = new URLSearchParams();
+    if (storageBackend !== "all") nextParams.set("storageBackend", storageBackend);
+    if (focus !== "all") nextParams.set("focus", focus);
+    if (version !== "all") nextParams.set("version", version);
+    setSearchParams(nextParams, { replace: true });
+  };
 
   const resolveBrowserPaths = (site: Site, runtimeConfigPath?: string) => {
     const paths = resolveSiteBuilderPaths({
@@ -549,7 +678,7 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
     releaseId: string,
     options: { allowUnknownCompatibility?: boolean; storageBackend?: "txt" | "mongo" } = {}
   ) => {
-    const storageBackend = options.storageBackend || (site.storageBackend === "txt" ? "txt" : "mongo");
+    let storageBackend = options.storageBackend || (site.storageBackend === "txt" ? "txt" : "mongo");
     const manifestResponse = await sitesApi.releaseArtifactManifest(releaseId);
     const manifest = manifestResponse.data;
     const compatibility = manifest.compatibility || {
@@ -562,18 +691,11 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
       compatibilitySource: manifest.summary.compatibilitySource || "unknown",
       compatibilityWarnings: []
     };
-    const compatible = compatibility.storageCompatibility.includes(storageBackend);
-    const unknownAllowed = compatibility.storageCompatibility.length === 0 && options.allowUnknownCompatibility === true;
-    if (!compatible && !unknownAllowed) {
-      throw new Error(storageBackend === "mongo" ? "ה־Release הזה לא תואם לאתר Mongo." : "ה־Release הזה לא תואם לאתר TXT legacy.");
-    }
-    if (storageBackend === "mongo" && compatibility.preservesRuntimeConfig === false) {
-      throw new Error("ה־Release הזה אינו מצהיר שהוא שומר runtime config.");
-    }
     if (!manifest.summary.readyForDeploy) throw new Error("ה־artifact חסר או לא תקין.");
 
     const planResponse = await sitesApi.deploySiteVersionPlan(site._id, releaseId, "local-dev-owner", "browser-sharepoint");
     const plan = planResponse.data;
+    storageBackend = plan.target?.storageBackend === "mongo" ? "mongo" : "txt";
     if (!plan.summary.readyForDeploy) throw new Error("ה־artifact חסר או לא תקין.");
     if (plan.summary.readyForDeployExecution === false && plan.missingRequirements?.length) {
       throw new Error(plan.missingRequirements.join("; "));
@@ -603,7 +725,11 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
         site,
         targetSiteUrl,
         targetDistPath,
-        finalAppUrl: plan.target?.finalAppUrl || paths.finalAppUrl
+        finalAppUrl: plan.target?.finalAppUrl || paths.finalAppUrl,
+        storageBackend: plan.target?.storageBackend === "mongo" ? "mongo" : "txt",
+        storageBackendSource: plan.target?.storageBackendSource || "safe-production-default",
+        storageSiteId: plan.target?.storageSiteId || site.siteCode,
+        backendApiUrl: plan.target?.backendApiUrl || ""
       });
       const browserDeploy = await deployArtifactToSharePointBrowser({
         releaseId,
@@ -612,11 +738,9 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
         targetSiteUrl,
         targetDistPath,
         finalAppUrl: plan.target?.finalAppUrl || paths.finalAppUrl,
-        files: [...deployFiles, deploymentMetadata.file],
+        files: [...deployFiles, ...deploymentMetadata.files],
         loadArtifactFile: async (relativePath) => {
-          if (relativePath === DEPLOYMENT_METADATA_FILE) {
-            return deploymentMetadata.response;
-          }
+          if (deploymentMetadata.responses[relativePath]) return deploymentMetadata.responses[relativePath];
           return sitesApi.releaseArtifactFile(releaseId, relativePath);
         }
       });
@@ -650,7 +774,8 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
         completedAt: browserDeploy.completedAt,
         finalStatus: effectiveFinalStatus,
         versionBefore,
-        versionAfter: effectiveFinalStatus === "success" ? plan.releaseVersion : versionBefore
+        versionAfter: effectiveFinalStatus === "success" ? plan.releaseVersion : versionBefore,
+        deploymentConfig: deploymentMetadata.snapshot
       };
       const evidenceResponse = await sitesApi.recordBrowserDeployEvidence(site._id, evidencePayload);
       deployEvidenceRecorded = true;
@@ -663,6 +788,9 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
 
       const indexVerified = browserDeploy.readBackEvidence.some((item) => item.relativePath === "index.html" && item.status === "verified" && item.sizeMatches && item.sha256Matches);
       if (!indexVerified) throw new Error("index.html לא אומת אחרי הפריסה הראשונית.");
+      const generatedConfigVerified = [RUNTIME_CONFIG_FILE, DEPLOYMENT_METADATA_FILE].every((relativePath) =>
+        browserDeploy.readBackEvidence.some((item) => item.relativePath === relativePath && item.status === "verified" && item.sizeMatches && item.sha256Matches));
+      if (!generatedConfigVerified) throw new Error("קובצי תצורת הפריסה לא אומתו אחרי ההעלאה.");
 
       let runtimeConfigVerified = true;
       let runtimeEvidence: Awaited<ReturnType<typeof verifyMongoRuntimeConfigReadBack>> | null = null;
@@ -895,10 +1023,10 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="sites-page space-y-5">
       <PageHeader
         title="רשימת אתרים"
-        subtitle="ניהול registry מרכזי לאתרי Site Builder. הרשומות כאן הן מקור ניהולי ב־Mongo; פעולות SharePoint מסומנות בנפרד."
+        subtitle="Registry מרכזי לאתרי Site Builder, עם סינון מהיר לפי מקור נתונים, מצב ותקינות."
         helpKey="sites.registry"
         actions={
           <>
@@ -908,48 +1036,31 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
         }
       />
 
-      <OperationalSummary
-        title="Registry אנושי לאתרים"
-        purpose="כאן מוצאים אתר, מבינים אם הוא בריא, ורואים מה הפעולה הבטוחה הבאה בלי להיכנס מיד לנתיבי SharePoint."
-        state={`${formatNumber(activeTab === "archive" ? stats.archived : stats.active)} אתרים ${activeTab === "archive" ? "בארכיון" : "פעילים"}`}
-        attention={stats.failed
-          ? `${formatNumber(stats.failed)} אתרים בכשל. פתחו אתר אחד ובדקו Health לפני פריסה או שחזור.`
-          : stats.warning
-            ? `${formatNumber(stats.warning)} אתרים באזהרה. מומלץ לסנן ולבדוק את הסיבה.`
-            : "אין כרגע כשל רוחבי ברשימת האתרים."}
-        attentionTone={stats.failed ? "danger" : stats.warning ? "warning" : "success"}
-        nextAction={sites.length ? "חפשו אתר לפי שם, קוד, בעלים או יחידה. פעולה ראשית: פתיחת פרטי אתר." : "הוסיפו אתר קיים למעקב או צרו אתר חדש דרך האשף."}
-        blocked={operationCapabilities?.sharePoint.writeAvailable ? undefined : "פעולות שמחייבות כתיבה ל־SharePoint יוסברו וייחסמו עד שהמסלול המתאים זמין. שמירת metadata עדיין מותרת."}
-        tone={stats.failed ? "danger" : stats.warning ? "warning" : "success"}
-      >
-        <GuidedFlow
-          title="זרימת עבודה מומלצת"
-          steps={[
-            { title: "מצא אתר", description: "חפש לפי שם, קוד, בעלים או יחידה.", status: "active" },
-            { title: "בדוק מצב", description: "פתח את האתר כדי לראות תקינות, גרסה, גיבוי והרשאות.", status: "pending" },
-            { title: "בחר פעולה", description: "פריסה, גיבוי, שחזור או הרשאות רצים במסכים ייעודיים עם Review.", status: "pending" }
-          ]}
-        />
-        <ModeBoundary
-          items={[
-            { label: "הוספת אתר קיים", description: "שומרת רשומה ב־Hub ומריצה בדיקות קריאה בלבד. לא יוצרת קבצים.", tone: "info" },
-            { label: "יצירת אתר חדש", description: "אשף תכנון והקמה. רק Review סופי מפעיל כתיבה.", tone: "warning" },
-            { label: "ארכיון", description: "סימון ניהולי ב־Hub בלבד. לא מוחק קבצי SharePoint.", tone: "success" }
-          ]}
-        />
-      </OperationalSummary>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard title="סה״כ רשומות" value={formatNumber(stats.total)} icon={<SlidersHorizontal size={18} />} description="אתרים רשומים ב־Hub" tone="info" variant="inline" helpKey="sites.registry" />
-        <KpiCard title="פעילים" value={formatNumber(stats.active)} icon={<SlidersHorizontal size={18} />} description="סטטוס פעיל" tone="success" variant="inline" helpKey="site.active" />
-        <KpiCard title="דורשים טיפול" value={formatNumber(stats.warning + stats.failed)} icon={<SlidersHorizontal size={18} />} description="warning או failed" tone={stats.warning + stats.failed ? "warning" : "success"} variant="inline" helpKey="monitoring.alert" />
-        <KpiCard title="אחסון רשום" value={formatMb(stats.totalStorageMb)} icon={<SlidersHorizontal size={18} />} description="לפי metadata במערכת" tone="neutral" variant="inline" helpKey="storage" />
-      </div>
-
-      <div className="segmented-control w-fit">
-        <button className={activeTab === "active" ? "active" : ""} onClick={() => { setActiveTab("active"); setStatusFilter("all"); }} type="button">אתרים פעילים</button>
-        <button className={activeTab === "archive" ? "active" : ""} onClick={() => { setActiveTab("archive"); setStatusFilter("all"); }} type="button">ארכיון</button>
-      </div>
+      <section className="sites-command-overview">
+        <div className="sites-command-main">
+          <p className="dashboard-eyebrow">Professional Site Registry</p>
+          <h2>{formatNumber(activeListTotal)} אתרים {activeTab === "archive" ? "בארכיון" : "בתצוגה הפעילה"}</h2>
+          <p>Registry תפעולי שמוביל לפתיחת אתר, מקור נתונים, בעלים, תקינות והפעולה הבאה. ראיות טכניות נשארות במסך פרטי האתר.</p>
+        </div>
+        <div className="sites-quick-stat-grid">
+          {[
+            { key: "active", label: "פעילים", value: stats.active, detail: "פתוחים לניהול שוטף", icon: <Globe2 size={17} />, tone: "info", onClick: () => applySiteShortcut({}) },
+            { key: "archived", label: "בארכיון", value: stats.archived, detail: "מוסתרים מהתפעול השוטף", icon: <HardDrive size={17} />, tone: "info", onClick: () => { setActiveTab("archive"); setSearch(""); setSearchParams(new URLSearchParams([["tab", "archive"]]), { replace: true }); } },
+            { key: "unknown", label: "מקור לא מזוהה", value: storageCounts.unknown, detail: "Mongo/TXT דורש בדיקה", icon: <Database size={17} />, tone: storageCounts.unknown ? "warning" : "success", onClick: () => applySiteShortcut({ storageBackend: "unknown" }) },
+            { key: "attention", label: "דורשים טיפול", value: attentionSitesCount, detail: "warning או failed", icon: <ShieldAlert size={17} />, tone: attentionSitesCount ? "warning" : "success", onClick: () => applySiteShortcut({ focus: "attention" }) },
+            { key: "outdated", label: "גרסה מיושנת", value: outdatedSitesCount, detail: `${formatNumber(backupRiskCount)} עם סיכון גיבוי`, icon: <GitBranch size={17} />, tone: outdatedSitesCount ? "warning" : "success", onClick: () => applySiteShortcut({ version: "outdated" }) }
+          ].map((item) => (
+            <button key={item.key} className={`sites-quick-stat sites-quick-stat-${item.tone}`} type="button" onClick={item.onClick}>
+              <span className="sites-quick-stat-icon" aria-hidden="true">{item.icon}</span>
+              <span>
+                <small>{item.label}</small>
+                <strong className="num">{formatNumber(item.value)}</strong>
+                <em>{item.detail}</em>
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       {notice ? (
         <div className="soft-panel p-3 text-sm" style={{ color: "var(--text-strong)" }}>
@@ -959,37 +1070,75 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
 
       <SectionCard
         title={activeTab === "archive" ? "ארכיון אתרים" : "ניהול אתרים"}
-        subtitle="חיפוש, סינון ומיון לפי סטטוס, תקינות וגרסה"
+        subtitle={`${formatNumber(sites.length)} תוצאות מתוך ${formatNumber(activeListTotal)} בתצוגה הנוכחית`}
         helpKey={activeTab === "archive" ? "site.archived" : "sites.registry"}
         actions={<button className="btn btn-secondary" onClick={loadSites} type="button"><RefreshCcw size={15} />רענן</button>}
       >
-        <FilterBar actions={
-          <>
-            <button className="btn btn-secondary" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal size={15} />סינון מתקדם {activeFilterCount ? `(${activeFilterCount})` : ""}</button>
-            {hasVisibleFilters ? <button className="btn btn-ghost" onClick={clearFilters} type="button">נקה סינונים</button> : null}
-          </>
-        }>
-          <label className="block">
+        <div className="sites-list-toolbar">
+          <div className="segmented-control sites-tab-switch">
+            <button className={activeTab === "active" ? "active" : ""} onClick={() => { setActiveTab("active"); setStatusFilter("all"); }} type="button">פעילים</button>
+            <button className={activeTab === "archive" ? "active" : ""} onClick={() => { setActiveTab("archive"); setStatusFilter("all"); }} type="button">ארכיון</button>
+          </div>
+
+          <label className="sites-search-field">
             <span className="field-label">חיפוש</span>
-            <div className="relative">
+            <div className="sites-compact-search">
               <Search className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 muted" size={15} />
-              <input className="control pr-9" placeholder="שם, קוד, בעלים או יחידה" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input className="control pr-9" placeholder="שם, קוד, בעלים, יחידה" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
           </label>
-          <div className="sites-filter-summary">
-            {statusFilter !== "all" ? <span className="badge badge-info">סטטוס: {statusFilter}</span> : null}
-            {healthFilter !== "all" ? <span className="badge badge-info">תקינות: {healthFilter}</span> : null}
-            {versionFilter !== "all" ? <span className="badge badge-info">גרסה: {versionFilter}</span> : null}
-            <span className="filter-result-count">מציג {formatNumber(sites.length)} מתוך {formatNumber(activeTab === "archive" ? stats.archived : allSites.length - stats.archived)}</span>
+
+          <label>
+            <span className="field-label">מקור</span>
+            <select className="control" value={storageBackendFilter} onChange={(e) => setStorageFilterFromUi(e.target.value as StorageBackendFilter)}>
+              <option value="all">כל המקורות</option>
+              <option value="txt">TXT</option>
+              <option value="mongo">Mongo</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </label>
+
+          <label>
+            <span className="field-label">סביבה</span>
+            <select className="control" value={environmentFilter} onChange={(e) => setEnvironmentFilterFromUi(e.target.value)}>
+              <option value="all">כל הסביבות</option>
+              {environmentOptions.map((environment) => <option key={environment} value={environment}>{environment}</option>)}
+            </select>
+          </label>
+
+          <label>
+            <span className="field-label">מיקוד</span>
+            <select className="control" value={focusFilter} onChange={(e) => setFocusFilterFromUi(e.target.value as FocusFilter)}>
+              <option value="all">כל האתרים</option>
+              <option value="attention">דורשים טיפול</option>
+              <option value="backupRisk">סיכון גיבוי</option>
+            </select>
+          </label>
+
+          <div className="sites-toolbar-actions">
+            <button className="btn btn-secondary" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal size={15} />עוד</button>
+            {hasVisibleFilters ? <button className="btn btn-ghost" onClick={clearFilters} type="button">נקה</button> : null}
           </div>
-        </FilterBar>
+        </div>
+
+        <div className="sites-filter-summary sites-filter-summary-inline">
+          {storageBackendFilter !== "all" ? <span className="badge badge-info">מקור: {storageBackendLabels[storageBackendFilter]}</span> : null}
+          {environmentFilter !== "all" ? <span className="badge badge-neutral">סביבה: {environmentFilter}</span> : null}
+          {focusFilter !== "all" ? <span className="badge badge-warning">מיקוד: {focusFilterLabels[focusFilter]}</span> : null}
+          {statusFilter !== "all" ? <span className="badge badge-info">סטטוס: {siteStatusLabel(statusFilter)}</span> : null}
+          {healthFilter !== "all" ? <span className="badge badge-info">תקינות: {healthStatusLabel(healthFilter)}</span> : null}
+          {versionFilter !== "all" ? <span className="badge badge-info">גרסה: {versionStatusLabel(versionFilter)}</span> : null}
+          <span className="filter-result-count">מציג {formatNumber(sites.length)} מתוך {formatNumber(activeListTotal)}</span>
+        </div>
 
         {loading ? <LoadingState /> : null}
         {!loading && error ? <ErrorState message={error} onRetry={loadSites} /> : null}
         {!loading && !error && allSites.length === 0 ? (
-          <EmptyState title="אין עדיין אתרים" description="התחל בהוספת אתר ראשון ל־registry. הפעולה אינה יוצרת אתר SharePoint." action={<button className="btn btn-primary" onClick={() => setModalOpen(true)} type="button"><Plus size={16} />הוסף אתר</button>} />
+          <EmptyState title="אין עדיין אתרים" description="ה־Registry ריק. אפשר להוסיף אתר קיים למעקב; הפעולה אינה יוצרת אתר SharePoint." action={<button className="btn btn-primary" onClick={() => setModalOpen(true)} type="button"><Plus size={16} />הוסף אתר</button>} />
         ) : null}
-        {!loading && !error && allSites.length > 0 && sites.length === 0 ? <EmptyState title="אין תוצאות" description="שנה סינונים או נקה אותם כדי לראות אתרים." /> : null}
+        {!loading && !error && allSites.length > 0 && activeListTotal === 0 && activeTab === "active" ? <EmptyState title="אין אתרים פעילים" description="כל האתרים בארכיון או שעדיין לא נוספו אתרים לניהול שוטף." action={<button className="btn btn-secondary" type="button" onClick={() => setActiveTab("archive")}>פתח ארכיון</button>} /> : null}
+        {!loading && !error && allSites.length > 0 && activeListTotal === 0 && activeTab === "archive" ? <EmptyState title="אין אתרים בארכיון" description="לא נמצאו אתרים שהועברו לארכיון. חזרו לרשימת הפעילים כדי להמשיך לעבוד." action={<button className="btn btn-secondary" type="button" onClick={() => setActiveTab("active")}>פתח פעילים</button>} /> : null}
+        {!loading && !error && allSites.length > 0 && activeListTotal > 0 && sites.length === 0 ? <EmptyState title="אין תוצאות לסינון הזה" description="הסינון לא מצא אתרים. נסו חיפוש אחר, מקור נתונים אחר, או נקו את הסינונים." action={<button className="btn btn-secondary" type="button" onClick={clearFilters}>נקה סינונים</button>} /> : null}
         {!loading && !error && sites.length > 0 ? (
           <SitesTable
             sites={sites}
@@ -1016,6 +1165,30 @@ export function SitesPage({ authUser }: { authUser?: AuthUser | null }) {
       />
       <DetailsDrawer open={filtersOpen} title="סינון מתקדם" subtitle="סטטוס, תקינות, גרסה ומיון" onClose={() => setFiltersOpen(false)}>
         <div className="space-y-4">
+          <label className="block">
+            <span className="field-label">מקור נתונים</span>
+            <select className="control" value={storageBackendFilter} onChange={(e) => setStorageFilterFromUi(e.target.value as StorageBackendFilter)}>
+              <option value="all">כל המקורות</option>
+              <option value="txt">TXT</option>
+              <option value="mongo">Mongo</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="field-label">סביבה</span>
+            <select className="control" value={environmentFilter} onChange={(e) => setEnvironmentFilterFromUi(e.target.value)}>
+              <option value="all">כל הסביבות</option>
+              {environmentOptions.map((environment) => <option key={environment} value={environment}>{environment}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="field-label">מיקוד</span>
+            <select className="control" value={focusFilter} onChange={(e) => setFocusFilterFromUi(e.target.value as FocusFilter)}>
+              <option value="all">כל האתרים</option>
+              <option value="attention">דורשים טיפול</option>
+              <option value="backupRisk">סיכון גיבוי</option>
+            </select>
+          </label>
           <label className="block">
             <span className="field-label">סטטוס</span>
             <select className="control" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)}>

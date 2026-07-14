@@ -50,7 +50,26 @@ vi.mock("../server/src/services/sharepointOperationClient", () => ({
 }));
 vi.mock("../server/src/services/writeSafety.service", () => ({
   assertRecentVerifiedBackupForDangerousWrite: vi.fn(),
-  assertDistinctRecentVerifiedBackupForRestore: vi.fn()
+  assertDistinctRecentVerifiedBackupForRestore: vi.fn(async () => ({
+    policy: "pre-restore-current-state-backup",
+    operation: "restore",
+    required: true,
+    satisfied: true,
+    maxAgeHours: 24,
+    checkedAt: "2026-07-02T07:00:00.000Z",
+    backup: {
+      id: "pre-restore-backup",
+      backupId: "pre-restore-current",
+      status: "verified",
+      verificationStatus: "verified",
+      storagePath: "/sites/schedule/siteDB/siteAssets/Backups/current",
+      filesCount: 1,
+      sizeBytes: 12,
+      createdAt: "2026-07-02T06:00:00.000Z",
+      verificationCheckedAt: "2026-07-02T06:05:00.000Z",
+      ageHours: 1
+    }
+  }))
 }));
 vi.mock("../server/src/utils/logger", () => ({ logger: mocks.logger }));
 
@@ -178,7 +197,8 @@ describe("browser-required backup queueing", () => {
 
     const result = await enqueueBackupRestore({
       backupId: "backup-1",
-      createdBy: "owner"
+      createdBy: "owner",
+      notes: "restore drill"
     });
 
     expect(result).toMatchObject({

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { HeartPulse, RefreshCcw, ShieldCheck } from "lucide-react";
 import { SharePointHealthEvidence, SharePointHealthResult, sitesApi } from "../api/sitesApi";
@@ -17,7 +17,10 @@ import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatDateTime, formatNumber } from "../utils/format";
+import { SAFE_READ_TTL_MS, useAutoSafeRead } from "../hooks/useAutoSafeRead";
+import { useOperationalStatus } from "../components/OperationalStatusProvider";
 import { runBrowserSharePointHealthCheck } from "../utils/sharepointBrowserConnector";
+import { readBrowserRuntimeConfig } from "../utils/sharepointBrowserSiteOperations";
 
 export function HealthPage() {
   const [sites, setSites] = useState<Site[]>([]);
@@ -29,8 +32,9 @@ export function HealthPage() {
   const [busyAction, setBusyAction] = useState("");
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleInterval, setScheduleInterval] = useState(60);
+  const operationalStatus = useOperationalStatus();
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
@@ -42,7 +46,7 @@ export function HealthPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedSiteId]);
 
   useEffect(() => { load(); }, []);
 
@@ -60,10 +64,11 @@ export function HealthPage() {
     setScheduleInterval(schedule?.intervalMinutes || 60);
   }, [selectedSite?._id, selectedSite?.maintenanceSchedule?.healthCheck?.enabled, selectedSite?.maintenanceSchedule?.healthCheck?.intervalMinutes]);
 
-  const runReadOnlyFor = async (siteId = selectedSiteId) => {
+  const runReadOnlyFor = useCallback(async (siteId = selectedSiteId) => {
     if (!siteId) return;
     setSelectedSiteId(siteId);
     setBusyAction(`readonly-${siteId}`);
+    operationalStatus.setBrowserSharePointRefreshing(true);
     setError("");
     setMessage("");
     try {
@@ -72,42 +77,53 @@ export function HealthPage() {
       const browserResult = await runBrowserSharePointHealthCheck(site);
       setHealthResult(browserResult);
       await sitesApi.recordBrowserSharePointHealth(siteId, browserResult);
+      operationalStatus.recordBrowserSharePointHealth(browserResult);
       setMessage("בדיקת Browser SharePoint read-only הסתיימה ונשמרה");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "שגיאה בהרצת בדיקת SharePoint");
     } finally {
+      operationalStatus.setBrowserSharePointRefreshing(false);
       setBusyAction("");
     }
-  };
+  }, [load, operationalStatus, selectedSiteId, sites]);
 
   const runReadOnly = async () => runReadOnlyFor(selectedSiteId);
 
-  const runRuntimeConfigFor = async (siteId = selectedSiteId) => {
+  const runRuntimeConfigFor = useCallback(async (siteId = selectedSiteId) => {
     if (!siteId) return;
     setSelectedSiteId(siteId);
     setBusyAction(`runtime-${siteId}`);
+    operationalStatus.setBrowserSharePointRefreshing(true);
     setError("");
     setMessage("");
     try {
-      await sitesApi.validateRuntimeConfig(siteId);
-      setMessage("בדיקת runtime config הסתיימה ונשמרה");
+      const site = sites.find((row) => row._id === siteId);
+      if (!site) throw new Error("האתר לא נמצא ברשימת ה־Hub");
+      const browserEvidence = await readBrowserRuntimeConfig(site);
+      const result = await sitesApi.recordBrowserRuntimeConfigEvidence(siteId, browserEvidence);
+      operationalStatus.recordRuntimeConfigEvidence(result.data);
+      setMessage(result.data.preservedLastGoodEvidence
+        ? "runtime config נשאר על הראיה הטובה האחרונה; הרענון הנוכחי נכשל ונשמר בנפרד"
+        : "בדיקת runtime config דרך Browser SharePoint הסתיימה ונשמרה");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "שגיאה בבדיקת runtime config");
     } finally {
+      operationalStatus.setBrowserSharePointRefreshing(false);
       setBusyAction("");
     }
-  };
+  }, [load, operationalStatus, selectedSiteId, sites]);
 
-  const runMongoHealthFor = async (siteId = selectedSiteId) => {
+  const runMongoHealthFor = useCallback(async (siteId = selectedSiteId) => {
     if (!siteId) return;
     setSelectedSiteId(siteId);
     setBusyAction(`mongo-${siteId}`);
     setError("");
     setMessage("");
     try {
-      await sitesApi.runMongoBackendHealth(siteId);
+      const result = await sitesApi.runMongoBackendHealth(siteId);
+      operationalStatus.recordBuilderMongoHealth(result.data);
       setMessage("בדיקת Mongo backend הסתיימה ונשמרה");
       await load();
     } catch (err) {
@@ -115,7 +131,37 @@ export function HealthPage() {
     } finally {
       setBusyAction("");
     }
-  };
+  }, [load, operationalStatus, selectedSiteId]);
+
+  useAutoSafeRead({
+    guardKey: selectedSite ? `health:browser-sharepoint:${selectedSite._id}` : "",
+    checkedAt: selectedSite?.lastSharePointHostingVerificationAt || selectedSite?.lastHealthCheckAt,
+    ttlMs: SAFE_READ_TTL_MS.siteEvidence,
+    enabled: Boolean(selectedSite && !loading),
+    inFlight: Boolean(busyAction),
+    run: () => runReadOnlyFor(selectedSiteId),
+    onError: setError
+  });
+
+  useAutoSafeRead({
+    guardKey: selectedSite ? `health:runtime-config:${selectedSite._id}` : "",
+    checkedAt: selectedSite?.runtimeConfigStatus?.checkedAt || selectedSite?.lastRuntimeConfigCheckAt,
+    ttlMs: SAFE_READ_TTL_MS.siteEvidence,
+    enabled: Boolean(selectedSite && !loading),
+    inFlight: Boolean(busyAction),
+    run: () => runRuntimeConfigFor(selectedSiteId),
+    onError: setError
+  });
+
+  useAutoSafeRead({
+    guardKey: selectedSite ? `health:mongo-backend:${selectedSite._id}` : "",
+    checkedAt: selectedSite?.mongoBackendStatus?.checkedAt || selectedSite?.lastMongoHealthCheckAt,
+    ttlMs: SAFE_READ_TTL_MS.builderMongoHealth,
+    enabled: Boolean(selectedSite?.storageBackend === "mongo" && !loading),
+    inFlight: Boolean(busyAction),
+    run: () => runMongoHealthFor(selectedSiteId),
+    onError: setError
+  });
 
   const saveSchedule = async () => {
     if (!selectedSiteId) return;
@@ -383,12 +429,12 @@ export function HealthPage() {
         </>
       ) : null}
 
-      <DetailsDrawer open={Boolean(healthResult)} title="תוצאות בדיקת תקינות" subtitle={healthResult ? `${healthResult.siteCode} · ${healthResult.source || healthResult.connectorMode || "בדיקת שרת"} · ${formatDateTime(healthResult.checkedAt)}` : ""} onClose={() => setHealthResult(null)}>
+      <DetailsDrawer open={Boolean(healthResult)} title="תוצאות בדיקת תקינות" subtitle={healthResult ? `${healthResult.siteCode} · ${healthResult.source || healthResult.connectorMode || "Hub evidence"} · ${formatDateTime(healthResult.checkedAt)}` : ""} onClose={() => setHealthResult(null)}>
         {healthResult ? (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <HealthBadge status={healthResult.derivedHealthStatus as any} />
-              <span className="badge badge-info">{healthResult.source || "בדיקת שרת"}</span>
+              <span className="badge badge-info">{healthResult.source || "Hub evidence"}</span>
               <span className="num text-xs muted">{formatDateTime(healthResult.checkedAt)}</span>
             </div>
             {healthResult.evidence.length === 0 ? (

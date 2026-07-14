@@ -1,13 +1,13 @@
 import { ArchiveRestore, Archive, Edit3, ExternalLink, Eye, FolderOpen, MoreHorizontal, Trash2 } from "lucide-react";
 import { Site } from "../types/site";
-import { formatDateTime, formatMb } from "../utils/format";
+import { formatDateTime } from "../utils/format";
 import { DataTable } from "./DataTable";
 import { HealthBadge } from "./HealthBadge";
 import { StatusBadge } from "./StatusBadge";
 import { VersionBadge } from "./VersionBadge";
 
 const storageLabel = (backend?: Site["storageBackend"]) =>
-  backend === "mongo" ? "Backend Mongo" : backend === "txt" ? "קבצי SharePoint" : "לא זוהה";
+  backend === "mongo" ? "Mongo" : backend === "txt" ? "TXT" : "Unknown";
 
 const storageBadgeClass = (backend?: Site["storageBackend"]) =>
   backend === "mongo" ? "badge-info" : backend === "txt" ? "badge-success" : "badge-neutral";
@@ -35,6 +35,29 @@ const backendStatusTone = (value?: string) => {
   if (value === "missing" || value === "partial" || value === "invalid" || value === "mismatch" || value === "auth-blocked" || value === "warning") return "site-backend-state-warning";
   return "site-backend-state-neutral";
 };
+
+const backupStatusLabel = (value?: Site["backupStatus"]) => {
+  const labels: Record<string, string> = {
+    succeeded: "תקין",
+    running: "בתהליך",
+    queued: "בתור",
+    failed: "נכשל",
+    idle: "לא נבדק",
+    unknown: "לא נבדק"
+  };
+  return labels[value || "unknown"] || value || "לא נבדק";
+};
+
+const nextRecommendedAction = (site: Site) => {
+  if (!site.storageBackend || site.storageBackend === "unknown") return "זהה מקור נתונים";
+  if (site.status === "failed" || site.derivedHealthStatus === "failed") return "בדוק תקינות";
+  if (site.versionStatus === "outdated") return "בדוק פריסה";
+  if (site.backupStatus === "failed" || !site.lastBackupAt) return "בדוק גיבוי";
+  return "פתח פרטים";
+};
+
+const lastCheckedAt = (site: Site) =>
+  site.lastHealthCheckAt || site.lastVersionCheckAt || site.lastBackupAt || site.updatedAt;
 
 interface SitesTableProps {
   sites: Site[];
@@ -69,12 +92,10 @@ export function SitesTable({ sites, onEdit, onArchive, onRestore, onPermanentDel
             </div>
           )
         },
-        { key: "status", header: "סטטוס", helpKey: "job.status", width: "8rem", align: "center", render: (site: Site) => <StatusBadge status={site.status} /> },
-        { key: "health", header: "תקינות", helpKey: "health", width: "8rem", align: "center", render: (site: Site) => <HealthBadge status={site.derivedHealthStatus || "unknown"} /> },
         {
           key: "backend",
           header: "מקור נתונים",
-          width: "13rem",
+          width: "10rem",
           render: (site: Site) => (
             <div className="site-backend-cell">
               <span className={`badge ${storageBadgeClass(site.storageBackend)}`}>{storageLabel(site.storageBackend)}</span>
@@ -84,19 +105,7 @@ export function SitesTable({ sites, onEdit, onArchive, onRestore, onPermanentDel
             </div>
           )
         },
-        {
-          key: "version",
-          header: "גרסה",
-          helpKey: "version.current",
-          width: "8rem",
-          align: "center",
-          render: (site: Site) => (
-            <div className="space-y-1">
-              <span className="num text-sm font-bold">{site.currentVersion || site.version || "-"}</span>
-              <VersionBadge status={site.versionStatus || "unknown"} />
-            </div>
-          )
-        },
+        { key: "environment", header: "סביבה", width: "7rem", align: "center", render: (site: Site) => <span className="badge badge-neutral">{site.environment || "unknown"}</span> },
         {
           key: "owner",
           header: "בעלים",
@@ -109,8 +118,46 @@ export function SitesTable({ sites, onEdit, onArchive, onRestore, onPermanentDel
             </div>
           )
         },
-        { key: "updated", header: "עדכון אחרון", helpKey: "history", width: "9rem", render: (site: Site) => <span className="num text-xs">{formatDateTime(site.updatedAt || site.lastHealthCheckAt)}</span> },
-        { key: "storage", header: "נפח", helpKey: "storage", width: "6rem", align: "center", render: (site: Site) => <span className="num">{formatMb(site.storageMb)}</span> },
+        {
+          key: "readiness",
+          header: "מוכנות",
+          helpKey: "health",
+          width: "11rem",
+          render: (site: Site) => (
+            <div className="site-readiness-cell">
+              <HealthBadge status={site.derivedHealthStatus || "unknown"} />
+              <StatusBadge status={site.status} />
+            </div>
+          )
+        },
+        {
+          key: "version",
+          header: "גרסה/פריסה",
+          helpKey: "version.current",
+          width: "9rem",
+          align: "center",
+          render: (site: Site) => (
+            <div className="space-y-1">
+              <span className="num text-sm font-bold">{site.currentVersion || site.version || "-"}</span>
+              <VersionBadge status={site.versionStatus || "unknown"} />
+            </div>
+          )
+        },
+        {
+          key: "backup",
+          header: "גיבוי",
+          helpKey: "backup",
+          width: "8rem",
+          align: "center",
+          render: (site: Site) => (
+            <div className="site-backup-cell">
+              <span className={`badge ${site.backupStatus === "failed" ? "badge-danger" : site.backupStatus === "succeeded" ? "badge-success" : "badge-neutral"}`}>{backupStatusLabel(site.backupStatus)}</span>
+              <small className="num muted">{site.lastBackupAt ? formatDateTime(site.lastBackupAt) : "אין ראיה"}</small>
+            </div>
+          )
+        },
+        { key: "checked", header: "נבדק לאחרונה", helpKey: "history", width: "9rem", render: (site: Site) => <span className="num text-xs">{formatDateTime(lastCheckedAt(site))}</span> },
+        { key: "next", header: "פעולה הבאה", helpKey: "operations", width: "10rem", render: (site: Site) => <span className="site-next-action-label">{nextRecommendedAction(site)}</span> },
         {
           key: "actions",
           header: "פעולות",
@@ -119,15 +166,15 @@ export function SitesTable({ sites, onEdit, onArchive, onRestore, onPermanentDel
           align: "end",
           render: (site: Site) => (
             <div className="site-row-actions">
-              <button className="btn btn-secondary site-row-primary-action" onClick={() => onDetails(site._id)} type="button"><Eye size={14} />פרטים</button>
-              <a className="icon-btn" href={site.finalAppUrl || site.resolvedPaths?.finalAppUrl || site.sharePointSiteUrl} target="_blank" rel="noreferrer" title="פתח אתר סופי" aria-label="פתח אתר סופי">
-                <ExternalLink size={15} />
-              </a>
+              <button className="btn btn-secondary site-row-primary-action site-row-details-action" onClick={() => onDetails(site._id)} type="button"><Eye size={14} />פרטים</button>
               <details className="site-row-action-menu">
                 <summary className="icon-btn" title="פעולות נוספות" aria-label="פעולות נוספות">
                   <MoreHorizontal size={15} />
                 </summary>
                 <div className="site-row-action-menu-list">
+                  <a href={site.finalAppUrl || site.resolvedPaths?.finalAppUrl || site.sharePointSiteUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={14} />פתח אתר פעיל
+                  </a>
                   <a href={site.sharePointSiteUrl || site.resolvedPaths?.sharePointSiteUrl} target="_blank" rel="noreferrer">
                     <FolderOpen size={14} />פתח SharePoint
                   </a>
@@ -171,19 +218,30 @@ export function SitesTable({ sites, onEdit, onArchive, onRestore, onPermanentDel
           </div>
           <div className="flex flex-wrap gap-2">
             <HealthBadge status={site.derivedHealthStatus || "unknown"} />
-            <VersionBadge status={site.versionStatus || "unknown"} />
             <span className={`badge ${storageBadgeClass(site.storageBackend)}`}>{storageLabel(site.storageBackend)}</span>
-            <span className="badge badge-neutral num">{site.currentVersion || site.version || "-"}</span>
+            <span className="badge badge-neutral">{site.environment || "unknown"}</span>
           </div>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div><span className="field-label">בעלים</span><p>{site.ownerName || "-"}</p></div>
-            <div><span className="field-label">עודכן</span><p className="num">{formatDateTime(site.updatedAt || site.lastHealthCheckAt)}</p></div>
+            <div><span className="field-label">סטטוס/פעולה</span><p>{nextRecommendedAction(site)}</p></div>
+            <div><span className="field-label">גרסה</span><p><VersionBadge status={site.versionStatus || "unknown"} /></p></div>
+            <div><span className="field-label">נבדק</span><p className="num">{formatDateTime(lastCheckedAt(site))}</p></div>
           </div>
           <div className="site-mobile-actions">
-            <button className="btn btn-primary min-h-0 px-2 py-1 text-xs" onClick={() => onDetails(site._id)} type="button"><Eye size={13} />פרטים</button>
-            <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" onClick={() => onEdit(site)} type="button"><Edit3 size={13} />עריכה</button>
-            <a className="btn btn-secondary min-h-0 px-2 py-1 text-xs" href={site.finalAppUrl || site.resolvedPaths?.finalAppUrl || site.sharePointSiteUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} />פתח</a>
-            {site.status === "archived" && onRestore ? <button className="btn btn-secondary min-h-0 px-2 py-1 text-xs" onClick={() => onRestore(site)} type="button"><ArchiveRestore size={13} />שחזר</button> : null}
+            <button className="btn btn-secondary site-row-primary-action site-row-details-action" onClick={() => onDetails(site._id)} type="button"><Eye size={13} />פרטים</button>
+            <details className="site-row-action-menu">
+              <summary className="btn btn-secondary site-row-more-action" title="פעולות נוספות" aria-label="פעולות נוספות">
+                <MoreHorizontal size={13} />עוד
+              </summary>
+              <div className="site-row-action-menu-list">
+                <a href={site.finalAppUrl || site.resolvedPaths?.finalAppUrl || site.sharePointSiteUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} />פתח אתר פעיל</a>
+                <a href={site.sharePointSiteUrl || site.resolvedPaths?.sharePointSiteUrl} target="_blank" rel="noreferrer"><FolderOpen size={13} />פתח SharePoint</a>
+                <button onClick={() => onEdit(site)} type="button"><Edit3 size={13} />עריכת metadata</button>
+                {site.status === "archived" && onRestore ? <button onClick={() => onRestore(site)} type="button"><ArchiveRestore size={13} />שחזר מארכיון</button> : null}
+                {site.status === "archived" && onPermanentDelete ? <button className="danger" onClick={() => onPermanentDelete(site)} type="button"><Trash2 size={13} />מחיקה קבועה</button> : null}
+                {site.status !== "archived" ? <button onClick={() => onArchive(site)} type="button"><Archive size={13} />העבר לארכיון</button> : null}
+              </div>
+            </details>
           </div>
         </div>
       )}

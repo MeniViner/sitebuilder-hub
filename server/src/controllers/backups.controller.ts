@@ -14,19 +14,27 @@ import {
   enqueueAllBackups,
   enqueueBackupRestore,
   enqueueSiteBackup,
+  buildBackupRestoreReview,
   getBackupById,
+  getBackupSchedule,
   listBackups,
   listSiteBackups,
+  recordBrowserSharePointBackupInventoryEvidence,
   recordBrowserSharePointRestoreEvidence,
   recordBrowserSharePointBackupEvidence,
   recordBrowserSharePointBackupVerification,
+  refreshSiteBackupCapability,
+  saveBackupSchedule,
   verifyBackup
 } from "../services/backups.service";
 import {
   browserBackupEvidenceSchema,
+  browserBackupInventoryEvidenceSchema,
   browserBackupVerificationEvidenceSchema,
   browserRestoreEvidenceSchema,
+  backupScheduleSchema,
   queueRestoreSchema,
+  restoreReviewSchema,
   restorePlanSchema,
   runAllBackupsSchema,
   runSiteBackupSchema,
@@ -167,6 +175,98 @@ export const getSiteBackupInventory = async (req: Request, res: Response) => {
   }
 };
 
+export const postSiteBackupCapability = async (req: Request, res: Response) => {
+  try {
+    const result = await refreshSiteBackupCapability({
+      siteId: req.params.id,
+      actor: req.user?.name || "system"
+    });
+
+    await writeAuditLog({
+      req,
+      action: "sites.backup-capability-refresh",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: {
+        status: result.capability?.status,
+        sourceType: result.capability?.sourceType,
+        connectorMode: result.capability?.connectorMode
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const recordBrowserBackupInventoryEvidence = async (req: Request, res: Response) => {
+  try {
+    const payload = browserBackupInventoryEvidenceSchema.parse(req.body || {});
+    const result = await recordBrowserSharePointBackupInventoryEvidence({
+      siteId: req.params.id,
+      actor: req.user?.name || "browser-sharepoint",
+      input: payload
+    });
+
+    await writeAuditLog({
+      req,
+      action: "sites.browser-backup-inventory-evidence",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: {
+        connectorMode: "browser-sharepoint",
+        status: result.latestInventoryRefresh.status,
+        foldersCount: result.latestInventoryRefresh.foldersCount,
+        filesCount: result.latestInventoryRefresh.filesCount,
+        checkedAt: result.latestInventoryRefresh.checkedAt
+      }
+    });
+
+    return ok(res, result, undefined, 201);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const getSiteBackupSchedule = async (req: Request, res: Response) => {
+  try {
+    const result = await getBackupSchedule(req.params.id);
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const putSiteBackupSchedule = async (req: Request, res: Response) => {
+  try {
+    const payload = backupScheduleSchema.parse(req.body || {});
+    const result = await saveBackupSchedule({
+      siteId: req.params.id,
+      actor: req.user?.name || "system",
+      input: payload
+    });
+
+    await writeAuditLog({
+      req,
+      action: "sites.backup-schedule-save",
+      entityType: "Site",
+      entityId: req.params.id,
+      metadata: {
+        enabled: result.schedule.enabled,
+        paused: result.schedule.paused,
+        frequency: result.schedule.frequency,
+        nextRunAt: result.schedule.nextRunAt,
+        executionMode: result.execution.mode
+      }
+    });
+
+    return ok(res, result);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
 export const runAllBackups = async (req: Request, res: Response) => {
   try {
     const payload = runAllBackupsSchema.parse(req.body || {});
@@ -285,6 +385,35 @@ export const postRestorePlan = async (req: Request, res: Response) => {
     });
 
     return ok(res, backup);
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+export const postRestoreReview = async (req: Request, res: Response) => {
+  try {
+    const payload = restoreReviewSchema.parse(req.body || {});
+    const result = await buildBackupRestoreReview({
+      backupId: req.params.id,
+      actor: req.user?.name || "system",
+      reason: payload.reason
+    });
+
+    await writeAuditLog({
+      req,
+      action: "backups.restore-review",
+      entityType: "SiteBackup",
+      entityId: result.backup._id.toString(),
+      metadata: {
+        canExecute: result.canExecute,
+        blockers: result.blockers,
+        sourceType: result.sourceType,
+        connectorMode: result.connectorMode,
+        filesCount: result.files.length
+      }
+    });
+
+    return ok(res, result);
   } catch (error) {
     return handleError(error, res);
   }

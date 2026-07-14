@@ -128,4 +128,64 @@ describe("Builder Mongo backend health", () => {
     expect(result.warnings.join(" ")).toContain("רשימת הכתובות המותרות");
     expect(site.dataBackendStatus).toBe("failed");
   });
+
+  it("persists Mongo backup capability and inventory without enabling unconfirmed execution", async () => {
+    const site = siteDoc({ recoveryState: {} });
+    mocks.Site.findById.mockResolvedValue(site);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/healthz")) return jsonResponse({ ok: true, storageBackend: "mongo" });
+      if (url.endsWith("/healthz") || url.endsWith("/api/health")) return jsonResponse({ ok: false }, 404);
+      if (url.endsWith("/api/sites")) return jsonResponse({ ok: true, sites: [] });
+      if (url.endsWith("/api/sites/alphateam")) {
+        return jsonResponse({ ok: true, site: { siteId: "alphateam", safeCollectionName: "site_alphateam_123" } });
+      }
+      if (url.endsWith("/api/sites/alphateam/legacy/batch-read")) {
+        return jsonResponse({
+          ok: true,
+          results: [
+            { ok: true, key: "bihs_master_config_v1.txt" },
+            { ok: true, key: "users_data.txt" },
+            { ok: true, key: "events_data.txt" },
+            { ok: true, key: "nav_data.txt" },
+            { ok: true, key: "site_content_data.txt" },
+            { ok: true, key: "theme_data.txt" },
+            { ok: true, key: "widgets_data.txt" },
+            { ok: true, key: "external_links_data.txt" },
+            { ok: true, key: "gantt_data.txt" }
+          ]
+        });
+      }
+      if (url.endsWith("/api/sites/alphateam/backups")) {
+        return jsonResponse({
+          ok: true,
+          backups: [
+            { id: "mongo-backup-1", status: "verified", createdAt: "2026-07-02T06:00:00.000Z", sizeBytes: 42, filesCount: 9 }
+          ]
+        });
+      }
+      return jsonResponse({ ok: false }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { refreshSiteBackupCapability } = await import("../server/src/services/backups.service");
+    const result = await refreshSiteBackupCapability({ siteId: "hub-site-1", actor: "operator" });
+
+    expect(result.capability).toMatchObject({
+      status: "ready",
+      sourceType: "mongo-builder",
+      connectorMode: "builder-backend",
+      canInventory: true,
+      canRunManualBackup: false,
+      canRunScheduledBackup: false,
+      canRestore: false
+    });
+    expect(result.mongoBackupInventory.records).toHaveLength(1);
+    expect(result.latestInventoryRefresh).toMatchObject({
+      status: "success",
+      backupRecordsCount: 1
+    });
+    expect(site.recoveryState.backupCapability.blockers.join(" ")).toContain("POST /api/sites/:builderSiteId/backups");
+    expect(site.save).toHaveBeenCalled();
+  });
 });

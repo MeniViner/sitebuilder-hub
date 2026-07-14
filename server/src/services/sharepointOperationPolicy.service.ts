@@ -41,7 +41,7 @@ export type SharePointOperationPolicy = {
 };
 
 export const SERVER_SHAREPOINT_DISABLED_HE =
-  "SharePoint מתבצע רק דרך הדפדפן המחובר; השרת לא פונה ל־SharePoint.";
+  "פעולת SharePoint תרוץ מהדפדפן המחובר; ה־Hub שומר metadata/evidence בלבד.";
 
 const BROWSER_REQUIRED_HE =
   "הפעולה צריכה לרוץ דרך הדפדפן המחובר ל־SharePoint. השרת ישמור רק metadata/evidence.";
@@ -70,8 +70,8 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
   },
   "backend-health-check": {
     operation: "backend-health-check",
-    label: "Backend read-only health check",
-    uiEntryPoint: "Health schedule / legacy read-only endpoint",
+    label: "Browser-required read-only health planning",
+    uiEntryPoint: "Health schedule / browser-required read-only endpoint",
     backendRoute: "POST /api/sites/:id/health-check/sharepoint-readonly",
     controller: "sites.controller.readOnlySharePointHealthCheck",
     service: "sharepointHealth.runReadOnlySharePointHealthCheck",
@@ -83,8 +83,8 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     connectorMode: "browser-sharepoint",
     canRunFromBrowser: false,
     backendServiceAuthOnly: false,
-    currentFailureMode: "server SharePoint REST is disabled by architecture",
-    statusLabelHe: "מסלול שרת מושבת",
+    currentFailureMode: "browser-sharepoint-evidence-required",
+    statusLabelHe: "נדרש רענון דרך הדפדפן",
     blockerHe: SERVER_SHAREPOINT_DISABLED_HE
   },
   backup: {
@@ -139,7 +139,7 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "server restore is disabled; browser evidence endpoint is the supported execution path",
+    currentFailureMode: "browser evidence endpoint is the supported execution path",
     statusLabelHe: "מופעל דרך הדפדפן",
     blockerHe: BROWSER_REQUIRED_HE
   },
@@ -232,7 +232,7 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "server permissions setup is disabled; browser evidence endpoint is the supported execution path",
+    currentFailureMode: "browser evidence endpoint is the supported execution path",
     statusLabelHe: "מופעל דרך הדפדפן",
     blockerHe: BROWSER_REQUIRED_HE
   },
@@ -251,7 +251,7 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "server bootstrap is disabled; browser evidence endpoint is the supported execution path",
+    currentFailureMode: "browser evidence endpoint is the supported execution path",
     statusLabelHe: "מופעל דרך הדפדפן",
     blockerHe: BROWSER_REQUIRED_HE
   },
@@ -270,7 +270,7 @@ export const SHAREPOINT_OPERATION_POLICIES: Record<SharePointOperationName, Shar
     connectorMode: "browser-sharepoint",
     canRunFromBrowser: true,
     backendServiceAuthOnly: false,
-    currentFailureMode: "server provisioning is disabled; browser evidence endpoint is the supported execution path",
+    currentFailureMode: "browser evidence endpoint is the supported execution path",
     statusLabelHe: "מופעל דרך הדפדפן",
     blockerHe: BROWSER_REQUIRED_HE
   },

@@ -21,6 +21,7 @@ export function KpiCard({
   variant?: "hero" | "compact" | "inline";
   helpKey?: HelpContentKey | string;
 }) {
+  const valueIsText = typeof value === "string" && /[^\d\s.,:%/()+-]/.test(value);
   const toneMap = {
     neutral: { bg: "var(--surface-muted)", color: "var(--text-muted)" },
     info: { bg: "var(--info-soft)", color: "var(--info)" },
@@ -34,7 +35,7 @@ export function KpiCard({
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <p className="kpi-title"><HelpLabel helpKey={helpKey}>{title}</HelpLabel></p>
-          <p className="kpi-value">{value}</p>
+          <p className={`kpi-value ${valueIsText ? "kpi-value-text" : ""}`}>{value}</p>
         </div>
         <span className="kpi-icon" style={{ background: toneMap[tone].bg, color: toneMap[tone].color }}>
           {icon}

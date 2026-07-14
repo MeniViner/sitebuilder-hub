@@ -1,14 +1,17 @@
-import { BarChart3, BellRing, Cable, ChevronsLeft, ChevronsRight, DatabaseBackup, FileClock, FolderKanban, Gauge, GitBranchPlus, HeartPulse, HelpCircle, Settings, ShieldCheck, Users, Workflow, X } from "lucide-react";
+import { BarChart3, BellRing, Cable, ChevronsLeft, ChevronsRight, DatabaseBackup, FileClock, FlaskConical, FolderKanban, Gauge, GitBranchPlus, HeartPulse, HelpCircle, Settings, ShieldCheck, Users, Workflow, X } from "lucide-react";
 import { NavLink } from "react-router-dom";
-import { MetadataOnlyBadge } from "./MetadataOnlyBadge";
+import type { OperationalStatusSnapshot } from "../api/sitesApi";
+import { formatDateTime } from "../utils/format";
+import { useOperationalStatus } from "./OperationalStatusProvider";
 
 const navItems = [
-  { key: "command", label: "מרכז פיקוד", icon: Gauge, to: "/" },
-  { key: "sites", label: "אתרים מנוהלים", icon: FolderKanban, to: "/sites" },
-  { key: "admins", label: "הרשאות וגישה", icon: Users, to: "/admins" },
-  { key: "releases", label: "גרסאות ופריסה", icon: GitBranchPlus, to: "/releases" },
-  { key: "backup", label: "גיבוי ושחזור", icon: DatabaseBackup, to: "/backups" },
-  { key: "jobs", label: "תור פעולות", icon: Workflow, to: "/jobs" },
+  { key: "command", label: "מרכז שליטה", icon: Gauge, to: "/" },
+  { key: "dashboard-lab", label: "מעבדת דשבורד", icon: FlaskConical, to: "/dashboard-lab" },
+  { key: "sites", label: "אתרים", icon: FolderKanban, to: "/sites" },
+  { key: "admins", label: "ניהול והרשאות", icon: Users, to: "/admins" },
+  { key: "releases", label: "פריסות", icon: GitBranchPlus, to: "/releases" },
+  { key: "backup", label: "שחזור וגיבויים", icon: DatabaseBackup, to: "/backups" },
+  { key: "jobs", label: "תפעול", icon: Workflow, to: "/jobs" },
   { key: "monitoring", label: "התראות", icon: BellRing, to: "/monitoring" },
   { key: "health", label: "תקינות", icon: HeartPulse, to: "/health" },
   { key: "audit", label: "בקרה ו-Audit", icon: FileClock, to: "/audit" },
@@ -19,12 +22,104 @@ const navItems = [
 ];
 
 const navSections = [
-  { key: "command", label: "פיקוד ומשימות", items: navItems.slice(0, 1) },
-  { key: "sites", label: "אתרים וגישה", items: navItems.slice(1, 3) },
-  { key: "deploy", label: "פריסה ושחזור", items: navItems.slice(3, 5) },
-  { key: "ops", label: "תפעול ובקרה", items: navItems.slice(5, 10) },
-  { key: "system", label: "מערכת וידע", items: navItems.slice(10) }
+  { key: "command", label: "מרכז שליטה", items: navItems.filter((item) => item.key === "command") },
+  { key: "sites", label: "אתרים", items: navItems.filter((item) => item.key === "sites") },
+  { key: "deploy", label: "פריסות", items: navItems.filter((item) => item.key === "releases") },
+  { key: "recovery", label: "שחזור וגיבויים", items: navItems.filter((item) => item.key === "backup") },
+  { key: "ops", label: "תפעול", items: navItems.filter((item) => ["jobs", "monitoring", "health", "analytics"].includes(item.key)) },
+  { key: "governance", label: "ניהול והרשאות", items: navItems.filter((item) => ["admins", "audit"].includes(item.key)) },
+  { key: "system", label: "מערכת", items: navItems.filter((item) => ["diagnostics", "help", "settings", "dashboard-lab"].includes(item.key)) }
 ];
+
+type StatusTone = "success" | "warning" | "danger" | "neutral" | "info";
+
+const statusDotClass = (tone: StatusTone) => {
+  const classes = {
+    success: "badge-success",
+    warning: "badge-warning",
+    danger: "badge-danger",
+    neutral: "badge-neutral",
+    info: "badge-info"
+  };
+  return classes[tone];
+};
+
+const browserSharePointLabel = (status: OperationalStatusSnapshot["browserSharePoint"]) => {
+  if (status.status === "connected") return "Browser SharePoint מחובר";
+  if (status.status === "failed") return "חיבור SharePoint דרך הדפדפן נכשל";
+  if (status.status === "refreshing") return "מרענן Browser SharePoint";
+  return "SharePoint דרך הדפדפן עדיין לא נבדק";
+};
+
+const browserSharePointTone = (status: OperationalStatusSnapshot["browserSharePoint"]["status"]): StatusTone =>
+  status === "connected" ? "success" : status === "failed" ? "danger" : status === "refreshing" ? "info" : "neutral";
+
+const builderBackendLabel = (status: OperationalStatusSnapshot["builderBackend"]) => {
+  if (status.status === "reachable") return "Builder backend נגיש";
+  if (status.status === "configured") return "Builder backend מוגדר";
+  if (status.status === "failed") return "Builder backend נכשל";
+  if (status.status === "not_relevant") return "Builder backend לא רלוונטי";
+  return "Builder backend לא מוגדר";
+};
+
+const builderBackendTone = (status: OperationalStatusSnapshot["builderBackend"]["status"]): StatusTone =>
+  status === "reachable" ? "success" : status === "configured" ? "info" : status === "failed" ? "danger" : "neutral";
+
+function SidebarStatusRows({ collapsed }: { collapsed?: boolean }) {
+  const { status, refreshing } = useOperationalStatus();
+  const rows = [
+    {
+      key: "api",
+      label: status.hubApi.status === "connected" ? "Hub API מחובר" : "Hub API נכשל",
+      tone: status.hubApi.status === "connected" ? "success" as const : "danger" as const,
+      detail: formatDateTime(status.hubApi.checkedAt)
+    },
+    {
+      key: "mongo",
+      label: status.hubMongo.status === "connected" ? "Hub Mongo מחובר" : status.hubMongo.status === "failed" ? "Hub Mongo נכשל" : "Hub Mongo לא ידוע",
+      tone: status.hubMongo.status === "connected" ? "success" as const : status.hubMongo.status === "failed" ? "danger" as const : "neutral" as const,
+      detail: formatDateTime(status.hubMongo.checkedAt)
+    },
+    {
+      key: "browser-sp",
+      label: browserSharePointLabel(status.browserSharePoint),
+      tone: browserSharePointTone(status.browserSharePoint.status),
+      detail: status.browserSharePoint.checkedAt ? formatDateTime(status.browserSharePoint.checkedAt) : status.browserSharePoint.nextStep
+    },
+    {
+      key: "builder",
+      label: builderBackendLabel(status.builderBackend),
+      tone: builderBackendTone(status.builderBackend.status),
+      detail: status.builderBackend.checkedAt ? formatDateTime(status.builderBackend.checkedAt) : status.builderBackend.nextStep
+    },
+    {
+      key: "identity",
+      label: status.currentIdentity.label,
+      tone: status.currentIdentity.mode === "sharepoint-user" || status.currentIdentity.mode === "explicit-owner" ? "success" as const : status.currentIdentity.mode === "local-dev-fallback" ? "warning" as const : "neutral" as const,
+      detail: status.currentIdentity.mode
+    }
+  ];
+
+  if (collapsed) {
+    return (
+      <div className="sidebar-status-dots" aria-hidden="true">
+        {rows.slice(0, 4).map((row) => <span key={row.key} className={`sidebar-status-dot ${statusDotClass(row.tone)}`} />)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="sidebar-status-compact">
+      <div className="sidebar-status-summary">
+        {rows.slice(0, 4).map((row) => (
+          <span key={row.key} className={`sidebar-status-summary-dot ${statusDotClass(row.tone)}`} title={`${row.label}: ${row.detail}`} />
+        ))}
+        <span>{refreshing ? "מרענן סטטוס..." : status.operationMode.browserSharePointWritesAvailable || status.operationMode.builderBackendMongoOperationsAvailable ? "כתיבה זמינה" : "בדיקה ללא שינוי"}</span>
+      </div>
+      <p>{status.currentIdentity.label}</p>
+    </div>
+  );
+}
 
 function SidebarContent({
   collapsed = false,
@@ -93,18 +188,9 @@ function SidebarContent({
           {!collapsed ? <span>מצב פעולות</span> : null}
         </div>
         {!collapsed ? (
-          <>
-            <div className="flex flex-wrap gap-2">
-              <MetadataOnlyBadge mode="readonly" />
-              <MetadataOnlyBadge mode="notConnected" />
-            </div>
-            <p className="mt-2 text-xs muted">פעולות SharePoint רצות דרך הדפדפן המחובר; השרת שומר סטטוס ו־Evidence.</p>
-          </>
+          <SidebarStatusRows />
         ) : (
-          <div className="sidebar-status-dots" aria-hidden="true">
-            <span className="sidebar-status-dot sidebar-status-dot-readonly" />
-            <span className="sidebar-status-dot sidebar-status-dot-blocked" />
-          </div>
+          <SidebarStatusRows collapsed />
         )}
       </div>
     </>

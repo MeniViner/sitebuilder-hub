@@ -88,7 +88,7 @@ const runtimeConfigStatusSchema = new Schema(
     url: { type: String, default: "" },
     readStatus: {
       type: String,
-      enum: ["unknown", "configured", "missing", "invalid", "mismatch", "auth-blocked", "error"],
+      enum: ["unknown", "configured", "missing", "invalid", "mismatch", "auth-blocked", "error", "browser-required"],
       default: "unknown"
     },
     storageBackend: { type: String, enum: ["txt", "mongo", "unknown", ""], default: "" },
@@ -135,12 +135,42 @@ const maintenanceTaskScheduleSchema = (defaultIntervalMinutes: number) =>
   new Schema(
     {
       enabled: { type: Boolean, default: false },
+      paused: { type: Boolean, default: false },
+      frequency: { type: String, enum: ["daily", "weekly", "monthly", "custom"], default: "daily" },
+      daysOfWeek: { type: [Number], default: [] },
+      dayOfMonth: { type: Number, min: 1, max: 31 },
+      timeOfDay: { type: String, default: "02:00" },
+      timezone: { type: String, default: "Asia/Jerusalem" },
       intervalMinutes: { type: Number, default: defaultIntervalMinutes, min: 5 },
+      retention: {
+        type: new Schema(
+          {
+            mode: { type: String, enum: ["none", "count", "days", "count-and-days"], default: "count" },
+            keepLast: { type: Number, default: 14, min: 1 },
+            deleteOlderThanDays: { type: Number, default: 90, min: 1 }
+          },
+          { _id: false }
+        ),
+        default: () => ({ mode: "count", keepLast: 14, deleteOlderThanDays: 90 })
+      },
+      executionMode: {
+        type: String,
+        enum: ["browser-manual", "builder-backend", "backend-service-auth-required", "not-configured"],
+        default: "not-configured"
+      },
       nextRunAt: { type: Date },
+      lastRunAt: { type: Date },
+      lastRunStatus: {
+        type: String,
+        enum: ["unknown", "queued", "succeeded", "failed", "blocked"],
+        default: "unknown"
+      },
       lastQueuedAt: { type: Date },
       lastJobId: { type: String, default: "" },
       failureCount: { type: Number, default: 0 },
-      lastError: { type: String, default: "" }
+      lastError: { type: String, default: "" },
+      savedAt: { type: Date },
+      savedBy: { type: String, default: "" }
     },
     { _id: false }
   );
@@ -194,6 +224,107 @@ const resolvedPathsSchema = new Schema(
     deployManifestFile: { type: String, default: "" },
     permissionsMarkerFile: { type: String, default: "" },
     txtFiles: { type: txtFilePathsSchema, default: () => ({}) }
+  },
+  { _id: false }
+);
+
+const recoveryStateSchema = new Schema(
+  {
+    backupCapability: {
+      type: new Schema(
+        {
+          status: { type: String, enum: ["unknown", "ready", "blocked", "error"], default: "unknown" },
+          sourceType: { type: String, enum: ["txt-sharepoint", "mongo-builder", "unknown"], default: "unknown" },
+          connectorMode: {
+            type: String,
+            enum: ["browser-sharepoint", "builder-backend", "backend-service-auth-required", "unknown"],
+            default: "unknown"
+          },
+          checkedAt: { type: Date },
+          checkedBy: { type: String, default: "" },
+          canInventory: { type: Boolean, default: false },
+          canRunManualBackup: { type: Boolean, default: false },
+          canRunScheduledBackup: { type: Boolean, default: false },
+          canRestore: { type: Boolean, default: false },
+          blockers: { type: [String], default: [] },
+          nextStep: { type: String, default: "" },
+          evidence: { type: Schema.Types.Mixed, default: undefined }
+        },
+        { _id: false }
+      ),
+      default: () => ({})
+    },
+    latestInventoryRefresh: {
+      type: new Schema(
+        {
+          status: { type: String, enum: ["unknown", "success", "failed", "partial"], default: "unknown" },
+          sourceType: { type: String, enum: ["txt-sharepoint", "mongo-builder", "unknown"], default: "unknown" },
+          connectorMode: {
+            type: String,
+            enum: ["browser-sharepoint", "builder-backend", "backend-service-auth-required", "unknown"],
+            default: "unknown"
+          },
+          checkedAt: { type: Date },
+          checkedBy: { type: String, default: "" },
+          rootPath: { type: String, default: "" },
+          foldersCount: { type: Number },
+          filesCount: { type: Number },
+          knownSizeBytes: { type: Number },
+          backupRecordsCount: { type: Number },
+          verificationStatus: { type: String, enum: ["unknown", "verified", "warning", "failed"], default: "unknown" },
+          blocker: { type: String, default: "" },
+          error: { type: String, default: "" },
+          evidence: { type: Schema.Types.Mixed, default: undefined }
+        },
+        { _id: false }
+      ),
+      default: () => ({})
+    },
+    lastSuccessfulInventorySnapshot: { type: Schema.Types.Mixed, default: undefined },
+    mongoBackupInventory: {
+      type: new Schema(
+        {
+          status: { type: String, enum: ["unknown", "success", "failed", "blocked"], default: "unknown" },
+          checkedAt: { type: Date },
+          records: { type: [Schema.Types.Mixed], default: [] },
+          summary: { type: Schema.Types.Mixed, default: undefined },
+          evidence: { type: Schema.Types.Mixed, default: undefined }
+        },
+        { _id: false }
+      ),
+      default: () => ({})
+    },
+    lastBackupEvidence: {
+      type: new Schema(
+        {
+          connectorMode: { type: String, default: "" },
+          backupId: { type: String, default: "" },
+          status: { type: String, default: "" },
+          recordedAt: { type: Date },
+          filesCount: { type: Number },
+          verifiedFilesCount: { type: Number },
+          failedFilesCount: { type: Number },
+          evidenceRef: { type: String, default: "" },
+          summary: { type: Schema.Types.Mixed, default: undefined }
+        },
+        { _id: false }
+      ),
+      default: () => ({})
+    },
+    restoreAudit: {
+      type: new Schema(
+        {
+          readinessStatus: { type: String, enum: ["unknown", "ready", "blocked"], default: "unknown" },
+          lastReviewAt: { type: Date },
+          lastRestoreAt: { type: Date },
+          lastJobId: { type: String, default: "" },
+          blockers: { type: [String], default: [] },
+          lastPlan: { type: Schema.Types.Mixed, default: undefined }
+        },
+        { _id: false }
+      ),
+      default: () => ({})
+    }
   },
   { _id: false }
 );
@@ -316,6 +447,7 @@ const siteSchema = new Schema(
     health: { type: healthSchema, default: () => ({}) },
 
     maintenanceSchedule: { type: maintenanceScheduleSchema, default: () => ({}) },
+    recoveryState: { type: recoveryStateSchema, default: () => ({}) },
     sharePointStatus: { type: sharePointStatusSchema, default: () => ({}) }
   },
   { timestamps: true }

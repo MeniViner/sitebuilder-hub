@@ -145,7 +145,7 @@ const makeDeployPlan = () => ({
     hasIndexHtml: true,
     hasManifest: true,
     readyForDeploy: true,
-    readyForDeployExecution: false
+    readyForDeployExecution: true
   },
   capabilities: {
     readAvailable: true,
@@ -154,7 +154,7 @@ const makeDeployPlan = () => ({
       canRequest: false
     }
   },
-  blockers: ["sharepoint-write-not-configured"],
+  blockers: [],
   notes: [
     "Deploy execution overwrites listed files in final dist but does not mirror-delete files that are absent from the artifact.",
     "1 stale target dist file is absent from the release artifact and will be kept by default."
@@ -179,6 +179,27 @@ beforeEach(() => {
 });
 
 describe("deploy stale file approval snapshot", () => {
+  it("rejects queueing when the deploy plan has backend or readiness blockers", async () => {
+    mocks.Site.findById.mockResolvedValue(makeSite());
+    mocks.Release.findById.mockResolvedValue(makeRelease());
+    mocks.assertReleaseArtifactReady.mockResolvedValue({ summary: { readyForDeploy: true } });
+    mocks.buildSiteDeployPlan.mockResolvedValue({
+      ...makeDeployPlan(),
+      summary: { ...makeDeployPlan().summary, readyForDeployExecution: false },
+      blockers: ["artifact-storage-incompatible:txt"]
+    });
+
+    const { enqueueDeploySite } = await import("../server/src/services/releases.service");
+    await expect(enqueueDeploySite({
+      siteId: "site-1",
+      releaseId: "release-1",
+      createdBy: "operator"
+    })).rejects.toThrow("deploy-plan-blocked:artifact-storage-incompatible:txt");
+
+    expect(mocks.SiteVersionDeployment.create).not.toHaveBeenCalled();
+    expect(mocks.createJob).not.toHaveBeenCalled();
+  });
+
   it("summarizes read-only stale target dist files in deploy approval without scheduling deletion by default", async () => {
     const site = makeSite();
     const release = makeRelease();

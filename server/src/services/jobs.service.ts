@@ -203,12 +203,12 @@ export async function createJob(input: {
         : executionMode === "browser-required"
           ? "Job waiting for browser SharePoint execution"
           : executionMode === "blocked-service-auth-required"
-            ? input.connectorBlocker || "Job blocked because this legacy server SharePoint path is disabled"
+            ? input.connectorBlocker || "Job blocked because this operation requires a Browser SharePoint implementation"
             : "Job queued",
       at: now
     }]
   });
-  logger.info("jobs", requiresApproval ? "Job awaiting approval" : initialStatus === "browser-required" ? "Job waiting for browser execution" : initialStatus === "blocked-service-auth-required" ? "Job blocked for legacy server SharePoint" : "Job queued", {
+  logger.info("jobs", requiresApproval ? "Job awaiting approval" : initialStatus === "browser-required" ? "Job waiting for browser execution" : initialStatus === "blocked-service-auth-required" ? "Job blocked until Browser SharePoint implementation is available" : "Job queued", {
     jobId: job._id.toString(),
     type: job.type,
     siteId: job.siteId?.toString(),

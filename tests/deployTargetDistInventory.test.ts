@@ -106,7 +106,12 @@ const makeSite = () => ({
   version: "1.2.3",
   sharePointHost: "portal.army.idf",
   sharePointSiteUrl: "https://portal.army.idf/sites/alpha",
-  sharePointStatus: { deployStatus: "idle" }
+  sharePointStatus: { deployStatus: "idle" },
+  health: {
+    siteDbExists: true,
+    usersDbExists: true,
+    txtFilesExist: true
+  }
 });
 
 const makeRelease = (artifactRef: string) => ({
@@ -126,6 +131,27 @@ const writeArtifact = async () => {
   await fs.writeFile(path.join(artifactRoot, "index.html"), "<html><script src=\"assets/app.js\"></script></html>");
   await fs.writeFile(path.join(artifactRoot, "assets", "app.js"), "console.log('current');");
   await fs.writeFile(path.join(artifactRoot, "sharepoint-deploy-manifest.json"), JSON.stringify(["index.html", "assets/app.js"]));
+  return artifactRoot;
+};
+
+const writeExplicitArtifact = async (storageCompatibility: Array<"txt" | "mongo">, includeRuntimeConfig = false) => {
+  artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sitebuilder-target-policy-"));
+  await fs.mkdir(path.join(artifactRoot, "assets"), { recursive: true });
+  await fs.writeFile(path.join(artifactRoot, "index.html"), "<html></html>");
+  await fs.writeFile(path.join(artifactRoot, "assets", "app.js"), "sitebuilder-runtime-config.json users_data.txt");
+  const files = ["index.html", "assets/app.js"];
+  if (includeRuntimeConfig) {
+    files.push("sitebuilder-runtime-config.json");
+    await fs.writeFile(path.join(artifactRoot, "sitebuilder-runtime-config.json"), JSON.stringify({ storageBackend: "mongo" }));
+  }
+  await fs.writeFile(path.join(artifactRoot, "sharepoint-deploy-manifest.json"), JSON.stringify({
+    schemaVersion: 2,
+    artifactKind: "site-builder-frontend",
+    storageCompatibility,
+    requiresRuntimeConfig: true,
+    preservesRuntimeConfig: false,
+    files
+  }));
   return artifactRoot;
 };
 
@@ -286,5 +312,74 @@ describe("deploy target dist inventory stale-file policy", () => {
     expect(mocks.deleteSharePointFile).not.toHaveBeenCalled();
     expect(mocks.recycleSharePointFile).not.toHaveBeenCalled();
     expect(mocks.getRequestDigest).not.toHaveBeenCalled();
+  });
+
+  it("uses the production TXT authority and replaces a stale artifact Mongo selector", async () => {
+    const release = makeRelease(await writeExplicitArtifact(["txt"], true));
+    const site = { ...makeSite(), storageBackend: "mongo" };
+    mocks.Site.findById.mockResolvedValue(site);
+    mocks.Release.findById.mockResolvedValue(release);
+
+    const { buildSiteDeployPlan } = await import("../server/src/services/deployArtifact.service");
+    const plan = await buildSiteDeployPlan("site-1", "release-1");
+
+    expect(plan.target).toMatchObject({
+      storageBackend: "txt",
+      storageBackendSource: "environment:SITE_BUILDER_PRODUCTION_STORAGE_BACKEND",
+      storageSiteId: "alpha",
+      backendApiUrl: ""
+    });
+    expect(plan.files.map((file) => file.relativePath)).not.toContain("sitebuilder-runtime-config.json");
+    expect(plan.summary.skippedRuntimeConfigFilesCount).toBe(1);
+    expect(plan.summary.readyForDeployExecution).toBe(true);
+  });
+
+  it("blocks an artifact that is incompatible with the environment-selected backend", async () => {
+    const release = makeRelease(await writeExplicitArtifact(["mongo"]));
+    mocks.Site.findById.mockResolvedValue(makeSite());
+    mocks.Release.findById.mockResolvedValue(release);
+
+    const { buildSiteDeployPlan } = await import("../server/src/services/deployArtifact.service");
+    const plan = await buildSiteDeployPlan("site-1", "release-1");
+
+    expect(plan.blockers).toContain("artifact-storage-incompatible:txt");
+    expect(plan.summary.readyForDeployExecution).toBe(false);
+  });
+
+  it("allows Mongo only when the environment explicitly selects it and the target is populated and reachable", async () => {
+    process.env.SITE_BUILDER_PRODUCTION_STORAGE_BACKEND = "mongo";
+    vi.resetModules();
+    try {
+      const release = makeRelease(await writeExplicitArtifact(["mongo"]));
+      const site = {
+        ...makeSite(),
+        storageBackend: "txt",
+        backendApiUrl: "https://builder.example",
+        mongoSiteId: "alpha-mongo",
+        health: {
+          dataBackendReachable: true,
+          mongoRegistryOk: true,
+          mongoCollectionOk: true,
+          mongoSeedOk: true
+        }
+      };
+      mocks.Site.findById.mockResolvedValue(site);
+      mocks.Release.findById.mockResolvedValue(release);
+
+      const { buildSiteDeployPlan } = await import("../server/src/services/deployArtifact.service");
+      const plan = await buildSiteDeployPlan("site-1", "release-1");
+
+      expect(plan.target).toMatchObject({
+        storageBackend: "mongo",
+        storageBackendSource: "environment:SITE_BUILDER_PRODUCTION_STORAGE_BACKEND",
+        storageSiteId: "alpha-mongo",
+        backendApiUrl: "https://builder.example"
+      });
+      expect(plan.summary.readyForDeployExecution).toBe(true);
+      expect(plan.blockers).toEqual([]);
+    } finally {
+      process.env.SITE_BUILDER_PRODUCTION_STORAGE_BACKEND = "txt";
+      vi.resetModules();
+    }
   });
 });

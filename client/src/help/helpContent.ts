@@ -71,8 +71,8 @@ export const helpContent = {
   "site.connectorMode": {
     key: "site.connectorMode",
     title: "מצב מחבר",
-    description: "הדרך שבה ה־Hub מקבל נתונים או מבצע פעולה: דפדפן מחובר ל־SharePoint, שרת מקומי, או מטא־דאטה שנשמר ב־Mongo.",
-    fix: "אם הדפדפן מחובר אבל השרת נכשל, פתחו בעיות וחיבורים ובדקו Backend connector ו־Digest.",
+    description: "הדרך שבה ה־Hub מקבל נתונים או מבצע פעולה: Browser SharePoint, Builder backend, Hub Mongo או מטא־דאטה שמורה.",
+    fix: "אם בדיקת SharePoint נכשלת, פתחו בעיות וחיבורים ובדקו Browser SharePoint מול אתר היעד.",
     anchor: "sharepoint"
   },
   "site.metadata": {
@@ -370,7 +370,7 @@ export const helpContent = {
     key: "artifact.validation",
     title: "Validation",
     description: "בדיקה שה־Artifact קיים, כולל קבצים נדרשים כמו index.html, ושאפשר לבנות ממנו תוכנית פריסה.",
-    fix: "אם validation נכשל, בדקו שהנתיב נכון, שהקבצים קיימים ושהשרת יכול לקרוא את התיקייה.",
+    fix: "אם validation נכשל, בדקו שהנתיב נכון, שהקבצים קיימים ושבדיקת Browser SharePoint רצה מול אתר היעד.",
     anchor: "deploy"
   },
   deploy: {
@@ -457,9 +457,9 @@ export const helpContent = {
   },
   "sharepoint.backendConnector": {
     key: "sharepoint.backendConnector",
-    title: "Server SharePoint connector",
-    description: "מסלול שרת ל־SharePoint מושבת בכוונה. השרת שומר metadata/evidence בלבד ולא קורא או כותב SharePoint.",
-    fix: "אין צורך לתקן את השרת. השתמשו ב־Browser SharePoint.",
+    title: "Browser SharePoint policy",
+    description: "פעולות SharePoint רצות דרך הדפדפן המחובר. Hub API שומר metadata/evidence ואינו מקור SharePoint חי.",
+    fix: "פתחו את הפעולה דרך Browser SharePoint ובדקו שהדפדפן מחובר לאתר היעד.",
     anchor: "sharepoint"
   },
   "sharepoint.currentUser": {
@@ -492,16 +492,16 @@ export const helpContent = {
   },
   "sharepoint.writeBlocked": {
     key: "sharepoint.writeBlocked",
-    title: "חסר חיבור ל־SharePoint",
+    title: "SharePoint דרך הדפדפן עדיין לא נבדק",
     description: "ה־Hub יכול להציג ולתכנן, אבל פעולה שמשנה SharePoint חייבת לרוץ דרך הדפדפן המחובר.",
-    fix: "פתחו את הפעולה דרך Browser SharePoint. אין צורך בהגדרות SharePoint בצד השרת.",
+    fix: "פתחו את הפעולה דרך Browser SharePoint ורעננו מול אתר היעד.",
     anchor: "common-problems"
   },
   "sharepoint.401": {
     key: "sharepoint.401",
     title: "401 מ־SharePoint",
     description: "SharePoint דחה בקשה כי היא לא רצה מתוך הדפדפן המחובר של המשתמש.",
-    fix: "הריצו את הפעולה דרך Browser SharePoint. השרת שומר רק Evidence.",
+    fix: "הריצו את הפעולה דרך Browser SharePoint. ה־Hub שומר רק Evidence.",
     anchor: "common-problems"
   },
   job: {
@@ -585,7 +585,7 @@ export const helpContent = {
   "backup.schedule": {
     key: "backup.schedule",
     title: "תזמון גיבוי",
-    description: "הוראה לשרת ליצור Jobs לגיבוי חוזר לפי מרווח זמן. ההרצה בפועל עדיין תלויה בהרשאות ובמצב SharePoint.",
+    description: "הוראה ל־Hub ליצור Jobs לגיבוי חוזר לפי מרווח זמן. ההרצה בפועל תלויה ב־Browser SharePoint או Builder backend לפי סוג האתר.",
     anchor: "backups"
   },
   health: {
@@ -887,8 +887,8 @@ export const helpPageSections: readonly HelpPageSection[] = [
     id: "sharepoint",
     title: "SharePoint חיבורים",
     paragraphs: [
-      "יש הבדל חשוב בין הדפדפן לבין השרת המקומי: הדפדפן יכול להיות מחובר ל־SharePoint, אבל השרת המקומי לא מקבל את ההתחברות הזו אוטומטית.",
-      "קריאה יכולה לעבוד בדפדפן בזמן ש־Backend write נכשל ב־401. פעולות שמשנות אתר דורשות Digest/contextinfo והרשאות בצד השרת.",
+      "יש הבדל חשוב בין Browser SharePoint, Builder backend ו־Hub Mongo: כל אחד מהם מוכיח מקור אחר.",
+      "קריאה יכולה לעבוד בדפדפן גם כש־Builder backend לא מוגדר. פעולות שמשנות SharePoint דורשות Digest/contextinfo והרשאות בדפדפן.",
       "Write verified אומר שה־Hub הצליח לאמת יכולת כתיבה. בלי זה, פריסה, Restore והרשאות יישארו חסומות."
     ],
     terms: ["sharepoint.browserConnector", "sharepoint.backendConnector", "sharepoint.currentUser", "sharepoint.read", "sharepoint.digest", "sharepoint.write", "sharepoint.401"]
@@ -944,7 +944,7 @@ export const helpPageSections: readonly HelpPageSection[] = [
     title: "בעיות נפוצות",
     bullets: [
       "401 מ־SharePoint בדפדפן: בדקו שהמשתמש מחובר ושיש הרשאה לאתר היעד.",
-      "Server SharePoint מושבת: זה מצב תקין; פעולות SharePoint רצות דרך הדפדפן.",
+      "SharePoint נבדק דרך Browser SharePoint: פתחו את אתר היעד באותו דפדפן לפני רענון.",
       "Artifact חסר: חברו dist אמיתי או manifest והריצו Validate.",
       "Digest בדפדפן נכשל: בדקו contextinfo דרך הדפדפן המחובר.",
       "API backend port שגוי: בדקו API base URL במסך בעיות וחיבורים.",

@@ -71,7 +71,7 @@ const booleanFromEvidence = (evidence: HealthEvidence) => {
 };
 
 export async function runReadOnlySharePointHealthCheck(siteId: string): Promise<SharePointReadOnlyHealthResult> {
-  logger.info("sharepoint", "Legacy read-only SharePoint health check skipped because server SharePoint is disabled", { siteId });
+  logger.info("sharepoint", "Read-only SharePoint health check requires Browser SharePoint evidence", { siteId });
   logger.info("sites", "Site health read-only check requires browser SharePoint", { siteId });
   const site = await Site.findById(siteId);
   if (!site) throw new Error("site-not-found");
@@ -105,7 +105,7 @@ export async function runReadOnlySharePointHealthCheck(siteId: string): Promise<
 
   const checkedAt = new Date();
   const derivedHealthStatus = deriveHealthStatus(site.health, site.lastHealthCheckAt, site.storageBackend);
-  logger.info("sharepoint", "Legacy read-only SharePoint health check skipped", {
+  logger.info("sharepoint", "Read-only SharePoint health check returned browser-required plan", {
     siteId: site._id.toString(),
     siteCode: site.siteCode,
     derivedHealthStatus,
@@ -122,7 +122,7 @@ export async function runReadOnlySharePointHealthCheck(siteId: string): Promise<
     health: {},
     derivedHealthStatus,
     evidence,
-    note: "בדיקת SharePoint מהשרת מושבתת. יש להריץ Health דרך הדפדפן המחובר ל־SharePoint."
+    note: "בדיקת SharePoint מתבצעת דרך הדפדפן המחובר. נדרש רענון Browser SharePoint כדי לקבל ראיה חיה."
   };
 }
 

@@ -7,6 +7,7 @@ import {
   postBrowserVerifyBackup,
   postRestoreBackup,
   postRestorePlan,
+  postRestoreReview,
   postVerifyBackup,
   runAllBackups
 } from "../controllers/backups.controller";
@@ -22,6 +23,7 @@ router.post("/:id/browser-verify", requireRole("operator"), postBrowserVerifyBac
 router.post("/:id/browser-restore-evidence", requireRole("admin"), postBrowserRestoreEvidence);
 router.post("/:id/verify", requireRole("operator"), postVerifyBackup);
 router.post("/:id/restore-plan", requireRole("operator"), postRestorePlan);
+router.post("/:id/restore-review", requireRole("operator"), postRestoreReview);
 router.post("/:id/restore", requireRole("admin"), postRestoreBackup);
 
 export default router;

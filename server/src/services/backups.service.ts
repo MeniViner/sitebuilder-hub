@@ -24,6 +24,8 @@ import {
   getBrowserRequiredJobMessage,
   getSharePointOperationPolicy
 } from "./sharepointOperationPolicy.service";
+import { runBuilderMongoHealthCheck } from "./builderMongoHealth.service";
+import { normalizeBackupScheduleInput } from "./backupSchedule.service";
 
 type ApprovalGatedJobInput = Parameters<typeof createJob>[0] & {
   requiresApproval: boolean;
@@ -628,6 +630,423 @@ const resolveSiteBackupPaths = (site: any) =>
     widgetsDbTarget: site.widgetsDbTarget
   });
 
+const secretKeyPattern = /(authorization|cookie|digest|token|secret|password|api[-_]?key|apikey)/i;
+
+const sanitizeEvidence = (value: unknown, depth = 0): unknown => {
+  if (value === null || value === undefined) return value;
+  if (depth > 8) return "[truncated]";
+  if (Array.isArray(value)) return value.slice(0, 500).map((item) => sanitizeEvidence(item, depth + 1));
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value !== "object") return value;
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !secretKeyPattern.test(key))
+      .map(([key, item]) => [key, sanitizeEvidence(item, depth + 1)])
+  );
+};
+
+const maybeNumber = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const firstArray = (...values: unknown[]) => {
+  for (const value of values) {
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+};
+
+const extractMongoBackupRecords = (payload: any) => {
+  const rows = firstArray(
+    payload,
+    payload?.data,
+    payload?.backups,
+    payload?.items,
+    payload?.results,
+    payload?.data?.backups,
+    payload?.data?.items,
+    payload?.data?.results
+  );
+  return rows.slice(0, 200).map((row: any, index: number) => ({
+    id: String(row?._id || row?.id || row?.backupId || row?.name || `record-${index + 1}`),
+    backupId: String(row?.backupId || row?.id || row?._id || row?.name || ""),
+    status: String(row?.status || row?.state || row?.verification?.status || "unknown"),
+    createdAt: String(row?.createdAt || row?.startedAt || row?.timestamp || row?.date || ""),
+    completedAt: String(row?.completedAt || row?.finishedAt || row?.updatedAt || ""),
+    filesCount: maybeNumber(row?.filesCount ?? row?.fileCount ?? row?.itemsCount),
+    sizeBytes: maybeNumber(row?.sizeBytes ?? row?.totalSizeBytes ?? row?.bytes),
+    storagePath: String(row?.storagePath || row?.path || row?.location || ""),
+    source: "builder-backend"
+  }));
+};
+
+const summarizeMongoBackupPayload = (payload: any) => {
+  const records = extractMongoBackupRecords(payload);
+  return {
+    records,
+    summary: {
+      recordsCount: records.length,
+      latestCreatedAt: records
+        .map((record) => record.createdAt)
+        .filter(Boolean)
+        .sort()
+        .pop() || "",
+      totalKnownSizeBytes: records.reduce((sum, record) => sum + (record.sizeBytes || 0), 0)
+    }
+  };
+};
+
+const sourceBackupSafetySnapshot = (backup: any): BackupSafetySnapshot => ({
+  policy: "recent-verified-backup",
+  operation: "restore",
+  required: true,
+  satisfied: true,
+  maxAgeHours: 24,
+  checkedAt: new Date().toISOString(),
+  backup: {
+    id: backup._id.toString(),
+    backupId: String(backup.backupId || ""),
+    status: String(backup.status || ""),
+    verificationStatus: String(backup.verification?.status || "unverified"),
+    storagePath: String(backup.storagePath || ""),
+    filesCount: Number(backup.filesCount || 0),
+    sizeBytes: Number(backup.sizeBytes || 0),
+    createdAt: backup.createdAt ? new Date(backup.createdAt).toISOString() : "",
+    verificationCheckedAt: backup.verification?.checkedAt ? new Date(backup.verification.checkedAt).toISOString() : "",
+    ageHours: 0
+  }
+});
+
+export async function refreshSiteBackupCapability(params: {
+  siteId: string;
+  actor: string;
+}) {
+  const site = await Site.findById(params.siteId);
+  if (!site) throw new Error("site-not-found");
+  const checkedAt = new Date();
+  const storageBackend = String(site.storageBackend || "unknown");
+
+  if (storageBackend === "mongo") {
+    const mongoHealth = await runBuilderMongoHealthCheck(site._id.toString());
+    const freshSite = await Site.findById(site._id);
+    if (!freshSite) throw new Error("site-not-found");
+    const backupCheck = mongoHealth.checks?.backups;
+    const { records, summary } = summarizeMongoBackupPayload(backupCheck?.payload);
+    const inventoryConfirmed = mongoHealth.backupsStatus === "ok";
+    const blockers = [
+      !inventoryConfirmed ? "Builder backend לא אישר endpoint קריאת גיבויים: GET /api/sites/:builderSiteId/backups." : "",
+      "יצירת גיבוי Mongo מה-Hub חסומה עד שיאושר endpoint כתיבה ב-Builder backend, למשל POST /api/sites/:builderSiteId/backups.",
+      "שחזור Mongo חסום עד שיאושר endpoint Restore ב-Builder backend."
+    ].filter(Boolean);
+    const latestInventoryRefresh = {
+      status: inventoryConfirmed ? "success" : backupCheck?.status === 404 ? "failed" : "failed",
+      sourceType: "mongo-builder",
+      connectorMode: "builder-backend",
+      checkedAt,
+      checkedBy: params.actor || "system",
+      backupRecordsCount: inventoryConfirmed ? records.length : undefined,
+      verificationStatus: inventoryConfirmed ? "verified" : "failed",
+      blocker: inventoryConfirmed ? "" : blockers[0] || "Builder backend backup inventory is not confirmed.",
+      error: inventoryConfirmed ? "" : backupCheck?.error || backupCheck?.statusText || "builder-backend-backup-inventory-failed",
+      evidence: sanitizeEvidence({
+        backendApiUrlHost: mongoHealth.backendApiUrlHost,
+        builderSiteId: mongoHealth.builderSiteId,
+        backupsStatus: mongoHealth.backupsStatus,
+        httpStatus: backupCheck?.status,
+        httpStatusText: backupCheck?.statusText
+      })
+    };
+    (freshSite as any).recoveryState = {
+      ...((freshSite as any).recoveryState?.toObject?.() || (freshSite as any).recoveryState || {}),
+      backupCapability: {
+        status: inventoryConfirmed ? "ready" : mongoHealth.backupsStatus === "missing" ? "blocked" : "error",
+        sourceType: "mongo-builder",
+        connectorMode: "builder-backend",
+        checkedAt,
+        checkedBy: params.actor || "system",
+        canInventory: inventoryConfirmed,
+        canRunManualBackup: false,
+        canRunScheduledBackup: false,
+        canRestore: false,
+        blockers,
+        nextStep: inventoryConfirmed
+          ? "לאשר ולחבר endpoint יצירת גיבוי Mongo ב-Builder backend לפני הצגת Run Backup כפעולה פעילה."
+          : "לאשר ש-Builder backend חושף GET /api/sites/:builderSiteId/backups ומחזיר JSON עבור האתר.",
+        evidence: sanitizeEvidence({
+          backendApiUrlHost: mongoHealth.backendApiUrlHost,
+          builderSiteId: mongoHealth.builderSiteId,
+          backupsStatus: mongoHealth.backupsStatus,
+          backendReachable: mongoHealth.backendReachable,
+          backupCheck
+        })
+      },
+      latestInventoryRefresh,
+      lastSuccessfulInventorySnapshot: inventoryConfirmed
+        ? {
+            ...latestInventoryRefresh,
+            records,
+            summary
+          }
+        : (freshSite as any).recoveryState?.lastSuccessfulInventorySnapshot,
+      mongoBackupInventory: {
+        status: inventoryConfirmed ? "success" : mongoHealth.backupsStatus === "missing" ? "blocked" : "failed",
+        checkedAt,
+        records: inventoryConfirmed ? records : [],
+        summary: inventoryConfirmed ? summary : undefined,
+        evidence: sanitizeEvidence({
+          backupsStatus: mongoHealth.backupsStatus,
+          backupCheck
+        })
+      }
+    };
+    await freshSite.save();
+    return {
+      site: freshSite,
+      capability: (freshSite as any).recoveryState.backupCapability,
+      latestInventoryRefresh,
+      mongoBackupInventory: (freshSite as any).recoveryState.mongoBackupInventory
+    };
+  }
+
+  const resolvedPaths = resolveSiteBackupPaths(site);
+  const blockers = [
+    storageBackend !== "txt" ? "מקור האחסון של האתר לא ידוע. צריך לאמת runtime config לפני גיבוי." : "",
+    !resolvedPaths.sharePointSiteUrl ? "חסר SharePoint site URL עבור קריאת דפדפן." : "",
+    !resolvedPaths.backupsRoot ? "חסר נתיב תיקיית Backups מחושב לאתר." : ""
+  ].filter(Boolean);
+  const ready = blockers.length === 0;
+  (site as any).recoveryState = {
+    ...((site as any).recoveryState?.toObject?.() || (site as any).recoveryState || {}),
+    backupCapability: {
+      status: ready ? "ready" : "blocked",
+      sourceType: storageBackend === "txt" ? "txt-sharepoint" : "unknown",
+      connectorMode: ready ? "browser-sharepoint" : "unknown",
+      checkedAt,
+      checkedBy: params.actor || "system",
+      canInventory: ready,
+      canRunManualBackup: ready,
+      canRunScheduledBackup: false,
+      canRestore: ready,
+      blockers: [
+        ...blockers,
+        ready ? "גיבוי SharePoint/TXT מתוזמן ללא משתמש מחובר דורש מימוש Browser SharePoint מתוזמן או Builder backend מתאים." : ""
+      ].filter(Boolean),
+      nextStep: ready
+        ? "להריץ Inventory או Backup מהדפדפן המחובר. לתזמון unattended נדרש מימוש Browser SharePoint מתוזמן או Builder backend מתאים."
+        : "להריץ בדיקת runtime config/נתיבים לפני פעולת גיבוי.",
+      evidence: sanitizeEvidence({
+        storageBackend,
+        sharePointSiteUrl: resolvedPaths.sharePointSiteUrl,
+        backupsRoot: resolvedPaths.backupsRoot
+      })
+    }
+  };
+  await site.save();
+  return {
+    site,
+    capability: (site as any).recoveryState.backupCapability,
+    latestInventoryRefresh: (site as any).recoveryState.latestInventoryRefresh,
+    mongoBackupInventory: (site as any).recoveryState.mongoBackupInventory
+  };
+}
+
+export async function recordBrowserSharePointBackupInventoryEvidence(params: {
+  siteId: string;
+  actor: string;
+  input: {
+    connectorMode: "browser-sharepoint";
+    targetSiteUrl?: string;
+    generatedAt?: string;
+    includeFiles?: boolean;
+    root: {
+      serverRelativePath: string;
+      checkedAt?: string;
+      exists: boolean;
+      status?: number;
+      statusText?: string;
+      authBlocked?: boolean;
+      error?: string;
+    };
+    folders?: Array<{
+      serverRelativeUrl: string;
+      files?: unknown[];
+      filesCount?: number;
+      knownSizeBytes?: number;
+      filesStatus?: {
+        exists: boolean;
+        authBlocked?: boolean;
+        error?: string;
+      };
+    }>;
+    summary: {
+      rootExists: boolean;
+      foldersCount?: number;
+      filesCount?: number;
+      knownSizeBytes?: number;
+      authBlocked?: boolean;
+      readOk: boolean;
+    };
+    notes?: string[];
+    resolvedPaths?: Record<string, unknown>;
+  };
+}) {
+  if (params.input.connectorMode !== "browser-sharepoint") throw new Error("browser-backup-inventory-connector-mode-required");
+  const site = await Site.findById(params.siteId);
+  if (!site) throw new Error("site-not-found");
+  if (site.storageBackend === "mongo") throw new Error("browser-backup-inventory-not-for-mongo");
+
+  const resolvedPaths = resolveSiteBackupPaths(site);
+  const rootPath = normalizeServerRelativePath(params.input.root?.serverRelativePath);
+  if (!rootPath || rootPath !== resolvedPaths.backupsRoot) throw new Error("browser-backup-inventory-root-mismatch");
+  if (params.input.targetSiteUrl && normalizeUrl(params.input.targetSiteUrl) !== normalizeUrl(resolvedPaths.sharePointSiteUrl)) {
+    throw new Error("browser-backup-inventory-site-mismatch");
+  }
+
+  const checkedAt = dateValue(params.input.generatedAt || params.input.root?.checkedAt);
+  const rootExists = Boolean(params.input.summary.rootExists && params.input.root.exists);
+  const readOk = Boolean(params.input.summary.readOk);
+  const partial = rootExists && !readOk;
+  const status = readOk ? "success" : partial ? "partial" : "failed";
+  const folders = params.input.folders || [];
+  const evidence = sanitizeEvidence({
+    ...params.input,
+    resolvedPaths: {
+      sharePointSiteUrl: resolvedPaths.sharePointSiteUrl,
+      backupsRoot: resolvedPaths.backupsRoot
+    }
+  });
+  const latestInventoryRefresh = {
+    status,
+    sourceType: "txt-sharepoint",
+    connectorMode: "browser-sharepoint",
+    checkedAt,
+    checkedBy: params.actor || "browser-sharepoint",
+    rootPath,
+    foldersCount: rootExists ? numberOrZero(params.input.summary.foldersCount ?? folders.length) : undefined,
+    filesCount: readOk || partial ? numberOrZero(params.input.summary.filesCount) : undefined,
+    knownSizeBytes: readOk || partial ? numberOrZero(params.input.summary.knownSizeBytes) : undefined,
+    verificationStatus: readOk ? "verified" : partial ? "warning" : "failed",
+    blocker: readOk
+      ? ""
+      : params.input.summary.authBlocked
+        ? "SharePoint החזיר 401/403 לדפדפן עבור Inventory. צריך לפתוח את האתר בדפדפן מחובר ולנסות שוב."
+        : params.input.root.error || "Inventory לא נקרא בהצלחה מהדפדפן.",
+    error: readOk ? "" : params.input.root.error || params.input.root.statusText || "",
+    evidence
+  };
+  const currentRecoveryState = (site as any).recoveryState?.toObject?.() || (site as any).recoveryState || {};
+  (site as any).recoveryState = {
+    ...currentRecoveryState,
+    backupCapability: {
+      ...(currentRecoveryState.backupCapability || {}),
+      status: "ready",
+      sourceType: "txt-sharepoint",
+      connectorMode: "browser-sharepoint",
+      checkedAt,
+      checkedBy: params.actor || "browser-sharepoint",
+      canInventory: true,
+      canRunManualBackup: true,
+      canRunScheduledBackup: false,
+      canRestore: true,
+      blockers: ["גיבוי SharePoint/TXT מתוזמן ללא משתמש מחובר דורש מימוש Browser SharePoint מתוזמן או Builder backend מתאים."],
+      nextStep: "Inventory נשמר. אפשר להריץ גיבוי ידני מהדפדפן המחובר."
+    },
+    latestInventoryRefresh,
+    lastSuccessfulInventorySnapshot: readOk
+      ? {
+          ...latestInventoryRefresh,
+          folders,
+          summary: params.input.summary
+        }
+      : currentRecoveryState.lastSuccessfulInventorySnapshot
+  };
+  await site.save();
+  return {
+    site,
+    latestInventoryRefresh,
+    lastSuccessfulInventorySnapshot: (site as any).recoveryState.lastSuccessfulInventorySnapshot
+  };
+}
+
+const backupScheduleResponse = (site: any) => {
+  const schedule = site.maintenanceSchedule?.backup || {};
+  const normalized = normalizeBackupScheduleInput({
+    enabled: Boolean(schedule.enabled),
+    paused: Boolean(schedule.paused),
+    frequency: schedule.frequency,
+    daysOfWeek: schedule.daysOfWeek,
+    dayOfMonth: schedule.dayOfMonth,
+    timeOfDay: schedule.timeOfDay,
+    timezone: schedule.timezone,
+    intervalMinutes: schedule.intervalMinutes,
+    retention: schedule.retention
+  }, site);
+  return {
+    schedule: {
+      ...normalized,
+      nextRunAt: schedule.nextRunAt || normalized.nextRunAt,
+      lastRunAt: schedule.lastRunAt,
+      lastRunStatus: schedule.lastRunStatus || "unknown",
+      lastQueuedAt: schedule.lastQueuedAt,
+      lastJobId: schedule.lastJobId || "",
+      failureCount: Number(schedule.failureCount || 0),
+      lastError: schedule.lastError || "",
+      savedAt: schedule.savedAt,
+      savedBy: schedule.savedBy || ""
+    },
+    execution: {
+      mode: normalized.executionMode,
+      unattendedSupported: normalized.executionMode === "builder-backend",
+      blocker: normalized.executionMode === "backend-service-auth-required"
+        ? "תזמון SharePoint/TXT ללא משתמש מחובר דורש מימוש Browser SharePoint מתוזמן. הגיבוי הידני בדפדפן עדיין זמין."
+        : normalized.executionMode === "not-configured"
+          ? "אין יכולת תזמון מאומתת עבור מקור האחסון הנוכחי."
+          : ""
+    }
+  };
+};
+
+export async function getBackupSchedule(siteId: string) {
+  const site = await Site.findById(siteId);
+  if (!site) throw new Error("site-not-found");
+  return {
+    site,
+    ...backupScheduleResponse(site)
+  };
+}
+
+export async function saveBackupSchedule(params: {
+  siteId: string;
+  actor: string;
+  input: any;
+}) {
+  const site = await Site.findById(params.siteId);
+  if (!site) throw new Error("site-not-found");
+  const normalized = normalizeBackupScheduleInput(params.input, site);
+  const now = new Date();
+  (site as any).maintenanceSchedule = {
+    ...((site as any).maintenanceSchedule?.toObject?.() || (site as any).maintenanceSchedule || {}),
+    backup: {
+      ...((site as any).maintenanceSchedule?.backup?.toObject?.() || (site as any).maintenanceSchedule?.backup || {}),
+      ...normalized,
+      nextRunAt: normalized.nextRunAt,
+      savedAt: now,
+      savedBy: params.actor || "system",
+      lastRunStatus: (site as any).maintenanceSchedule?.backup?.lastRunStatus || "unknown",
+      lastError: normalized.enabled && normalized.executionMode === "backend-service-auth-required"
+        ? "scheduled-backup-requires-browser-sharepoint"
+        : (site as any).maintenanceSchedule?.backup?.lastError || ""
+    }
+  };
+  await site.save();
+  return {
+    site,
+    ...backupScheduleResponse(site)
+  };
+}
+
 export async function recordBrowserSharePointBackupEvidence(params: {
   siteId: string;
   actor: string;
@@ -750,6 +1169,24 @@ export async function recordBrowserSharePointBackupEvidence(params: {
     site.backupStatus = "failed";
     site.lastError = errorMessage;
   }
+  (site as any).recoveryState = {
+    ...((site as any).recoveryState?.toObject?.() || (site as any).recoveryState || {}),
+    lastBackupEvidence: {
+      connectorMode: "browser-sharepoint",
+      backupId: backup.backupId,
+      status,
+      recordedAt: checkedAt,
+      filesCount: verificationEvidence.length,
+      verifiedFilesCount,
+      failedFilesCount,
+      evidenceRef: backup._id.toString(),
+      summary: sanitizeEvidence({
+        finalStatus: params.input.finalStatus,
+        storagePath: backup.storagePath,
+        jobId: params.input.jobId || ""
+      })
+    }
+  };
   await site.save();
 
   if (params.input.jobId) {
@@ -898,6 +1335,104 @@ export async function recordBrowserSharePointBackupVerification(params: {
   };
 }
 
+export async function buildBackupRestoreReview(params: {
+  backupId: string;
+  actor: string;
+  reason?: string;
+}) {
+  const backup = await findBackupByIdOrExternalId(params.backupId);
+  if (!backup) throw new Error("backup-not-found");
+  const site = await Site.findById(backup.siteId);
+  if (!site) throw new Error("site-not-found");
+
+  const checkedAt = new Date();
+  const files = buildRestoreFilesFromEvidence(backup);
+  const sourceType = site.storageBackend === "mongo" ? "mongo" : "txt-sharepoint";
+  const blockers = [
+    sourceType === "mongo" ? "Mongo restore endpoint is not confirmed in Builder backend. Next step: expose and document a Builder restore API before enabling execution." : "",
+    String(backup.storageProvider || "sharepoint") !== "sharepoint" ? "Restore execution is implemented only for SharePoint-backed TXT backups." : "",
+    !files.length ? "Backup evidence does not include restorable file mappings." : "",
+    backup.verification?.status !== "verified" ? "Backup must have verified read-back evidence before restore." : "",
+    !["verified", "succeeded"].includes(String(backup.status || "")) ? "Backup record status is not verified/succeeded." : ""
+  ].filter(Boolean);
+
+  let preRestoreBackupSafety: BackupSafetySnapshot | undefined;
+  try {
+    if (sourceType !== "mongo") {
+      preRestoreBackupSafety = await assertDistinctRecentVerifiedBackupForRestore({
+        siteId: site._id,
+        restoreBackupObjectId: backup._id,
+        restoreBackupExternalId: backup.backupId
+      });
+    }
+  } catch (error) {
+    blockers.push(error instanceof Error ? error.message : String(error));
+  }
+
+  const impactPreview = {
+    sourceType,
+    connectorMode: sourceType === "mongo" ? "builder-backend" : "browser-sharepoint",
+    backupId: backup._id.toString(),
+    backupExternalId: backup.backupId,
+    backupStatus: backup.status,
+    verificationStatus: backup.verification?.status || "unverified",
+    willOverwriteCount: files.length,
+    willOverwrite: files.slice(0, 25).map((file) => file.targetPath),
+    backupSources: files.slice(0, 25).map((file) => file.sourcePath),
+    requireCurrentStateBackup: true,
+    requireTypedConfirmation: "שחזר",
+    requireReason: true,
+    risks: RESTORE_RISKS
+  };
+  const canExecute = blockers.length === 0;
+  const review = {
+    generatedAt: checkedAt.toISOString(),
+    requestedBy: params.actor || "system",
+    reason: params.reason || "",
+    site: {
+      id: site._id.toString(),
+      siteCode: site.siteCode,
+      displayName: site.displayName,
+      storageBackend: site.storageBackend
+    },
+    backup,
+    sourceType,
+    connectorMode: sourceType === "mongo" ? "builder-backend" : "browser-sharepoint",
+    canExecute,
+    blockers,
+    nextStep: canExecute
+      ? "Typed confirmation and reason are required before queueing restore."
+      : blockers.includes("pre-restore-backup-required") || blockers.includes("pre-restore-backup-stale")
+        ? "Run and verify a fresh backup of the current live site before restore."
+        : blockers[0] || "",
+    impactPreview,
+    preRestoreBackupSafety,
+    files
+  };
+
+  const currentRecoveryState = (site as any).recoveryState?.toObject?.() || (site as any).recoveryState || {};
+  (site as any).recoveryState = {
+    ...currentRecoveryState,
+    restoreAudit: {
+      ...(currentRecoveryState.restoreAudit || {}),
+      readinessStatus: canExecute ? "ready" : "blocked",
+      lastReviewAt: checkedAt,
+      blockers,
+      lastPlan: sanitizeEvidence({
+        generatedAt: review.generatedAt,
+        backupId: backup._id.toString(),
+        backupExternalId: backup.backupId,
+        canExecute,
+        blockers,
+        impactPreview,
+        preRestoreBackupSafety
+      })
+    }
+  };
+  await site.save();
+  return review;
+}
+
 export async function enqueueBackupRestore(params: {
   backupId: string;
   createdBy: string;
@@ -915,35 +1450,61 @@ export async function enqueueBackupRestore(params: {
 
   const site = await Site.findById(backup.siteId);
   if (!site) throw new Error("site-not-found");
+  const notes = stringValue(params.notes);
+  if (notes.length < 3) throw new Error("restore-reason-required");
+  if (site.storageBackend === "mongo") throw new Error("mongo-restore-endpoint-not-confirmed");
+  if (String(backup.storageProvider || "sharepoint") !== "sharepoint") throw new Error(`restore-unsupported-storage-provider:${backup.storageProvider || "unknown"}`);
+  if (backup.verification?.status !== "verified" || !["verified", "succeeded"].includes(String(backup.status || ""))) {
+    throw new Error("restore-backup-not-verified");
+  }
   const files = buildRestoreFilesFromEvidence(backup);
-  if (!files.length) throw new Error("restore-evidence-missing");
+  if (!files.length) throw new Error("backup-restore-evidence-missing");
+  const preRestoreBackupSafety = await assertDistinctRecentVerifiedBackupForRestore({
+    siteId: site._id,
+    restoreBackupObjectId: backup._id,
+    restoreBackupExternalId: backup.backupId
+  });
+  const approval = buildRestoreApproval({
+    backup,
+    site,
+    createdBy: params.createdBy,
+    files,
+    notes,
+    backupSafety: sourceBackupSafetySnapshot(backup),
+    preRestoreBackupSafety
+  });
 
   const policy = getSharePointOperationPolicy("restore");
   const job = await createJob({
     type: "restore",
     siteId: site._id.toString(),
     createdBy: params.createdBy,
+    requiresApproval: true,
+    approvalSummary: approval.approvalSummary,
+    approvalSnapshot: approval.approvalSnapshot,
     executionMode: "browser-required",
     connectorMode: "browser-sharepoint",
     operationPolicy: policy.operation,
     connectorStatusLabel: policy.statusLabelHe,
     connectorBlocker: policy.blockerHe || getBrowserRequiredJobMessage("restore"),
     payload: {
-      backupId: backup._id.toString(),
-      backupExternalId: backup.backupId,
-      notes: params.notes || "",
-      connectorMode: "browser-sharepoint",
-      executionMode: "browser-required",
-      browserOperationPlan: {
-        operation: "restore",
-        connectorMode: "browser-sharepoint",
-        executionMode: "browser-required",
         backupId: backup._id.toString(),
         backupExternalId: backup.backupId,
-        siteId: site._id.toString(),
-        siteCode: site.siteCode,
-        targetSiteUrl: site.sharePointSiteUrl,
-        files,
+        notes,
+        connectorMode: "browser-sharepoint",
+        executionMode: "browser-required",
+        preRestoreBackupSafety,
+        browserOperationPlan: {
+          operation: "restore",
+          connectorMode: "browser-sharepoint",
+          executionMode: "browser-required",
+          backupId: backup._id.toString(),
+          backupObjectId: backup._id.toString(),
+          backupExternalId: backup.backupId,
+          siteId: site._id.toString(),
+          siteCode: site.siteCode,
+          targetSiteUrl: site.sharePointSiteUrl,
+          files,
         message: getBrowserRequiredJobMessage("restore")
       }
     }
@@ -953,6 +1514,26 @@ export async function enqueueBackupRestore(params: {
   backup.lastRestoreJobId = job._id as any;
   backup.lastRestoreError = "";
   await backup.save();
+  const currentRecoveryState = (site as any).recoveryState?.toObject?.() || (site as any).recoveryState || {};
+  (site as any).recoveryState = {
+    ...currentRecoveryState,
+    restoreAudit: {
+      ...(currentRecoveryState.restoreAudit || {}),
+      readinessStatus: "ready",
+      lastReviewAt: new Date(),
+      lastJobId: job._id.toString(),
+      blockers: [],
+      lastPlan: sanitizeEvidence({
+        backupId: backup._id.toString(),
+        backupExternalId: backup.backupId,
+        jobId: job._id.toString(),
+        filesCount: files.length,
+        notes,
+        preRestoreBackupSafety
+      })
+    }
+  };
+  await site.save();
 
   logger.info("backups", "Restore job queued for browser execution", {
     backupId: backup._id.toString(),
@@ -967,9 +1548,13 @@ export async function enqueueBackupRestore(params: {
     job,
     backup,
     browserOperationPlan: (job.payload as any).browserOperationPlan,
+    requiresApproval: job.requiresApproval,
+    approvalStatus: job.requiresApproval ? "pending" : "browser-required",
     connectorMode: "browser-sharepoint" as const,
     executionMode: "browser-required" as const,
-    message: "נוצרה משימת שחזור שממתינה להרצה דרך הדפדפן."
+    message: job.requiresApproval
+      ? "נוצרה משימת שחזור שממתינה לאישור מתקדם."
+      : "נוצרה משימת שחזור שממתינה להרצה דרך הדפדפן."
   };
 }
 
@@ -1029,6 +1614,26 @@ export async function recordBrowserSharePointRestoreEvidence(params: {
   if (!errorMessage) {
     site.lastHealthCheckAt = checkedAt;
   }
+  const currentRecoveryState = (site as any).recoveryState?.toObject?.() || (site as any).recoveryState || {};
+  (site as any).recoveryState = {
+    ...currentRecoveryState,
+    restoreAudit: {
+      ...(currentRecoveryState.restoreAudit || {}),
+      readinessStatus: finalStatus === "verified" ? "ready" : "blocked",
+      lastRestoreAt: checkedAt,
+      lastJobId: stringValue(params.input.jobId),
+      blockers: finalStatus === "verified" ? [] : [errorMessage],
+      lastPlan: sanitizeEvidence({
+        backupId: backup._id.toString(),
+        backupExternalId: backup.backupId,
+        jobId: params.input.jobId || "",
+        finalStatus,
+        filesCount: restoreEvidence.length,
+        verifiedFilesCount,
+        failedFilesCount
+      })
+    }
+  };
   await site.save();
 
   const jobId = stringValue(params.input.jobId);

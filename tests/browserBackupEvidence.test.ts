@@ -65,8 +65,10 @@ const makeSite = () => ({
   _id: idOf("site-1"),
   siteCode: "schedule",
   displayName: "Schedule",
+  storageBackend: "txt",
   sharePointHost: "portal.army.idf",
   sharePointSiteUrl: "https://portal.army.idf/sites/schedule",
+  recoveryState: {},
   backupCount: 0,
   backupStorageMb: 0,
   save: vi.fn().mockResolvedValue(undefined)
@@ -191,5 +193,108 @@ describe("browser SharePoint backup evidence", () => {
 
     expect(mocks.SiteBackup.create).not.toHaveBeenCalled();
     expect(mocks.assertSharePointWriteAvailable).not.toHaveBeenCalled();
+  });
+
+  it("persists browser SharePoint backup inventory evidence", async () => {
+    const site = makeSite();
+    mocks.Site.findById.mockResolvedValue(site);
+
+    const { recordBrowserSharePointBackupInventoryEvidence } = await import("../server/src/services/backups.service");
+    const result = await recordBrowserSharePointBackupInventoryEvidence({
+      siteId: "site-1",
+      actor: "operator",
+      input: {
+        connectorMode: "browser-sharepoint",
+        targetSiteUrl: "https://portal.army.idf/sites/schedule",
+        generatedAt: "2026-07-02T07:00:00.000Z",
+        includeFiles: true,
+        root: {
+          serverRelativePath: "/sites/schedule/siteDB/siteAssets/Backups",
+          checkedAt: "2026-07-02T07:00:00.000Z",
+          exists: true,
+          status: 200
+        },
+        folders: [{
+          serverRelativeUrl: "/sites/schedule/siteDB/siteAssets/Backups/backup-2026",
+          filesCount: 1,
+          knownSizeBytes: 12,
+          files: [{
+            name: "users_data.txt",
+            serverRelativeUrl: "/sites/schedule/siteDB/siteAssets/Backups/backup-2026/users_data.txt",
+            sizeBytes: 12
+          }]
+        }],
+        summary: {
+          rootExists: true,
+          foldersCount: 1,
+          filesCount: 1,
+          knownSizeBytes: 12,
+          authBlocked: false,
+          readOk: true
+        }
+      }
+    });
+
+    expect(result.latestInventoryRefresh).toMatchObject({
+      status: "success",
+      sourceType: "txt-sharepoint",
+      connectorMode: "browser-sharepoint",
+      rootPath: "/sites/schedule/siteDB/siteAssets/Backups",
+      foldersCount: 1,
+      filesCount: 1,
+      knownSizeBytes: 12
+    });
+    expect(site.recoveryState.lastSuccessfulInventorySnapshot).toMatchObject({
+      status: "success",
+      folders: expect.any(Array)
+    });
+    expect(site.save).toHaveBeenCalled();
+  });
+
+  it("does not overwrite the last successful inventory snapshot with an empty failed read", async () => {
+    const previousSnapshot = {
+      status: "success",
+      filesCount: 9,
+      checkedAt: "2026-07-01T07:00:00.000Z"
+    };
+    const site = {
+      ...makeSite(),
+      recoveryState: {
+        lastSuccessfulInventorySnapshot: previousSnapshot
+      }
+    };
+    mocks.Site.findById.mockResolvedValue(site);
+
+    const { recordBrowserSharePointBackupInventoryEvidence } = await import("../server/src/services/backups.service");
+    const result = await recordBrowserSharePointBackupInventoryEvidence({
+      siteId: "site-1",
+      actor: "operator",
+      input: {
+        connectorMode: "browser-sharepoint",
+        targetSiteUrl: "https://portal.army.idf/sites/schedule",
+        generatedAt: "2026-07-02T07:00:00.000Z",
+        root: {
+          serverRelativePath: "/sites/schedule/siteDB/siteAssets/Backups",
+          checkedAt: "2026-07-02T07:00:00.000Z",
+          exists: false,
+          status: 404,
+          error: "not found"
+        },
+        folders: [],
+        summary: {
+          rootExists: false,
+          authBlocked: false,
+          readOk: false
+        }
+      }
+    });
+
+    expect(result.latestInventoryRefresh).toMatchObject({
+      status: "failed",
+      filesCount: undefined,
+      foldersCount: undefined
+    });
+    expect(site.recoveryState.lastSuccessfulInventorySnapshot).toBe(previousSnapshot);
+    expect(site.save).toHaveBeenCalled();
   });
 });

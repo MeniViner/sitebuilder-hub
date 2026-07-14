@@ -277,8 +277,8 @@ export async function runSharePointDiagnostics(req: Request) {
     ok: false,
     url,
     method,
-    errorCode: "SERVER_SHAREPOINT_DISABLED",
-    humanExplanation: "השרת לא מבצע בקשות SharePoint. הבדיקה צריכה לרוץ דרך הדפדפן המחובר.",
+    errorCode: "BROWSER_SHAREPOINT_REQUIRED",
+    humanExplanation: "בדיקת SharePoint צריכה לרוץ דרך הדפדפן המחובר לאתר היעד.",
     suggestedFix: "הריצו Browser SharePoint diagnostics מתוך אתר SharePoint מחובר."
   });
   const currentUser = skippedProbe(siteApiUrl(paths, "/_api/web/currentuser"), "GET");
@@ -290,7 +290,7 @@ export async function runSharePointDiagnostics(req: Request) {
     authenticated: false,
     digestWorks: false,
     writeVerified: false,
-    message: "חיבור שרת ל־SharePoint מושבת בכוונה. Digest וכתיבה נבדקים רק בדפדפן."
+    message: "Digest וכתיבה ל־SharePoint נבדקים רק דרך Browser SharePoint."
   };
 
   return {
@@ -306,7 +306,7 @@ export async function runSharePointDiagnostics(req: Request) {
     appMode: appModeFor(req),
     targetSharePointSiteUrl: paths.sharePointSiteUrl,
     configured: {
-      serverSharePointDisabled: true,
+      browserSharePointRequired: true,
       sharePointWriteEnabled: false,
       sharePointAuthCookieConfigured: Boolean(env.SHAREPOINT_AUTH_COOKIE),
       sharePointAuthCookieNames: configuredCookieNames(),
@@ -329,7 +329,7 @@ export async function runSharePointDiagnostics(req: Request) {
       failedUrl: [currentUser, readTest, digestTest].find((item) => !item.ok)?.url || "",
       failedStatus: [currentUser, readTest, digestTest].find((item) => !item.ok)?.status,
       failedBackendErrorCode: [currentUser, readTest, digestTest].find((item) => !item.ok)?.errorCode || "",
-      humanExplanation: "חיבור SharePoint מהשרת אינו חלק מהארכיטקטורה. זה לא כשל שצריך לתקן עם cookie/token.",
+      humanExplanation: "אין עדיין ראיית דפדפן שמוכיחה את חיבור SharePoint לאתר הזה.",
       suggestedFix: "השתמשו בבדיקות ובפעולות Browser SharePoint מתוך המשתמש המחובר."
     }
   };

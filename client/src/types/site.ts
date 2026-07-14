@@ -24,12 +24,28 @@ export interface SiteHealth {
 
 export interface SiteMaintenanceTaskSchedule {
   enabled?: boolean;
+  paused?: boolean;
+  frequency?: "daily" | "weekly" | "monthly" | "custom";
+  daysOfWeek?: number[];
+  dayOfMonth?: number;
+  timeOfDay?: string;
+  timezone?: string;
   intervalMinutes?: number;
+  retention?: {
+    mode?: "none" | "count" | "days" | "count-and-days";
+    keepLast?: number;
+    deleteOlderThanDays?: number;
+  };
+  executionMode?: "browser-manual" | "builder-backend" | "backend-service-auth-required" | "not-configured";
   nextRunAt?: string;
+  lastRunAt?: string;
+  lastRunStatus?: "unknown" | "queued" | "succeeded" | "failed" | "blocked";
   lastQueuedAt?: string;
   lastJobId?: string;
   failureCount?: number;
   lastError?: string;
+  savedAt?: string;
+  savedBy?: string;
 }
 
 export interface SiteMaintenanceSchedule {
@@ -42,6 +58,66 @@ export interface SiteAdminIdentity {
   personalNumber?: string;
   email?: string;
   loginName?: string;
+}
+
+export interface SiteRecoveryState {
+  backupCapability?: {
+    status?: "unknown" | "ready" | "blocked" | "error";
+    sourceType?: "txt-sharepoint" | "mongo-builder" | "unknown";
+    connectorMode?: "browser-sharepoint" | "builder-backend" | "backend-service-auth-required" | "unknown";
+    checkedAt?: string;
+    checkedBy?: string;
+    canInventory?: boolean;
+    canRunManualBackup?: boolean;
+    canRunScheduledBackup?: boolean;
+    canRestore?: boolean;
+    blockers?: string[];
+    nextStep?: string;
+    evidence?: unknown;
+  };
+  latestInventoryRefresh?: {
+    status?: "unknown" | "success" | "failed" | "partial";
+    sourceType?: "txt-sharepoint" | "mongo-builder" | "unknown";
+    connectorMode?: "browser-sharepoint" | "builder-backend" | "backend-service-auth-required" | "unknown";
+    checkedAt?: string;
+    checkedBy?: string;
+    rootPath?: string;
+    foldersCount?: number;
+    filesCount?: number;
+    knownSizeBytes?: number;
+    backupRecordsCount?: number;
+    verificationStatus?: "unknown" | "verified" | "warning" | "failed";
+    blocker?: string;
+    error?: string;
+    evidence?: unknown;
+  };
+  lastSuccessfulInventorySnapshot?: unknown;
+  mongoBackupInventory?: {
+    status?: "unknown" | "success" | "failed" | "blocked";
+    checkedAt?: string;
+    records?: Array<Record<string, unknown>>;
+    summary?: Record<string, unknown>;
+    evidence?: unknown;
+  };
+  lastBackupEvidence?: {
+    connectorMode?: string;
+    backupId?: string;
+    status?: string;
+    recordedAt?: string;
+    filesCount?: number;
+    verifiedFilesCount?: number;
+    failedFilesCount?: number;
+    evidenceRef?: string;
+    summary?: unknown;
+  };
+  restoreAudit?: {
+    readinessStatus?: "unknown" | "ready" | "blocked";
+    lastReviewAt?: string;
+    lastRestoreAt?: string;
+    lastJobId?: string;
+    blockers?: string[];
+    lastPlan?: unknown;
+  };
 }
 
 export interface Site {
@@ -205,6 +281,7 @@ export interface Site {
   notes?: string;
   health?: SiteHealth;
   maintenanceSchedule?: SiteMaintenanceSchedule;
+  recoveryState?: SiteRecoveryState;
   derivedHealthStatus: DerivedHealthStatus;
 }
 

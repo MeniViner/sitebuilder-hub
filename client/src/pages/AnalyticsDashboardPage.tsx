@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Activity, AlertTriangle, Archive, BarChart3, CheckCircle2, Clock3, Database, Filter, GitBranch, HardDrive, PieChart, RefreshCcw, Search, ShieldAlert, SlidersHorizontal, Table2, Users } from "lucide-react";
+import { Activity, AlertTriangle, Archive, ArrowUpRight, BarChart3, CheckCircle2, Clock3, Database, Filter, Gauge, GitBranch, HardDrive, Layers3, ListChecks, PieChart, RefreshCcw, Search, ShieldAlert, SlidersHorizontal, Table2, Target, TrendingUp, Users, XCircle } from "lucide-react";
 import { Job, sitesApi } from "../api/sitesApi";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
@@ -9,7 +9,6 @@ import { FilterBar } from "../components/FilterBar";
 import { HelpLabel } from "../components/help/HelpLabel";
 import { KpiCard } from "../components/KpiCard";
 import { LoadingState } from "../components/LoadingState";
-import { ModeBoundary, OperationalSummary } from "../components/OperationalSummary";
 import { PageHeader } from "../components/PageHeader";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBadge } from "../components/StatusBadge";
@@ -40,6 +39,7 @@ type GroupKey =
   | "backupFreshness"
   | "deployFreshness";
 type DateField = "createdAt" | "updatedAt" | "lastHealthCheckAt" | "lastDeployAt" | "lastBackupAt" | "lastAdminSyncAt";
+type AnalyticsTone = "success" | "warning" | "danger" | "info" | "neutral";
 
 type ChartRow = {
   key: string;
@@ -47,6 +47,60 @@ type ChartRow = {
   value: number;
   count: number;
   sites: Site[];
+};
+
+type AnalyticsInsight = {
+  key: string;
+  title: string;
+  eyebrow: string;
+  value: string;
+  description: string;
+  actionLabel: string;
+  tone: AnalyticsTone;
+  icon: JSX.Element;
+  onClick: () => void;
+};
+
+type AnalyticsDecisionLane = {
+  key: string;
+  title: string;
+  value: string;
+  detail: string;
+  percent: number;
+  tone: AnalyticsTone;
+  icon: JSX.Element;
+};
+
+type DashboardViewKey = "overview" | "operations" | "releases" | "recovery" | "governance" | "capacity";
+
+type AnalyticsDashboardMetric = {
+  key: string;
+  label: string;
+  value: string;
+  detail: string;
+  tone: AnalyticsTone;
+  icon: JSX.Element;
+};
+
+type AnalyticsDashboardAction = {
+  key: string;
+  title: string;
+  description: string;
+  value: string;
+  actionLabel: string;
+  tone: AnalyticsTone;
+  icon: JSX.Element;
+  onClick: () => void;
+};
+
+type AnalyticsDashboardSuite = {
+  key: DashboardViewKey;
+  label: string;
+  title: string;
+  description: string;
+  icon: JSX.Element;
+  metrics: AnalyticsDashboardMetric[];
+  actions: AnalyticsDashboardAction[];
 };
 
 type Filters = {
@@ -195,6 +249,35 @@ const freshnessBucket = (value?: string) => {
   if (ageDays <= 30) return "עד חודש";
   if (ageDays <= 90) return "עד רבעון";
   return "ישן";
+};
+
+const isStaleBackupSite = (site: Site) =>
+  ["ישן", "לא קיים"].includes(freshnessBucket(site.lastBackupAt)) || site.backupStatus === "failed";
+
+const isVersionRiskSite = (site: Site) =>
+  ["outdated", "failed", "updating"].includes(site.versionStatus || "unknown");
+
+const isAttentionSite = (site: Site) =>
+  ["warning", "failed"].includes(site.status)
+  || ["warning", "failed"].includes(site.derivedHealthStatus)
+  || isVersionRiskSite(site)
+  || isStaleBackupSite(site)
+  || site.adminSyncStatus === "failed";
+
+const isRecentEnough = (value?: string, maxDays = 7) => {
+  if (!value) return false;
+  const ageDays = Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000);
+  return Number.isFinite(ageDays) && ageDays >= 0 && ageDays <= maxDays;
+};
+
+const ratioPercent = (value: number, total: number) =>
+  total > 0 ? Math.max(0, Math.min(100, Math.round((value / total) * 100))) : 0;
+
+const toneForPercent = (value: number): AnalyticsTone => {
+  if (value >= 85) return "success";
+  if (value >= 65) return "info";
+  if (value >= 45) return "warning";
+  return "danger";
 };
 
 const groupValue = (site: Site, groupBy: GroupKey) => {
@@ -468,6 +551,7 @@ export function AnalyticsDashboardPage() {
   const [jobChartType, setJobChartType] = useState<ChartType>("donut");
   const [limit, setLimit] = useState(12);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [dashboardView, setDashboardView] = useState<DashboardViewKey>("overview");
 
   const load = async () => {
     setLoading(true);
@@ -529,15 +613,9 @@ export function AnalyticsDashboardPage() {
       if (!matchesOption(site.unitName || "", filters.unitName)) return false;
       if (!matchesOption(site.ownerName || "", filters.ownerName)) return false;
       if (!matchesOption(getHost(site), filters.host)) return false;
-      if (filters.focus === "attention") {
-        const attention = ["warning", "failed"].includes(site.status)
-          || ["warning", "failed"].includes(site.derivedHealthStatus)
-          || ["outdated", "failed"].includes(site.versionStatus || "unknown")
-          || site.backupStatus === "failed";
-        if (!attention) return false;
-      }
+      if (filters.focus === "attention" && !isAttentionSite(site)) return false;
       if (filters.focus === "outdated" && site.versionStatus !== "outdated") return false;
-      if (filters.focus === "staleBackups" && !["ישן", "לא קיים"].includes(freshnessBucket(site.lastBackupAt))) return false;
+      if (filters.focus === "staleBackups" && !isStaleBackupSite(site)) return false;
       if (filters.focus === "production" && site.environment !== "production") return false;
       if (filters.focus === "largeStorage" && Number(site.storageMb || 0) < 500) return false;
       if (filters.focus === "adminHeavy" && Number(site.adminsCount || 0) < 5) return false;
@@ -573,15 +651,42 @@ export function AnalyticsDashboardPage() {
   const totalStorage = filteredSites.reduce((sum, site) => sum + Number(site.storageMb || 0), 0);
   const totalBackups = filteredSites.reduce((sum, site) => sum + Number(site.backupCount || 0), 0);
   const totalAdmins = filteredSites.reduce((sum, site) => sum + Number(site.adminsCount || 0), 0);
-  const staleBackups = filteredSites.filter((site) => ["ישן", "לא קיים"].includes(freshnessBucket(site.lastBackupAt))).length;
+  const staleBackups = filteredSites.filter(isStaleBackupSite).length;
   const activeFilterCount = Object.entries(filters).filter(([key, value]) => key !== "includeArchived" && value !== "" && value !== "all").length + (filters.includeArchived ? 1 : 0);
-  const attentionSites = filteredSites.filter((site) =>
-    ["warning", "failed"].includes(site.status)
-    || ["warning", "failed"].includes(site.derivedHealthStatus)
-    || ["outdated", "failed"].includes(site.versionStatus || "unknown")
-    || site.backupStatus === "failed"
-  ).length;
+  const attentionSites = filteredSites.filter(isAttentionSite).length;
   const failedJobs = jobs.filter((job) => job.status === "failed").length;
+  const portfolioSites = sites.filter((site) => site.status !== "archived");
+  const portfolioAttentionSites = portfolioSites.filter(isAttentionSite);
+  const productionSites = portfolioSites.filter((site) => site.environment === "production");
+  const productionAttentionSites = productionSites.filter(isAttentionSite);
+  const versionRiskSites = portfolioSites.filter(isVersionRiskSite);
+  const recoveryRiskSites = portfolioSites.filter(isStaleBackupSite);
+  const adminRiskSites = portfolioSites.filter((site) => site.adminSyncStatus === "failed" || Number(site.adminsCount || 0) >= 8);
+  const largeStorageSites = portfolioSites.filter((site) => Number(site.storageMb || 0) >= 500);
+  const mongoSites = portfolioSites.filter((site) => site.storageBackend === "mongo");
+  const txtSites = portfolioSites.filter((site) => site.storageBackend === "txt");
+  const freshEvidenceSites = portfolioSites.filter((site) => isRecentEnough(site.lastHealthCheckAt, 7) && isRecentEnough(site.lastBackupAt, 30));
+  const totalPortfolioStorage = portfolioSites.reduce((sum, site) => sum + Number(site.storageMb || 0), 0);
+  const riskPoints =
+    portfolioSites.filter((site) => site.derivedHealthStatus === "failed" || site.status === "failed").length * 5
+    + portfolioSites.filter((site) => site.derivedHealthStatus === "warning" || site.status === "warning").length * 2
+    + versionRiskSites.length * 1.4
+    + recoveryRiskSites.length * 1.8
+    + adminRiskSites.length
+    + failedJobs * 1.2;
+  const portfolioHealthScore = Math.max(0, Math.min(100, Math.round(100 - (riskPoints / Math.max(1, portfolioSites.length * 6)) * 100)));
+  const evidenceConfidence = ratioPercent(freshEvidenceSites.length, portfolioSites.length);
+  const portfolioHealthTone = toneForPercent(portfolioHealthScore);
+  const evidenceTone = toneForPercent(evidenceConfidence);
+  const failedOrWarningSites = portfolioSites.filter((site) => ["warning", "failed"].includes(site.status) || ["warning", "failed"].includes(site.derivedHealthStatus));
+  const runningJobs = jobs.filter((job) => ["queued", "preflight", "running", "verifying", "retrying", "browser-in-progress"].includes(job.status));
+  const approvalJobs = jobs.filter((job) => job.status === "awaiting-approval" || Boolean(job.requiresApproval));
+  const staleHealthSites = portfolioSites.filter((site) => !isRecentEnough(site.lastHealthCheckAt, 7));
+  const productionVersionRiskSites = productionSites.filter(isVersionRiskSite);
+  const failedBackupSites = portfolioSites.filter((site) => site.backupStatus === "failed");
+  const totalFiles = portfolioSites.reduce((sum, site) => sum + Number(site.filesCount || 0), 0);
+  const highFileCountSites = portfolioSites.filter((site) => Number(site.filesCount || 0) >= 1000);
+  const topStorageSite = [...portfolioSites].sort((a, b) => Number(b.storageMb || 0) - Number(a.storageMb || 0))[0];
 
   const topSites = useMemo(() => [...filteredSites]
     .sort((a, b) => metricValue(b, metric) - metricValue(a, metric))
@@ -681,6 +786,233 @@ export function AnalyticsDashboardPage() {
     }
   };
 
+  const applyScenario = (
+    nextFilters: Partial<Filters>,
+    nextGroupBy: GroupKey,
+    nextMetric: MetricKey,
+    nextChartType: ChartType
+  ) => {
+    setShowAdvancedFilters(false);
+    setFilters({ ...defaultFilters, ...nextFilters });
+    setGroupBy(nextGroupBy);
+    setMetric(nextMetric);
+    setChartType(nextChartType);
+  };
+
+  const insightQueue: AnalyticsInsight[] = [
+    {
+      key: "production-attention",
+      eyebrow: "Production",
+      title: productionAttentionSites.length ? "אתרי ייצור דורשים טיפול" : "ייצור נקי מתקלות פתוחות",
+      value: formatNumber(productionAttentionSites.length),
+      description: productionAttentionSites.length
+        ? `${formatNumber(productionAttentionSites.length)} מתוך ${formatNumber(productionSites.length)} אתרי ייצור מסומנים בסיכון.`
+        : `${formatNumber(productionSites.length)} אתרי ייצור ללא סיכון פתוח בסנאפשוט הנוכחי.`,
+      actionLabel: "מקד לייצור",
+      tone: productionAttentionSites.length ? "danger" : "success",
+      icon: productionAttentionSites.length ? <ShieldAlert size={17} /> : <CheckCircle2 size={17} />,
+      onClick: () => applyScenario({ focus: "attention", environment: "production" }, "derivedHealthStatus", "count", "column")
+    },
+    {
+      key: "version-drift",
+      eyebrow: "Releases",
+      title: versionRiskSites.length ? "פערי גרסה פעילים" : "אין פער גרסה מהותי",
+      value: formatNumber(versionRiskSites.length),
+      description: `${formatNumber(versionRiskSites.length)} אתרים אינם מיושרים לגרסה הרצויה או נמצאים בעדכון.`,
+      actionLabel: "נתח גרסאות",
+      tone: versionRiskSites.length ? "warning" : "success",
+      icon: <GitBranch size={17} />,
+      onClick: () => applyQuickView("outdated")
+    },
+    {
+      key: "recovery-risk",
+      eyebrow: "Recovery",
+      title: recoveryRiskSites.length ? "כיסוי גיבוי דורש בדיקה" : "כיסוי גיבוי נראה תקין",
+      value: formatNumber(recoveryRiskSites.length),
+      description: `${formatNumber(recoveryRiskSites.length)} אתרים עם גיבוי ישן, חסר או נכשל.`,
+      actionLabel: "בדוק Recovery",
+      tone: recoveryRiskSites.length ? "warning" : "success",
+      icon: <Archive size={17} />,
+      onClick: () => applyQuickView("staleBackups")
+    },
+    {
+      key: "admin-risk",
+      eyebrow: "Access",
+      title: adminRiskSites.length ? "סיכון הרשאות ומנהלים" : "אין עומס מנהלים חריג",
+      value: formatNumber(adminRiskSites.length),
+      description: `${formatNumber(adminRiskSites.length)} אתרים עם סנכרון מנהלים כושל או ריבוי מנהלים.`,
+      actionLabel: "פתח לפי בעלים",
+      tone: adminRiskSites.length ? "warning" : "success",
+      icon: <Users size={17} />,
+      onClick: () => applyScenario({ adminSyncStatus: "failed" }, "ownerName", "adminsCount", "bar")
+    },
+    {
+      key: "storage-concentration",
+      eyebrow: "Capacity",
+      title: largeStorageSites.length ? "ריכוז נפחים גבוהים" : "אין חריגת נפח בולטת",
+      value: formatNumber(largeStorageSites.length),
+      description: `${formatMb(Math.round(totalPortfolioStorage))} מנוהלים בפורטפוליו, ${formatNumber(largeStorageSites.length)} אתרים מעל 500MB.`,
+      actionLabel: "מפה לפי נפח",
+      tone: largeStorageSites.length ? "info" : "success",
+      icon: <HardDrive size={17} />,
+      onClick: () => applyQuickView("largeStorage")
+    }
+  ];
+
+  const decisionLanes: AnalyticsDecisionLane[] = [
+    {
+      key: "health",
+      title: "בריאות צי",
+      value: `${formatNumber(portfolioHealthScore)}%`,
+      detail: `${formatNumber(portfolioAttentionSites.length)} אתרים דורשים טיפול מתוך ${formatNumber(portfolioSites.length)}`,
+      percent: portfolioHealthScore,
+      tone: portfolioHealthTone,
+      icon: <Gauge size={18} />
+    },
+    {
+      key: "releases",
+      title: "יישור גרסאות",
+      value: `${formatNumber(ratioPercent(portfolioSites.length - versionRiskSites.length, portfolioSites.length))}%`,
+      detail: `${formatNumber(versionRiskSites.length)} אתרים בפער גרסה או עדכון`,
+      percent: ratioPercent(portfolioSites.length - versionRiskSites.length, portfolioSites.length),
+      tone: versionRiskSites.length ? "warning" : "success",
+      icon: <GitBranch size={18} />
+    },
+    {
+      key: "recovery",
+      title: "Recovery",
+      value: `${formatNumber(ratioPercent(portfolioSites.length - recoveryRiskSites.length, portfolioSites.length))}%`,
+      detail: `${formatNumber(recoveryRiskSites.length)} אתרים עם גיבוי ישן, חסר או כושל`,
+      percent: ratioPercent(portfolioSites.length - recoveryRiskSites.length, portfolioSites.length),
+      tone: recoveryRiskSites.length ? "warning" : "success",
+      icon: <Archive size={18} />
+    },
+    {
+      key: "data-maturity",
+      title: "Data backend",
+      value: `${formatNumber(ratioPercent(mongoSites.length, portfolioSites.length))}%`,
+      detail: `${formatNumber(mongoSites.length)} Mongo · ${formatNumber(txtSites.length)} TXT`,
+      percent: ratioPercent(mongoSites.length, portfolioSites.length),
+      tone: mongoSites.length ? "info" : "neutral",
+      icon: <Database size={18} />
+    },
+    {
+      key: "evidence",
+      title: "אמון בנתונים",
+      value: `${formatNumber(evidenceConfidence)}%`,
+      detail: `${formatNumber(freshEvidenceSites.length)} אתרים עם health עדכני וגיבוי עדכני`,
+      percent: evidenceConfidence,
+      tone: evidenceTone,
+      icon: <ListChecks size={18} />
+    }
+  ];
+
+  const dashboardSuites: AnalyticsDashboardSuite[] = [
+    {
+      key: "overview",
+      label: "סקירה",
+      title: "סקירת פורטפוליו",
+      description: "המצב הניהולי הרחב: כמה בריא, כמה דחוף, ומה רמת האמון בנתונים.",
+      icon: <Gauge size={15} />,
+      metrics: [
+        { key: "score", label: "Health score", value: `${formatNumber(portfolioHealthScore)}%`, detail: `${formatNumber(portfolioAttentionSites.length)} אתרים בסיכון`, tone: portfolioHealthTone, icon: <Gauge size={16} /> },
+        { key: "production", label: "ייצור בסיכון", value: formatNumber(productionAttentionSites.length), detail: `מתוך ${formatNumber(productionSites.length)} אתרי Production`, tone: productionAttentionSites.length ? "danger" : "success", icon: <ShieldAlert size={16} /> },
+        { key: "evidence", label: "אמון נתונים", value: `${formatNumber(evidenceConfidence)}%`, detail: `${formatNumber(freshEvidenceSites.length)} אתרים עם ראיות עדכניות`, tone: evidenceTone, icon: <ListChecks size={16} /> }
+      ],
+      actions: [
+        { key: "attention", title: "תור טיפול", value: formatNumber(portfolioAttentionSites.length), description: "כל האתרים שמסומנים לפי בריאות, גרסה, גיבוי או Admin sync.", actionLabel: "פתח תור טיפול", tone: portfolioAttentionSites.length ? "warning" : "success", icon: <Target size={16} />, onClick: () => applyQuickView("attention") },
+        { key: "production", title: "סיכון ייצור", value: formatNumber(productionAttentionSites.length), description: "מיקוד מיידי באתרים שמחזיקים סביבת Production.", actionLabel: "סנן Production", tone: productionAttentionSites.length ? "danger" : "success", icon: <ShieldAlert size={16} />, onClick: () => applyScenario({ focus: "attention", environment: "production" }, "derivedHealthStatus", "count", "column") },
+        { key: "evidence", title: "איכות ראיות", value: `${formatNumber(evidenceConfidence)}%`, description: "מראה איפה Health וגיבוי לא מספיק עדכניים לקבלת החלטה.", actionLabel: "קבץ לפי טריות", tone: evidenceTone, icon: <ListChecks size={16} />, onClick: () => applyScenario({}, "backupFreshness", "count", "bar") }
+      ]
+    },
+    {
+      key: "operations",
+      label: "תפעול",
+      title: "דשבורד תפעול",
+      description: "תקלות פעילות, Jobs רצים, אישורים פתוחים ובדיקות Health שהתיישנו.",
+      icon: <Activity size={15} />,
+      metrics: [
+        { key: "failed-warning", label: "אתרי warning/failed", value: formatNumber(failedOrWarningSites.length), detail: "סטטוס אתר או Health בעייתי", tone: failedOrWarningSites.length ? "warning" : "success", icon: <AlertTriangle size={16} /> },
+        { key: "jobs-running", label: "Jobs בתנועה", value: formatNumber(runningJobs.length), detail: `${formatNumber(failedJobs)} Jobs נכשלו`, tone: failedJobs ? "danger" : runningJobs.length ? "info" : "success", icon: <Activity size={16} /> },
+        { key: "stale-health", label: "Health לא עדכני", value: formatNumber(staleHealthSites.length), detail: "בדיקת Health מעל שבוע או חסרה", tone: staleHealthSites.length ? "warning" : "success", icon: <Clock3 size={16} /> }
+      ],
+      actions: [
+        { key: "status", title: "תקלות לפי סטטוס", value: formatNumber(failedOrWarningSites.length), description: "פותח תצוגת טיפול לפי Health וסטטוס.", actionLabel: "מפה לפי תקינות", tone: failedOrWarningSites.length ? "warning" : "success", icon: <AlertTriangle size={16} />, onClick: () => applyScenario({ focus: "attention" }, "derivedHealthStatus", "count", "column") },
+        { key: "jobs", title: "Jobs תקועים", value: formatNumber(failedJobs + runningJobs.length), description: "מציג את התפלגות ה־Jobs כדי לזהות עומס תפעולי.", actionLabel: "ראה Jobs", tone: failedJobs ? "danger" : "info", icon: <Activity size={16} />, onClick: () => setJobChartType("donut") },
+        { key: "approvals", title: "אישורים ממתינים", value: formatNumber(approvalJobs.length), description: "פעולות שמחכות להחלטה לפני המשך תהליך.", actionLabel: "נתח לפי סטטוס", tone: approvalJobs.length ? "warning" : "success", icon: <CheckCircle2 size={16} />, onClick: () => setJobChartType("table") }
+      ]
+    },
+    {
+      key: "releases",
+      label: "גרסאות",
+      title: "דשבורד גרסאות",
+      description: "פערי גרסה, פריסות שהתיישנו והיקף סיכון בייצור.",
+      icon: <GitBranch size={15} />,
+      metrics: [
+        { key: "drift", label: "פערי גרסה", value: formatNumber(versionRiskSites.length), detail: "outdated / failed / updating", tone: versionRiskSites.length ? "warning" : "success", icon: <GitBranch size={16} /> },
+        { key: "prod-drift", label: "ייצור בפער", value: formatNumber(productionVersionRiskSites.length), detail: "אתרי Production עם סיכון גרסה", tone: productionVersionRiskSites.length ? "danger" : "success", icon: <ShieldAlert size={16} /> },
+        { key: "deploy-freshness", label: "פריסות ישנות", value: formatNumber(portfolioSites.filter((site) => freshnessBucket(site.lastDeployAt) === "ישן").length), detail: "lastDeployAt מעל רבעון", tone: "info", icon: <Clock3 size={16} /> }
+      ],
+      actions: [
+        { key: "outdated", title: "מיושנים לפי גרסה", value: formatNumber(versionRiskSites.length), description: "קיבוץ לפי currentVersion כדי לראות איפה להתחיל rollout.", actionLabel: "נתח גרסאות", tone: versionRiskSites.length ? "warning" : "success", icon: <GitBranch size={16} />, onClick: () => applyQuickView("outdated") },
+        { key: "prod-outdated", title: "Production outdated", value: formatNumber(productionVersionRiskSites.length), description: "מיקוד בסביבת ייצור בלבד לפני Batch deploy.", actionLabel: "סנן ייצור", tone: productionVersionRiskSites.length ? "danger" : "success", icon: <ShieldAlert size={16} />, onClick: () => applyScenario({ environment: "production", versionStatus: "outdated" }, "currentVersion", "count", "bar") },
+        { key: "freshness", title: "טריות פריסה", value: formatNumber(portfolioSites.length), description: "קיבוץ לפי lastDeployAt כדי לזהות אתרים שלא קיבלו rollout זמן רב.", actionLabel: "קבץ לפי פריסה", tone: "info", icon: <Clock3 size={16} />, onClick: () => applyScenario({}, "deployFreshness", "count", "bar") }
+      ]
+    },
+    {
+      key: "recovery",
+      label: "Recovery",
+      title: "דשבורד Recovery",
+      description: "כיסוי גיבוי, גיבויים כושלים וטריות התאוששות.",
+      icon: <Archive size={15} />,
+      metrics: [
+        { key: "risk", label: "גיבוי בסיכון", value: formatNumber(recoveryRiskSites.length), detail: "ישן, חסר או נכשל", tone: recoveryRiskSites.length ? "warning" : "success", icon: <Archive size={16} /> },
+        { key: "failed", label: "גיבוי נכשל", value: formatNumber(failedBackupSites.length), detail: "backupStatus failed", tone: failedBackupSites.length ? "danger" : "success", icon: <XCircle size={16} /> },
+        { key: "storage", label: "נפח גיבויים", value: formatMb(Math.round(portfolioSites.reduce((sum, site) => sum + Number(site.backupStorageMb || 0), 0))), detail: `${formatNumber(portfolioSites.reduce((sum, site) => sum + Number(site.backupCount || 0), 0))} רשומות גיבוי`, tone: "info", icon: <HardDrive size={16} /> }
+      ],
+      actions: [
+        { key: "stale", title: "גיבויים חסרים/ישנים", value: formatNumber(recoveryRiskSites.length), description: "תצוגת Recovery שמחזירה אתרים שאין להם כיסוי עדכני.", actionLabel: "פתח Recovery", tone: recoveryRiskSites.length ? "warning" : "success", icon: <Archive size={16} />, onClick: () => applyQuickView("staleBackups") },
+        { key: "freshness", title: "טריות גיבוי", value: formatNumber(portfolioSites.length), description: "קיבוץ כל הפורטפוליו לפי lastBackupAt.", actionLabel: "קבץ לפי טריות", tone: "info", icon: <Clock3 size={16} />, onClick: () => applyScenario({}, "backupFreshness", "backupCount", "donut") },
+        { key: "storage", title: "נפח גיבוי", value: formatMb(Math.round(portfolioSites.reduce((sum, site) => sum + Number(site.backupStorageMb || 0), 0))), description: "בדיקת ריכוזי backupStorageMb לפי יחידות.", actionLabel: "קבץ לפי יחידה", tone: "info", icon: <HardDrive size={16} />, onClick: () => applyScenario({}, "unitName", "backupStorageMb", "bar") }
+      ]
+    },
+    {
+      key: "governance",
+      label: "הרשאות",
+      title: "דשבורד הרשאות ומנהלים",
+      description: "סנכרון מנהלים, עומס הרשאות, בעלים ויחידות שדורשות תשומת לב.",
+      icon: <Users size={15} />,
+      metrics: [
+        { key: "admin-risk", label: "סיכון מנהלים", value: formatNumber(adminRiskSites.length), detail: "failed sync או 8+ מנהלים", tone: adminRiskSites.length ? "warning" : "success", icon: <Users size={16} /> },
+        { key: "failed-sync", label: "Admin sync failed", value: formatNumber(portfolioSites.filter((site) => site.adminSyncStatus === "failed").length), detail: "קריאות סנכרון שנכשלו", tone: portfolioSites.some((site) => site.adminSyncStatus === "failed") ? "danger" : "success", icon: <XCircle size={16} /> },
+        { key: "admins", label: "מנהלים רשומים", value: formatNumber(portfolioSites.reduce((sum, site) => sum + Number(site.adminsCount || 0), 0)), detail: "סכום adminsCount", tone: "info", icon: <Users size={16} /> }
+      ],
+      actions: [
+        { key: "owners", title: "בעלים עם סיכון", value: formatNumber(adminRiskSites.length), description: "קיבוץ לפי ownerName כדי להבין מי צריך טיפול.", actionLabel: "פתח לפי בעלים", tone: adminRiskSites.length ? "warning" : "success", icon: <Users size={16} />, onClick: () => applyScenario({ adminSyncStatus: "failed" }, "ownerName", "adminsCount", "bar") },
+        { key: "units", title: "יחידות עמוסות", value: formatNumber(options.units.length), description: "קיבוץ סיכון הרשאות לפי יחידה ארגונית.", actionLabel: "קבץ לפי יחידה", tone: "info", icon: <Layers3 size={16} />, onClick: () => applyScenario({}, "unitName", "adminsCount", "bar") },
+        { key: "sync", title: "מצב סנכרון", value: formatNumber(portfolioSites.length), description: "התפלגות adminSyncStatus על כל האתרים הפעילים.", actionLabel: "ראה סנכרון", tone: "info", icon: <CheckCircle2 size={16} />, onClick: () => applyScenario({}, "adminSyncStatus", "count", "donut") }
+      ]
+    },
+    {
+      key: "capacity",
+      label: "קיבולת",
+      title: "דשבורד קיבולת ו־Data backend",
+      description: "נפח, כמות קבצים, ריכוזי אחסון והתקדמות TXT/Mongo.",
+      icon: <HardDrive size={15} />,
+      metrics: [
+        { key: "storage", label: "נפח פורטפוליו", value: formatMb(Math.round(totalPortfolioStorage)), detail: topStorageSite ? `הגדול ביותר: ${topStorageSite.displayName}` : "אין נתונים", tone: "info", icon: <HardDrive size={16} /> },
+        { key: "large", label: "אתרים גדולים", value: formatNumber(largeStorageSites.length), detail: "מעל 500MB", tone: largeStorageSites.length ? "warning" : "success", icon: <Database size={16} /> },
+        { key: "files", label: "קבצים", value: formatNumber(totalFiles), detail: `${formatNumber(highFileCountSites.length)} אתרים עם 1,000+ קבצים`, tone: highFileCountSites.length ? "warning" : "info", icon: <Table2 size={16} /> }
+      ],
+      actions: [
+        { key: "storage-buckets", title: "ריכוז נפח", value: formatNumber(largeStorageSites.length), description: "חלוקה לפי storageBucket כדי לראות ריכוזי עומס.", actionLabel: "מפה לפי נפח", tone: largeStorageSites.length ? "warning" : "success", icon: <HardDrive size={16} />, onClick: () => applyQuickView("largeStorage") },
+        { key: "backend", title: "TXT/Mongo split", value: `${formatNumber(mongoSites.length)}/${formatNumber(txtSites.length)}`, description: "קיבוץ לפי storageBackend כדי להבין Data maturity.", actionLabel: "קבץ Backend", tone: mongoSites.length ? "info" : "neutral", icon: <Database size={16} />, onClick: () => applyScenario({}, "widgetsDbTarget", "count", "donut") },
+        { key: "files", title: "עומס קבצים", value: formatNumber(highFileCountSites.length), description: "אתרים עם הרבה קבצים עשויים להשפיע על Backup ו־Deploy.", actionLabel: "קבץ לפי יחידה", tone: highFileCountSites.length ? "warning" : "success", icon: <Table2 size={16} />, onClick: () => applyScenario({}, "unitName", "filesCount", "bar") }
+      ]
+    }
+  ];
+  const activeDashboard = dashboardSuites.find((suite) => suite.key === dashboardView) || dashboardSuites[0];
+
   const quickViews: Array<{ key: FocusKey; label: string; icon: JSX.Element }> = [
     { key: "all", label: "הכל", icon: <CheckCircle2 size={14} /> },
     { key: "attention", label: "דורשים טיפול", icon: <AlertTriangle size={14} /> },
@@ -698,39 +1030,85 @@ export function AnalyticsDashboardPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="דשבורד גרפים"
-        subtitle="תמונה רחבה שמראה איפה צריך תשומת לב, בלי לשנות נתונים"
+        title="מרכז תובנות"
+        subtitle="תמונה תפעולית אחת שמחברת אתרים, גרסאות, גיבויים, Jobs ואמון בנתונים"
         helpKey="analytics"
         actions={<button className="btn btn-secondary" type="button" onClick={load}><RefreshCcw size={15} />רענון</button>}
       />
 
-      <OperationalSummary
-        title="מפה מהירה של כל האתרים"
-        purpose="המסך עוזר למצוא דפוסים: אתרים לא בריאים, גרסאות ישנות, גיבויים חסרים, נפחים גדולים ומנהלים רבים."
-        state={`${formatNumber(filteredSites.length)} אתרים מוצגים · ${formatNumber(activeFilterCount)} פילטרים פעילים · ${formatNumber(jobs.length)} פעולות במערכת`}
-        attention={attentionSites
-          ? `${formatNumber(attentionSites)} אתרים מסוננים דורשים טיפול לפי סטטוס, תקינות, גרסה או גיבוי.`
-          : failedJobs
-            ? `${formatNumber(failedJobs)} פעולות נכשלו בתור הפעולות.`
-            : "אין בעיה דחופה בתצוגה הנוכחית."}
-        attentionTone={attentionSites || failedJobs ? "warning" : "success"}
-        nextAction={attentionSites
-          ? "לחצו על תצוגת דורשים טיפול ואז פתחו אתר מהרשימה."
-          : staleBackups
-            ? "לחצו על גיבויים כדי לראות איפה חסר גיבוי עדכני."
-            : "בחרו תצוגה מהירה או קיבוץ כדי לענות על שאלה תפעולית."}
-        tone={attentionSites || failedJobs ? "warning" : "success"}
-      />
+      <section className="analytics-command-center" aria-label="מרכז תובנות אנליטיקה">
+        <div className={`analytics-hero analytics-tone-${portfolioHealthTone}`}>
+          <div className="analytics-hero-copy">
+            <span className="analytics-eyebrow"><TrendingUp size={15} /> Snapshot priority</span>
+            <h2>מה דורש טיפול עכשיו</h2>
+            <p>
+              {portfolioAttentionSites.length
+                ? `${formatNumber(portfolioAttentionSites.length)} אתרים מתוך ${formatNumber(portfolioSites.length)} מסומנים בסיכון. ${formatNumber(productionAttentionSites.length)} מהם בייצור.`
+                : `${formatNumber(portfolioSites.length)} אתרים פעילים ללא סיכון פתוח בסנאפשוט הנוכחי.`}
+            </p>
+            <div className="analytics-hero-actions">
+              <button className="btn btn-primary" type="button" onClick={() => applyQuickView("attention")}>
+                <Target size={15} />
+                מיקוד טיפול
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={() => applyScenario({ environment: "production" }, "derivedHealthStatus", "count", "column")}>
+                <ShieldAlert size={15} />
+                Production
+              </button>
+            </div>
+          </div>
+          <div className="analytics-score-panel" aria-label="ציון מצב פורטפוליו">
+            <span className="analytics-score-label">Portfolio health</span>
+            <strong className="num">{formatNumber(portfolioHealthScore)}%</strong>
+            <span>{formatNumber(portfolioAttentionSites.length)} אתרים בסיכון · {formatNumber(failedJobs)} Jobs נכשלו</span>
+            <div className="analytics-score-track" aria-hidden="true">
+              <i style={{ width: `${portfolioHealthScore}%` }} />
+            </div>
+          </div>
+          <div className="analytics-hero-facts" aria-label="מדדי מצב">
+            <span><Layers3 size={14} /><b className="num">{formatNumber(portfolioSites.length)}</b><small>אתרים פעילים</small></span>
+            <span><XCircle size={14} /><b className="num">{formatNumber(failedJobs)}</b><small>Jobs נכשלו</small></span>
+            <span><Database size={14} /><b className="num">{formatNumber(ratioPercent(mongoSites.length, portfolioSites.length))}%</b><small>Mongo</small></span>
+            <span><ListChecks size={14} /><b className="num">{formatNumber(evidenceConfidence)}%</b><small>אמון נתונים</small></span>
+          </div>
+        </div>
 
-      <ModeBoundary
-        title="מה בטוח לעשות כאן"
-        items={[
-          { label: "חיפוש ופילטרים", description: "קריאה בלבד. לא משנה אתרים או Jobs.", tone: "success" },
-          { label: "תצוגות מהירות", description: "מסדרות את הגרפים לפי בעיות נפוצות.", tone: "info" },
-          { label: "פתיחת אתר", description: "עוברת לדף האתר כדי לבצע בדיקה או פעולה מוגנת.", tone: "neutral" },
-          { label: "ארכיון", description: "מוצג רק אם בוחרים לכלול רשומות ארכיון.", tone: "warning" }
-        ]}
-      />
+        <div className="analytics-insight-grid" aria-label="תור תובנות">
+          {insightQueue.map((insight) => (
+            <button
+              key={insight.key}
+              className={`analytics-insight-card analytics-tone-${insight.tone}`}
+              type="button"
+              onClick={insight.onClick}
+            >
+              <span className="analytics-insight-icon">{insight.icon}</span>
+              <span className="analytics-insight-copy">
+                <small>{insight.eyebrow}</small>
+                <strong>{insight.title}</strong>
+                <em>{insight.description}</em>
+              </span>
+              <span className="analytics-insight-metric num">{insight.value}</span>
+              <span className="analytics-insight-action">{insight.actionLabel}<ArrowUpRight size={13} /></span>
+            </button>
+          ))}
+        </div>
+
+        <div className="analytics-decision-map" aria-label="מפת החלטות">
+          {decisionLanes.map((lane) => (
+            <div className={`analytics-decision-lane analytics-tone-${lane.tone}`} key={lane.key}>
+              <span className="analytics-decision-icon">{lane.icon}</span>
+              <div className="analytics-decision-copy">
+                <strong>{lane.title}</strong>
+                <span className="num">{lane.value}</span>
+                <small>{lane.detail}</small>
+              </div>
+              <div className="analytics-decision-track" aria-hidden="true">
+                <i style={{ width: `${lane.percent}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <div className="analytics-command-bar">
         <div className="analytics-command-main">
@@ -872,11 +1250,78 @@ export function AnalyticsDashboardPage() {
         </FilterBar>
       ) : null}
 
+      <section className="analytics-dashboard-suite" aria-label="דשבורדים פנימיים">
+        <div className="analytics-dashboard-suite-header">
+          <div>
+            <span className="analytics-eyebrow"><Layers3 size={15} /> דשבורדים פנימיים</span>
+            <h2>בחרו את השאלה התפעולית</h2>
+            <p>כל דשבורד מציג מדדים וקיצורי פעולה סביב תחום אחר, בלי לעזוב את דף ה־Analytics.</p>
+          </div>
+          <div className="analytics-dashboard-tabs" role="tablist" aria-label="בחירת דשבורד פנימי">
+            {dashboardSuites.map((suite) => (
+              <button
+                key={suite.key}
+                className={`analytics-dashboard-tab ${dashboardView === suite.key ? "analytics-dashboard-tab-active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={dashboardView === suite.key}
+                onClick={() => setDashboardView(suite.key)}
+              >
+                {suite.icon}
+                <span>{suite.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="analytics-dashboard-body" role="tabpanel">
+          <div className="analytics-dashboard-board-header">
+            <div>
+              <h3>{activeDashboard.title}</h3>
+              <p>{activeDashboard.description}</p>
+            </div>
+            <span className="badge badge-neutral"><Target size={13} />{formatNumber(activeDashboard.actions.length)} פעולות</span>
+          </div>
+
+          <div className="analytics-dashboard-metrics">
+            {activeDashboard.metrics.map((item) => (
+              <div className={`analytics-dashboard-metric analytics-tone-${item.tone}`} key={item.key}>
+                <span className="analytics-dashboard-metric-icon">{item.icon}</span>
+                <div>
+                  <small>{item.label}</small>
+                  <strong className="num">{item.value}</strong>
+                  <em>{item.detail}</em>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="analytics-dashboard-actions">
+            {activeDashboard.actions.map((action) => (
+              <button
+                key={action.key}
+                className={`analytics-dashboard-action analytics-tone-${action.tone}`}
+                type="button"
+                onClick={action.onClick}
+              >
+                <span className="analytics-dashboard-action-icon">{action.icon}</span>
+                <span className="analytics-dashboard-action-copy">
+                  <small>{action.value}</small>
+                  <strong>{action.title}</strong>
+                  <em>{action.description}</em>
+                </span>
+                <span className="analytics-dashboard-action-label">{action.actionLabel}<ArrowUpRight size={13} /></span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard title="אתרים אחרי סינון" value={formatNumber(filteredSites.length)} icon={<SlidersHorizontal size={18} />} description={`מתוך ${formatNumber(sites.length)} רשומות`} tone="info" variant="inline" helpKey="filters" />
-        <KpiCard title="אחסון רשום" value={formatMb(Math.round(totalStorage))} icon={<Database size={18} />} description="מבוסס metadata" tone="neutral" variant="inline" helpKey="storage" />
-        <KpiCard title="מנהלים" value={formatNumber(totalAdmins)} icon={<Users size={18} />} description="סכום adminsCount" tone="info" variant="inline" helpKey="site.admins" />
-        <KpiCard title="גיבויים חסרים/ישנים" value={formatNumber(staleBackups)} icon={<Activity size={18} />} description={`${formatNumber(totalBackups)} גיבויים רשומים`} tone={staleBackups ? "warning" : "success"} variant="inline" helpKey="backup.schedule" />
+        <KpiCard title="אתרים בתצוגה" value={formatNumber(filteredSites.length)} icon={<SlidersHorizontal size={18} />} description={`מתוך ${formatNumber(portfolioSites.length)} אתרים פעילים`} tone="info" variant="inline" helpKey="filters" />
+        <KpiCard title="נפח מנוהל" value={formatMb(Math.round(totalStorage))} icon={<Database size={18} />} description={`${formatMb(Math.round(totalPortfolioStorage))} בפורטפוליו`} tone="neutral" variant="inline" helpKey="storage" />
+        <KpiCard title="מנהלים בתצוגה" value={formatNumber(totalAdmins)} icon={<Users size={18} />} description={`${formatNumber(adminRiskSites.length)} אתרים עם סיכון הרשאות`} tone={adminRiskSites.length ? "warning" : "info"} variant="inline" helpKey="site.admins" />
+        <KpiCard title="Recovery בסיכון" value={formatNumber(staleBackups)} icon={<Activity size={18} />} description={`${formatNumber(totalBackups)} גיבויים רשומים בתצוגה`} tone={staleBackups ? "warning" : "success"} variant="inline" helpKey="backup.schedule" />
       </div>
 
       <SectionCard
@@ -924,7 +1369,9 @@ export function AnalyticsDashboardPage() {
             <MiniFilterButton active={filters.focus === "largeStorage"} label="נפח" icon={<HardDrive size={13} />} onClick={() => applyQuickView(filters.focus === "largeStorage" ? "all" : "largeStorage")} />
             <MiniFilterButton active={filters.includeArchived} label="ארכיון" icon={<Archive size={13} />} onClick={() => setFilter("includeArchived", !filters.includeArchived)} />
           </div>
-          <AnalyticsChart type={chartType} rows={chartRows} metric={metric} />
+          <div className="analytics-chart-scroll">
+            <AnalyticsChart type={chartType} rows={chartRows} metric={metric} />
+          </div>
         </div>
       </SectionCard>
 
@@ -941,23 +1388,25 @@ export function AnalyticsDashboardPage() {
             </div>
           )}
         >
-          <div className="heatmap-grid" style={{ gridTemplateColumns: `9rem repeat(${heatmapHealth.length}, minmax(5rem, 1fr))` }}>
-            <div />
-            {heatmapHealth.map((health) => <div className="heatmap-head" key={health}>{healthStatusLabel(health)}</div>)}
-            {heatmapEnvironments.map((env) => (
-              <Fragment key={env}>
-                <div className="heatmap-row-label" key={`${env}-label`}>{env}</div>
-                {heatmapHealth.map((health) => {
-                  const count = filteredSites.filter((site) => (site.environment || "unknown") === env && site.derivedHealthStatus === health).length;
-                  const opacity = 0.12 + (count / heatmapMax) * 0.72;
-                  return (
-                    <div className="heatmap-cell" key={`${env}-${health}`} style={{ background: `color-mix(in srgb, var(--accent) ${Math.round(opacity * 100)}%, var(--surface))` }}>
-                      <span className="num">{formatNumber(count)}</span>
-                    </div>
-                  );
-                })}
-              </Fragment>
-            ))}
+          <div className="analytics-panel-scroll analytics-panel-scroll-tight">
+            <div className="heatmap-grid" style={{ gridTemplateColumns: `9rem repeat(${heatmapHealth.length}, minmax(5rem, 1fr))` }}>
+              <div />
+              {heatmapHealth.map((health) => <div className="heatmap-head" key={health}>{healthStatusLabel(health)}</div>)}
+              {heatmapEnvironments.map((env) => (
+                <Fragment key={env}>
+                  <div className="heatmap-row-label" key={`${env}-label`}>{env}</div>
+                  {heatmapHealth.map((health) => {
+                    const count = filteredSites.filter((site) => (site.environment || "unknown") === env && site.derivedHealthStatus === health).length;
+                    const opacity = 0.12 + (count / heatmapMax) * 0.72;
+                    return (
+                      <div className="heatmap-cell" key={`${env}-${health}`} style={{ background: `color-mix(in srgb, var(--accent) ${Math.round(opacity * 100)}%, var(--surface))` }}>
+                        <span className="num">{formatNumber(count)}</span>
+                      </div>
+                    );
+                  })}
+                </Fragment>
+              ))}
+            </div>
           </div>
         </SectionCard>
 
@@ -974,7 +1423,9 @@ export function AnalyticsDashboardPage() {
             </div>
           )}
         >
-          <AnalyticsChart type={versionChartType} rows={versionRows} metric="count" />
+          <div className="analytics-panel-scroll analytics-panel-scroll-tight">
+            <AnalyticsChart type={versionChartType} rows={versionRows} metric="count" />
+          </div>
         </SectionCard>
       </div>
 
@@ -985,7 +1436,9 @@ export function AnalyticsDashboardPage() {
           helpKey="job.status"
           actions={<ChartTypeSwitch value={jobChartType} onChange={setJobChartType} allowed={["bar", "column", "donut", "table"]} />}
         >
-          <AnalyticsChart type={jobChartType} rows={jobRows} metric="count" />
+          <div className="analytics-panel-scroll analytics-panel-scroll-chart">
+            <AnalyticsChart type={jobChartType} rows={jobRows} metric="count" />
+          </div>
         </SectionCard>
 
         <SectionCard
@@ -994,32 +1447,34 @@ export function AnalyticsDashboardPage() {
           helpKey="sites.registry"
           actions={<MetricQuickSwitch value={metric} onChange={setMetric} />}
         >
-          {topSites.length ? (
-            <DataTable
-              columns={siteColumns}
-              rows={topSites}
-              rowKey={(site) => site._id}
-              minWidth={980}
-              density="dense"
-              mobileCard={(site) => (
-                <div className="space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <Link className="truncate font-bold hover:underline" style={{ color: "var(--text-strong)" }} to={`/sites/${site._id}`}>{site.displayName}</Link>
-                      <p className="num text-xs muted">{site.siteCode}</p>
+          <div className="analytics-panel-scroll">
+            {topSites.length ? (
+              <DataTable
+                columns={siteColumns}
+                rows={topSites}
+                rowKey={(site) => site._id}
+                minWidth={980}
+                density="dense"
+                mobileCard={(site) => (
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <Link className="truncate font-bold hover:underline" style={{ color: "var(--text-strong)" }} to={`/sites/${site._id}`}>{site.displayName}</Link>
+                        <p className="num text-xs muted">{site.siteCode}</p>
+                      </div>
+                      <span className="num badge badge-neutral">{formatMetricValue(metricValue(site, metric), metric)}</span>
                     </div>
-                    <span className="num badge badge-neutral">{formatMetricValue(metricValue(site, metric), metric)}</span>
+                    <div className="flex flex-wrap gap-2">
+                      <StatusBadge status={site.status} />
+                      <HealthBadge status={site.derivedHealthStatus} />
+                      <VersionBadge status={site.versionStatus} />
+                    </div>
+                    <p className="num text-xs muted">{formatDateTime(site.updatedAt)}</p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <StatusBadge status={site.status} />
-                    <HealthBadge status={site.derivedHealthStatus} />
-                    <VersionBadge status={site.versionStatus} />
-                  </div>
-                  <p className="num text-xs muted">{formatDateTime(site.updatedAt)}</p>
-                </div>
-              )}
-            />
-          ) : <EmptyState title="אין אתרים להצגה" description="שנו את הפילטרים כדי לראות אתרים." />}
+                )}
+              />
+            ) : <EmptyState title="אין אתרים להצגה" description="שנו את הפילטרים כדי לראות אתרים." />}
+          </div>
         </SectionCard>
       </div>
     </div>

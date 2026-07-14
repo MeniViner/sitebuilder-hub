@@ -15,6 +15,12 @@ const booleanFromEnv = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
+const deployedStorageBackendFromEnv = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const normalized = value.trim();
+  return normalized;
+}, z.union([z.literal(""), z.enum(["txt", "mongo"])]).default(""));
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   SERVER_PORT: z.coerce.number().int().positive("SERVER_PORT חייב להיות מספר חיובי").default(4100),
@@ -45,6 +51,7 @@ const envSchema = z.object({
   SITE_BUILDER_DEFAULT_API_KEY_REF: z.string().default(""),
   SITE_BUILDER_BACKEND_DEFAULT_API_KEY_REF: z.string().default(""),
   SITE_BUILDER_DEFAULT_STORAGE_BACKEND: z.enum(["txt", "mongo", "unknown"]).default("unknown"),
+  SITE_BUILDER_PRODUCTION_STORAGE_BACKEND: deployedStorageBackendFromEnv,
   HUB_ADVANCED_MANUAL_SITE_FIELDS_ENABLED: booleanFromEnv.default(true),
 
   SHAREPOINT_WRITE_ENABLED: booleanFromEnv.default(false),
@@ -125,6 +132,7 @@ const parsed = envSchema.safeParse({
   SITE_BUILDER_DEFAULT_API_KEY_REF: process.env.SITE_BUILDER_DEFAULT_API_KEY_REF,
   SITE_BUILDER_BACKEND_DEFAULT_API_KEY_REF: process.env.SITE_BUILDER_BACKEND_DEFAULT_API_KEY_REF,
   SITE_BUILDER_DEFAULT_STORAGE_BACKEND: process.env.SITE_BUILDER_DEFAULT_STORAGE_BACKEND,
+  SITE_BUILDER_PRODUCTION_STORAGE_BACKEND: process.env.SITE_BUILDER_PRODUCTION_STORAGE_BACKEND,
   HUB_ADVANCED_MANUAL_SITE_FIELDS_ENABLED: process.env.HUB_ADVANCED_MANUAL_SITE_FIELDS_ENABLED,
 
   SHAREPOINT_WRITE_ENABLED: process.env.SHAREPOINT_WRITE_ENABLED,

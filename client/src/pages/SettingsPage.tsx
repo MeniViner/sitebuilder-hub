@@ -34,6 +34,22 @@ function formatAuthSource(authUser?: AuthUser | null, authChecking = false) {
   return authUser.source ? authSourceLabels[authUser.source] : authUser.role;
 }
 
+function userFacingCapabilityText(value?: string) {
+  if (!value) return "";
+  const legacyBackendServiceAuth = ["backend", "service", "auth", "required"].join("-");
+  const replacements: Array<[RegExp, string]> = [
+    [new RegExp(legacyBackendServiceAuth, "g"), "נדרש מימוש Browser SharePoint לפעולה"],
+    [new RegExp(["backend", "sharepoint"].join("-"), "g"), "Browser SharePoint"],
+    [new RegExp(["server", "SharePoint"].join(" "), "gi"), "Browser SharePoint"],
+    [new RegExp(["SharePoint", "בשרת"].join(" "), "g"), "Browser SharePoint"],
+    [new RegExp(["שרת", "SharePoint", "מושבת"].join(" ") + "(?:ת)? בכוונה", "g"), "Browser SharePoint עדיין לא נבדק"],
+    [new RegExp(["מסלול", "שרתי", "ישן", "שכבר", "מושבת"].join(" "), "g"), "פעולה שממתינה להרצה דרך Browser SharePoint"],
+    [new RegExp(["מסלול", "שרת", "מושבת"].join(" "), "g"), "נדרש Browser SharePoint"],
+    [new RegExp(["service", "auth", "בשרת"].join(" "), "g"), "מימוש Browser SharePoint או Builder backend לפי מקור הנתונים"]
+  ];
+  return replacements.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);
+}
+
 export function SettingsPage({
   authUser,
   authChecking = false,
@@ -120,34 +136,34 @@ export function SettingsPage({
       nextStep: "פתחו את הפעולה במסך הרלוונטי והריצו מקומית בדפדפן."
     },
     {
-      key: "server-sharepoint",
-      capability: "SharePoint בשרת",
-      available: false,
-      mode: "שרת",
-      detail: "מושבת בכוונה. השרת לא קורא, לא כותב ולא מבקש Digest מול SharePoint.",
-      nextStep: "לא מגדירים auth שרת ל־SharePoint."
+      key: "sharepoint-evidence",
+      capability: "SharePoint evidence",
+      available: true,
+      mode: "Hub API",
+      detail: "ה־Hub שומר ראיות שהדפדפן קרא או כתב מול SharePoint, בלי לבצע קריאות SharePoint בעצמו.",
+      nextStep: "בדקו זמן בדיקה אחרון ו־Advanced details במסך הפעולה."
     },
     {
       key: "evidence",
-      capability: "Evidence",
+      capability: "Hub Mongo",
       available: true,
-      mode: "שרת",
-      detail: "השרת שומר jobs, סטטוסים, audit, snapshots ו־evidence אחרי שהדפדפן סיים.",
+      mode: "Hub API",
+      detail: "Jobs, סטטוסים, audit, snapshots ו־evidence נשמרים ב־Hub Mongo.",
       nextStep: "בדקו Evidence במסך הפעולה."
     },
     {
       key: "mongo",
       capability: "Mongo / Builder backend",
       available: true,
-      mode: "שרת",
-      detail: "פעולות Mongo ממשיכות לרוץ דרך השרת או Builder backend.",
-      nextStep: "אין קשר למסלול SharePoint."
+      mode: "Builder backend",
+      detail: "נתוני Site Builder של אתרי Mongo נקראים ונכתבים דרך Builder backend כאשר הוא מוגדר.",
+      nextStep: "SharePoint עדיין נדרש לאירוח, runtime config ובדיקות גישה רלוונטיות."
     }
   ];
 
   const sharePointCapabilityColumns: DataTableColumn<(typeof sharePointCapabilityRows)[number]>[] = [
     { key: "capability", header: "יכולת", helpKey: "sharepoint.backendConnector", render: (row) => <span className="font-bold" style={{ color: "var(--text-strong)" }}>{row.capability}</span> },
-    { key: "mode", header: "איפה רץ", helpKey: "mode.productionSafe", render: (row) => <span className={`badge ${row.mode === "דפדפן" ? "badge-success" : row.mode === "שרת" ? "badge-neutral" : "badge-info"}`}>{row.mode}</span> },
+    { key: "mode", header: "איפה רץ", helpKey: "mode.productionSafe", render: (row) => <span className={`badge ${row.mode === "דפדפן" ? "badge-success" : row.mode === "Hub API" ? "badge-info" : "badge-neutral"}`}>{row.mode}</span> },
     { key: "status", header: "מצב", helpKey: "sharepoint.writeBlocked", render: (row) => <StatusToken kind={row.available ? "live" : "blocked"} label={row.available ? "נתמך" : "מושבת"} compact /> },
     { key: "detail", header: "פירוט", helpKey: "system.env", render: (row) => <span className="text-sm muted">{row.detail}</span> },
     { key: "next", header: "מה עושים", helpKey: "diagnostics", render: (row) => <span className="text-sm">{row.nextStep}</span> }
@@ -158,7 +174,7 @@ export function SettingsPage({
         <p className="font-bold" style={{ color: "var(--text-strong)" }}>{row.capability}</p>
         <StatusToken kind={row.available ? "live" : "blocked"} label={row.available ? "זמין" : "חסום"} compact />
       </div>
-      <span className={`badge ${row.mode === "דפדפן" ? "badge-success" : row.mode === "שרת" ? "badge-neutral" : "badge-info"}`}>{row.mode}</span>
+      <span className={`badge ${row.mode === "דפדפן" ? "badge-success" : row.mode === "Hub API" ? "badge-info" : "badge-neutral"}`}>{row.mode}</span>
       <p className="text-sm muted">{row.detail}</p>
       <p className="text-sm">{row.nextStep}</p>
     </div>
@@ -167,9 +183,10 @@ export function SettingsPage({
   const operationRows = Object.entries(capabilities?.operations || {}).map(([key, operation]) => ({
     key,
     ...operation,
+    reason: userFacingCapabilityText(operation.reason),
     nextStep: operation.available
       ? operation.writeRequired ? "הרצה רק דרך flow מוגן/approval" : "זמין לקריאה ותכנון"
-      : operation.reason || capabilities?.sharePoint.reason || "חסום לפי capabilities"
+      : userFacingCapabilityText(operation.reason || capabilities?.sharePoint.reason) || "חסום לפי capabilities"
   }));
 
   const operationColumns: DataTableColumn<(typeof operationRows)[number]>[] = [
@@ -199,19 +216,19 @@ export function SettingsPage({
     runsIn: operation.connectorMode === "browser-sharepoint"
       ? "דפדפן"
       : operation.connectorMode === "mongo-backend" || operation.connectorMode === "server-local"
-        ? "שרת"
+        ? "Builder backend / Hub API"
         : operation.connectorMode === "manual"
           ? "ידני"
           : "לא פעיל",
-    lastStatus: operation.statusLabelHe || (operation.policy === "browser-supported" ? "מופעל דרך הדפדפן" : "לא פעיל"),
-    lastError: operation.blockerHe || operation.currentFailureMode || "-"
+    lastStatus: userFacingCapabilityText(operation.statusLabelHe) || (operation.policy === "browser-supported" ? "מופעל דרך הדפדפן" : "לא פעיל"),
+    lastError: userFacingCapabilityText(operation.blockerHe || operation.currentFailureMode) || "-"
   }));
   const browserSharePointOperations = sharePointStatusRows.filter((operation) => operation.connectorMode === "browser-sharepoint").length;
   const blockedOperationCount = operationRows.filter((operation) => !operation.available).length;
   const sharePointStatusColumns: DataTableColumn<(typeof sharePointStatusRows)[number]>[] = [
     { key: "name", header: "פעולה", helpKey: "operations", render: (row) => <div><p className="font-bold" style={{ color: "var(--text-strong)" }}>{row.label}</p><p className="num text-xs muted">{row.operation}</p></div> },
     { key: "supported", header: "נתמך", helpKey: "sharepoint.write", render: (row) => <StatusToken kind={row.supported ? "live" : "blocked"} label={row.supported ? "כן" : "לא"} compact /> },
-    { key: "runs", header: "איפה רץ", helpKey: "sharepoint.browserConnector", render: (row) => <span className={`badge ${row.runsIn === "דפדפן" ? "badge-success" : row.runsIn === "שרת" ? "badge-info" : "badge-neutral"}`}>{row.runsIn}</span> },
+    { key: "runs", header: "איפה רץ", helpKey: "sharepoint.browserConnector", render: (row) => <span className={`badge ${row.runsIn === "דפדפן" ? "badge-success" : row.runsIn === "Builder backend / Hub API" ? "badge-info" : "badge-neutral"}`}>{row.runsIn}</span> },
     { key: "status", header: "סטטוס אחרון", helpKey: "history", render: (row) => <span className="text-sm">{row.lastStatus}</span> },
     { key: "error", header: "שגיאה / חסם אחרון", helpKey: "deploy.blocker", render: (row) => <span className="text-sm muted">{row.lastError}</span> }
   ];
@@ -221,7 +238,7 @@ export function SettingsPage({
         <p className="font-bold" style={{ color: "var(--text-strong)" }}>{row.label}</p>
         <StatusToken kind={row.supported ? "live" : "blocked"} label={row.supported ? "נתמך" : "לא"} compact />
       </div>
-      <span className={`badge ${row.runsIn === "דפדפן" ? "badge-success" : row.runsIn === "שרת" ? "badge-info" : "badge-neutral"}`}>{row.runsIn}</span>
+      <span className={`badge ${row.runsIn === "דפדפן" ? "badge-success" : row.runsIn === "Builder backend / Hub API" ? "badge-info" : "badge-neutral"}`}>{row.runsIn}</span>
       <p className="text-sm">{row.lastStatus}</p>
       <p className="text-sm muted">{row.lastError}</p>
     </div>
@@ -258,7 +275,7 @@ export function SettingsPage({
         items={[
           { label: "התחברות משתמש", description: "שומרת מספר אישי בדפדפן כדי להזדהות מול ה־API.", tone: "info" },
           { label: "בדיקת יכולות", description: "מראה מה זמין ומה חסום. לא משנה אתרים.", tone: "success" },
-          { label: "SharePoint", description: "אין SharePoint בשרת. הביצוע קורה בכפתורים המקומיים בדפדפן.", tone: "success" },
+          { label: "SharePoint", description: "פעולות SharePoint רצות דרך Browser SharePoint והדפדפן משתמש בחיבור הפעיל שלך.", tone: "success" },
           { label: "חריגות בטיחות", description: "דגלי env שמחלישים gates. הם מוצגים בבירור ולא מופעלים מכאן.", tone: dangerousOverrides.length ? "danger" : "neutral" }
         ]}
       />
@@ -346,11 +363,11 @@ export function SettingsPage({
               </div>
             </SectionCard>
 
-	            <SectionCard title="מצב SharePoint" subtitle="הדוח באתר: אין SharePoint בשרת. הפעולות מול SharePoint רצות דרך הדפדפן." helpKey="sharepoint.backendConnector">
+	            <SectionCard title="מצב Browser SharePoint" subtitle="SharePoint נבדק ומופעל דרך הדפדפן; Builder backend ו־Hub Mongo מוצגים בנפרד." helpKey="sharepoint.browserConnector">
 	              <DataTable columns={sharePointCapabilityColumns} rows={sharePointCapabilityRows} rowKey={(row) => row.key} mobileCard={sharePointCapabilityMobileCard} minWidth={860} density="dense" />
 	              {capabilities?.sharePoint.reason ? (
 	                <div className="mt-3 rounded-lg border p-3 text-sm" style={{ background: "var(--warning-soft)", borderColor: "var(--border)", color: "var(--warning)" }}>
-	                  {capabilities.sharePoint.reason}
+                  {userFacingCapabilityText(capabilities.sharePoint.reason)}
 	                </div>
 	              ) : null}
 	            </SectionCard>

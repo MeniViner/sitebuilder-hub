@@ -6,9 +6,13 @@ import { AppShell } from "./components/AppShell";
 import { ErrorState } from "./components/ErrorState";
 import { LoadingState } from "./components/LoadingState";
 import { MetadataOnlyBadge } from "./components/MetadataOnlyBadge";
+import { OperationalStatusProvider } from "./components/OperationalStatusProvider";
 import { PageHeader } from "./components/PageHeader";
 import { SectionCard } from "./components/SectionCard";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DashboardLabPage } from "./pages/DashboardLabPage";
+import { DashboardDesignStudioPage } from "./pages/DashboardDesignStudioPage";
+import { DashboardNorthStarPage } from "./pages/DashboardNorthStarPage";
 import { AnalyticsDashboardPage } from "./pages/AnalyticsDashboardPage";
 import { SitesPage } from "./pages/SitesPage";
 import { SiteDetailsPage } from "./pages/SiteDetailsPage";
@@ -172,6 +176,74 @@ function FirstInitAuthPage({
   );
 }
 
+function AuthenticatedRoutes({
+  serverStatus,
+  authUser,
+  authChecking,
+  onLogin,
+  onLogout,
+  onRefreshAuth,
+  authBootstrapStatus,
+  authError
+}: {
+  serverStatus?: { mongo?: string; status?: string; serverTime?: string };
+  authUser: AuthUser;
+  authChecking: boolean;
+  onLogin: (personalNumber: string) => Promise<void>;
+  onLogout: () => Promise<void>;
+  onRefreshAuth: () => Promise<void>;
+  authBootstrapStatus: AuthBootstrapStatus | null;
+  authError: string;
+}) {
+  const location = useLocation();
+  const detachedNorthStar = location.pathname === "/dashboard-northstar";
+  const detachedDesignStudio = location.pathname === "/dashboard-design-studio";
+  const routes = (
+    <Routes>
+      <Route path="/" element={<DashboardPage />} />
+      <Route path="/dashboard-lab" element={<DashboardLabPage />} />
+      <Route path="/dashboard-design-studio" element={<DashboardDesignStudioPage />} />
+      <Route path="/dashboard-northstar" element={<DashboardNorthStarPage />} />
+      <Route path="/analytics" element={<AnalyticsDashboardPage />} />
+      <Route path="/sites" element={<SitesPage authUser={authUser} />} />
+      <Route path="/sites/:id" element={<SiteDetailsPage />} />
+      <Route path="/releases" element={<ReleasesPage />} />
+      <Route path="/backups" element={<BackupsPage />} />
+      <Route path="/admins" element={<AdminsPage />} />
+      <Route path="/jobs" element={<JobsPage />} />
+      <Route path="/monitoring" element={<MonitoringPage />} />
+      <Route path="/audit" element={<AuditPage />} />
+      <Route path="/health" element={<HealthPage />} />
+      <Route path="/diagnostics" element={<DiagnosticsPage />} />
+      <Route path="/help" element={<HelpPage />} />
+      <Route
+        path="/settings"
+        element={
+          <SettingsPage
+            authUser={authUser}
+            authChecking={authChecking}
+            authBootstrapStatus={authBootstrapStatus}
+            authError={authError}
+            onLogin={onLogin}
+            onLogout={onLogout}
+            onRefreshAuth={onRefreshAuth}
+          />
+        }
+      />
+    </Routes>
+  );
+
+  return (
+    <OperationalStatusProvider serverStatus={serverStatus} authUser={authUser} authChecking={authChecking}>
+      {detachedNorthStar || detachedDesignStudio ? routes : (
+        <AppShell serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={onLogout}>
+          {routes}
+        </AppShell>
+      )}
+    </OperationalStatusProvider>
+  );
+}
+
 export default function App() {
   const [serverStatus, setServerStatus] = useState<{ status?: string; mongo?: string; serverTime?: string }>({});
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -332,9 +404,11 @@ export default function App() {
     <HashRouter>
       <RouteLogger />
       <Layout>
-        <AppShell serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={handleLogout}>
-          {children}
-        </AppShell>
+        <OperationalStatusProvider serverStatus={serverStatus} authUser={authUser} authChecking={authChecking}>
+          <AppShell serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={handleLogout}>
+            {children}
+          </AppShell>
+        </OperationalStatusProvider>
       </Layout>
     </HashRouter>
   );
@@ -359,37 +433,16 @@ export default function App() {
     <HashRouter>
       <RouteLogger />
       <Layout>
-        <AppShell serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={handleLogout}>
-          <Routes>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/analytics" element={<AnalyticsDashboardPage />} />
-            <Route path="/sites" element={<SitesPage authUser={authUser} />} />
-            <Route path="/sites/:id" element={<SiteDetailsPage />} />
-            <Route path="/releases" element={<ReleasesPage />} />
-            <Route path="/backups" element={<BackupsPage />} />
-            <Route path="/admins" element={<AdminsPage />} />
-            <Route path="/jobs" element={<JobsPage />} />
-            <Route path="/monitoring" element={<MonitoringPage />} />
-            <Route path="/audit" element={<AuditPage />} />
-            <Route path="/health" element={<HealthPage />} />
-            <Route path="/diagnostics" element={<DiagnosticsPage />} />
-            <Route path="/help" element={<HelpPage />} />
-            <Route
-              path="/settings"
-              element={
-                <SettingsPage
-                  authUser={authUser}
-                  authChecking={authChecking}
-                  authBootstrapStatus={authBootstrapStatus}
-                  authError={authError}
-                  onLogin={handleLogin}
-                  onLogout={handleLogout}
-                  onRefreshAuth={refreshAuth}
-                />
-              }
-            />
-          </Routes>
-        </AppShell>
+        <AuthenticatedRoutes
+          serverStatus={serverStatus}
+          authUser={authUser}
+          authChecking={authChecking}
+          onLogin={handleLogin}
+          onLogout={handleLogout}
+          onRefreshAuth={refreshAuth}
+          authBootstrapStatus={authBootstrapStatus}
+          authError={authError}
+        />
       </Layout>
     </HashRouter>
   );

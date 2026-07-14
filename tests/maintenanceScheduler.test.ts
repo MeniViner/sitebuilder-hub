@@ -42,10 +42,12 @@ const idOf = (value: string) => ({ toString: () => value });
 const makeSite = () => ({
   _id: idOf("507f1f77bcf86cd799439011"),
   siteCode: "alpha",
+  storageBackend: "mongo",
   status: "active",
   maintenanceSchedule: {
     backup: {
       enabled: true,
+      executionMode: "builder-backend",
       intervalMinutes: 120,
       nextRunAt: new Date("2026-05-14T08:00:00.000Z")
     },
@@ -189,6 +191,63 @@ describe("maintenance scheduler", () => {
         $set: expect.objectContaining({
           "maintenanceSchedule.healthCheck.nextRunAt": new Date("2026-05-14T09:30:00.000Z"),
           "maintenanceSchedule.healthCheck.lastJobId": "health-job-1"
+        })
+      })
+    );
+  });
+
+  it("blocks TXT scheduled backup instead of presenting unattended browser backup as working", async () => {
+    const now = new Date("2026-05-14T09:00:00.000Z");
+    const site = {
+      ...makeSite(),
+      storageBackend: "txt",
+      maintenanceSchedule: {
+        backup: {
+          enabled: true,
+          executionMode: "backend-service-auth-required",
+          intervalMinutes: 120,
+          nextRunAt: new Date("2026-05-14T08:00:00.000Z")
+        },
+        healthCheck: {
+          enabled: false,
+          intervalMinutes: 30,
+          nextRunAt: new Date("2026-05-14T08:45:00.000Z")
+        }
+      }
+    };
+    mocks.Site.find.mockReturnValue({
+      limit: vi.fn(async () => [site])
+    });
+    mocks.createJob.mockResolvedValue({
+      _id: idOf("blocked-backup-job-1")
+    });
+
+    const { runMaintenanceSchedulerTick } = await import("../server/src/services/maintenanceScheduler.service");
+    const result = await runMaintenanceSchedulerTick(now);
+
+    expect(result).toMatchObject({
+      dueSites: 1,
+      queuedBackups: 0,
+      queuedHealthChecks: 0,
+      skipped: 1,
+      failed: 0
+    });
+    expect(mocks.enqueueSiteBackup).not.toHaveBeenCalled();
+    expect(mocks.createJob).toHaveBeenCalledWith(expect.objectContaining({
+      type: "backup",
+      executionMode: "blocked-service-auth-required",
+      connectorMode: "backend-service-auth-required",
+      payload: expect.objectContaining({
+        scheduled: true,
+        blocker: "scheduled-backup-requires-browser-sharepoint"
+      })
+    }));
+    expect(mocks.Site.findByIdAndUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          "maintenanceSchedule.backup.lastRunStatus": "blocked",
+          "maintenanceSchedule.backup.lastError": "scheduled-backup-requires-browser-sharepoint"
         })
       })
     );
