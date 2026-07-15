@@ -9,9 +9,12 @@ import {
 } from "../client/src/config/routeManifest";
 import {
   canMutate,
+  isSiteSetupComplete,
   lastVerifiedBackupAt,
   presentBackupRecoverability,
+  presentEnvironment,
   presentOperationState,
+  presentOperationTitle,
   presentSiteCondition,
   presentVisibleRole,
   settleSlice
@@ -28,6 +31,8 @@ const site = (values: Partial<Site> = {}) => ({
   lifecycleStatus: "ready",
   provisioningStatus: "succeeded",
   derivedHealthStatus: "healthy",
+  storageBackend: "txt",
+  lastHealthCheckAt: "2026-01-01T11:30:00.000Z",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...values
@@ -76,7 +81,9 @@ describe("route and workspace contracts", () => {
 
 describe("human presentation contracts", () => {
   it("maps detailed operation states into exactly four outcomes", () => {
-    expect(presentOperationState("browser-required").state).toBe("ready");
+    expect(presentOperationState("browser-required").state).toBe("in-progress");
+    expect(presentOperationState("partial").state).toBe("in-progress");
+    expect(presentOperationState("partially-failed").state).toBe("failed");
     expect(presentOperationState("verifying").state).toBe("in-progress");
     expect(presentOperationState("verified").state).toBe("succeeded");
     expect(presentOperationState("blocked-service-auth-required").state).toBe("failed");
@@ -84,12 +91,25 @@ describe("human presentation contracts", () => {
   });
 
   it("maps site persistence into three conditions without changing it", () => {
-    expect(presentSiteCondition(site()).state).toBe("ready");
-    expect(presentSiteCondition(site({ lifecycleStatus: "partially-created" })).state).toBe("needs-attention");
-    expect(presentSiteCondition(site({ lifecycleStatus: "partially-created" })).reason).toBe("ההקמה עדיין לא הושלמה");
-    expect(presentSiteCondition(site({ versionStatus: "outdated" }))).toMatchObject({ state: "needs-attention", reason: "קיים עדכון שטרם הותקן" });
-    expect(presentSiteCondition(site({ status: "archived" })).state).toBe("unavailable");
-    expect(presentSiteCondition(site({ lifecycleStatus: "failed", derivedHealthStatus: "failed" })).state).toBe("unavailable");
+    const now = "2026-01-01T12:00:00.000Z";
+    expect(presentSiteCondition(site(), { now }).state).toBe("ready");
+    expect(presentSiteCondition(site({ lifecycleStatus: "partially-created" }), { now }).state).toBe("needs-attention");
+    expect(presentSiteCondition(site({ lifecycleStatus: "partially-created" }), { now }).reason).toBe("ההקמה עדיין לא הושלמה");
+    expect(presentSiteCondition(site({ versionStatus: "outdated" }), { now })).toMatchObject({ state: "needs-attention", reason: "קיים עדכון שטרם הותקן" });
+    expect(presentSiteCondition(site({ status: "archived" }), { now }).state).toBe("unavailable");
+    expect(presentSiteCondition(site({ dataBackendStatus: "failed" }), { now })).toMatchObject({ state: "unavailable", reason: "האתר אינו זמין כרגע" });
+    expect(presentSiteCondition(site({ storageBackend: "unknown" }), { now })).toMatchObject({ state: "needs-attention", reason: "זהות אחסון הנתונים עדיין לא אומתה" });
+    expect(presentSiteCondition(site({ lastHealthCheckAt: "2025-12-30T00:00:00.000Z" }), { now })).toMatchObject({ state: "needs-attention", reason: "בדיקת התקינות אינה עדכנית" });
+    expect(presentSiteCondition(site({ lifecycleStatus: "failed", derivedHealthStatus: "failed" }), { now }).state).toBe("unavailable");
+    expect(isSiteSetupComplete(site(), { now })).toBe(true);
+    expect(isSiteSetupComplete(site({ lifecycleStatus: "partially-created" }), { now })).toBe(false);
+  });
+
+  it("keeps internal operation and environment values out of normal copy", () => {
+    expect(presentOperationTitle("site-bootstrap")).toBe("השלמת אתר");
+    expect(presentOperationTitle("unrecognized_internal_job")).toBe("פעולה באתר");
+    expect(presentEnvironment("staging")).toBe("קדם־ייצור");
+    expect(presentEnvironment("unexpected")).toBe("לא ידועה");
   });
 
   it("presents only Admin and Viewer and never enables Viewer mutations", () => {
@@ -103,6 +123,7 @@ describe("human presentation contracts", () => {
 
   it("does not call evidence-only records recoverable backups", () => {
     expect(presentBackupRecoverability({ status: "succeeded", verification: { status: "verified" } }).recoverable).toBe(false);
+    expect(presentBackupRecoverability({ status: "failed" })).toMatchObject({ recoverable: false, label: "הגיבוי נכשל" });
     expect(presentBackupRecoverability({
       status: "succeeded",
       verification: { status: "verified" },
@@ -127,6 +148,7 @@ describe("human presentation contracts", () => {
     ]);
     expect(good).toEqual({ status: "ready", data: ["site"], error: "" });
     expect(bad).toEqual({ status: "failed", data: null, error: "jobs unavailable" });
+    expect(await settleSlice(Promise.reject(new Error("timed out")), ["cached"])).toEqual({ status: "stale", data: ["cached"], error: "timed out" });
   });
 });
 

@@ -65,7 +65,7 @@ describe("simplified normal UI", () => {
     const confirm = read("client/src/components/ConfirmDialog.tsx");
     const protectedDialog = read("client/src/components/ProtectedActionDialog.tsx");
     const focus = read("client/src/hooks/useDialogFocus.ts");
-    expect(main).toContain('@fontsource/assistant/400.css');
+    expect(main).toContain('@fontsource/assistant/hebrew-400.css');
     expect(styles).toContain('font-family: "Assistant"');
     expect(confirm).toContain('role="dialog"');
     expect(confirm).toContain('aria-modal="true"');

@@ -13,6 +13,7 @@ import { SimpleDashboardPage } from "./pages/SimpleDashboardPage";
 import { SimpleSitesPage } from "./pages/SimpleSitesPage";
 import { OperationsPage } from "./pages/OperationsPage";
 import { SimpleSettingsPage } from "./pages/SimpleSettingsPage";
+import { ProductPage } from "./components/product/ProductPage";
 import { HUB_FEATURE_POLICY } from "./config/uiMode";
 import { HUB_ROUTE_MANIFEST, isRouteModeEnabled, type HubRouteDefinition } from "./config/routeManifest";
 import { presentVisibleRole } from "./domain/presentation";
@@ -51,10 +52,12 @@ type AuthUser = NonNullable<WhoAmIResult["user"]>;
 
 function RouteUnavailable() {
   return (
-    <div className="normal-empty-card">
-      <h2>העמוד אינו פעיל במצב הנוכחי</h2>
-      <p>אפשר להפעיל מצב תמיכה מתאים דרך הגדרת הסביבה.</p>
-    </div>
+    <ProductPage title="עמוד לא זמין" description="העמוד אינו חלק מהמצב הפעיל.">
+      <div className="normal-empty-card">
+        <h2>העמוד אינו פעיל במצב הנוכחי</h2>
+        <p>אפשר להפעיל מצב תמיכה מתאים דרך הגדרת הסביבה.</p>
+      </div>
+    </ProductPage>
   );
 }
 

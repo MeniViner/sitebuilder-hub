@@ -37,6 +37,9 @@ export function ProtectedActionDialog({
   const [confirmation, setConfirmation] = useState("");
   const titleId = useId();
   const descriptionId = useId();
+  const noteHintId = useId();
+  const confirmationHintId = useId();
+  const disabledReasonId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const safeClose = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
@@ -91,13 +94,15 @@ export function ProtectedActionDialog({
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
                 placeholder={notePlaceholder}
+                aria-describedby={noteHintId}
+                aria-invalid={Boolean(note) && note.trim().length < 3}
               />
-              <span className="mt-1 block text-xs muted">{noteHint}</span>
+              <span className="mt-1 block text-xs muted" id={noteHintId}>{noteHint}</span>
             </label>
             <label className="block">
               <span className="field-label">הקלד {confirmWord}</span>
-              <input className="control" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
-              <span className="mt-1 block text-xs muted">מונע הרצה בטעות של פעולה בעלת סיכון.</span>
+              <input className="control" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} aria-describedby={confirmationHintId} aria-invalid={Boolean(confirmation) && confirmation.trim().toLocaleLowerCase() !== confirmWord.toLocaleLowerCase()} />
+              <span className="mt-1 block text-xs muted" id={confirmationHintId}>מונע הרצה בטעות של פעולה בעלת סיכון.</span>
             </label>
           </div>
         </div>
@@ -106,10 +111,10 @@ export function ProtectedActionDialog({
           <div className="min-w-0">
             <button className="btn btn-secondary" type="button" onClick={onClose} disabled={busy}>ביטול</button>
             {confirmDisabledReason ? (
-              <p className="mt-2 max-w-md text-xs" style={{ color: "var(--danger)" }}>{confirmDisabledReason}</p>
+              <p className="mt-2 max-w-md text-xs" id={disabledReasonId} style={{ color: "var(--danger)" }}>{confirmDisabledReason}</p>
             ) : null}
           </div>
-          <button className="btn btn-danger" type="button" onClick={() => onConfirm(note.trim())} disabled={!canConfirm}>
+          <button className="btn btn-danger" type="button" onClick={() => onConfirm(note.trim())} disabled={!canConfirm} aria-describedby={confirmDisabledReason ? disabledReasonId : undefined}>
             {busy ? "שולח..." : confirmLabel}
           </button>
         </footer>

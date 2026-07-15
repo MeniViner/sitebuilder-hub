@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { BidiValue, DateValue } from "../components/product/BidiValue";
 import { HumanStatus } from "../components/product/HumanStatus";
 import { ProductPage } from "../components/product/ProductPage";
+import { siteWorkspaceRoute } from "../config/routeManifest";
 import { hubDomain, type HubAuthUser } from "../domain/hubDomain";
 import { canMutate, lastVerifiedBackupAt, presentSiteCondition } from "../domain/presentation";
 import type { Site } from "../types/site";
@@ -77,10 +78,10 @@ export function SimpleSitesPage({ authUser }: { authUser: HubAuthUser }) {
                 <div><dt>גיבוי מאומת אחרון</dt><dd>{verifiedBackupAt ? <DateValue value={verifiedBackupAt} /> : "לא אומת"}</dd></div>
               </dl>
               <div className="normal-site-actions">
-                <Link className="btn btn-primary" to={`/sites/${encodeURIComponent(site._id)}`}>פתיחה<ArrowLeft size={16} /></Link>
+                <Link className="btn btn-primary" to={siteWorkspaceRoute(site._id)}>פתיחה<ArrowLeft size={16} /></Link>
                 <details className="normal-row-menu">
                   <summary aria-label={`פעולות נוספות עבור ${site.displayName}`}><MoreHorizontal size={18} /></summary>
-                  <div><Link to={`/sites/${encodeURIComponent(site._id)}?area=activity`}>פעילות</Link><Link to={`/sites/${encodeURIComponent(site._id)}?area=backups`}>גיבויים</Link></div>
+                  <div><Link to={siteWorkspaceRoute(site._id, "activity")}>פעילות</Link><Link to={siteWorkspaceRoute(site._id, "backups")}>גיבויים</Link></div>
                 </details>
               </div>
             </article>

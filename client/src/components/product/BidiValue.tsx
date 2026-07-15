@@ -8,3 +8,7 @@ export function BidiValue({ children }: { children: ReactNode }) {
 export function DateValue({ value }: { value?: string | Date | null }) {
   return <BidiValue>{formatDateTime(value)}</BidiValue>;
 }
+
+export function NumberValue({ value }: { value?: number | null }) {
+  return <BidiValue>{Number(value || 0).toLocaleString("he-IL")}</BidiValue>;
+}

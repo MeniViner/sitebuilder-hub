@@ -8,7 +8,7 @@ import {
   sitesApi
 } from "../api/sitesApi";
 import type { Site, SitesStats } from "../types/site";
-import { settleSlice, type SettledSlice } from "./presentation";
+import { isSiteSetupComplete, settleSlice, type SettledSlice } from "./presentation";
 
 export type ManagedSiteId = string & { readonly __managedSiteId: unique symbol };
 export type BuilderLogicalSiteId = string & { readonly __builderLogicalSiteId: unique symbol };
@@ -60,6 +60,13 @@ export type AccessMutation =
 type HubApi = typeof sitesApi;
 
 export function createHubDomain(api: HubApi = sitesApi) {
+  const sliceCache = new Map<string, unknown>();
+  const settleCached = async <T,>(key: string, work: Promise<T>) => {
+    const result = await settleSlice(work, sliceCache.get(key) as T | undefined);
+    if (result.status === "ready") sliceCache.set(key, result.data);
+    return result;
+  };
+
   return {
     async listSites(params?: Record<string, string>): Promise<{ sites: Site[]; stats?: SitesStats; count: number }> {
       const response = await api.list(params);
@@ -88,7 +95,7 @@ export function createHubDomain(api: HubApi = sitesApi) {
 
     async continueSiteSetup(managedSiteId: string) {
       const site = (await api.getById(managedSiteId)).data;
-      const complete = site.lifecycleStatus === "ready" && site.provisioningStatus === "succeeded";
+      const complete = isSiteSetupComplete(site);
       return {
         site,
         complete,
@@ -100,19 +107,19 @@ export function createHubDomain(api: HubApi = sitesApi) {
     async getSiteWorkspace(managedSiteId: string): Promise<SiteWorkspaceData> {
       const site = (await api.getById(managedSiteId)).data;
       const [backups, access, deployments, activity] = await Promise.all([
-        settleSlice(api.siteBackups(managedSiteId).then((response) => response.data)),
-        settleSlice(api.siteAdmins(managedSiteId).then((response) => response.data as unknown)),
-        settleSlice(api.siteDeployments(managedSiteId).then((response) => response.data as unknown[])),
-        settleSlice(api.jobs().then((response) => response.data.filter((job) => job.siteId === managedSiteId)))
+        settleCached(`site:${managedSiteId}:backups`, api.siteBackups(managedSiteId).then((response) => response.data)),
+        settleCached(`site:${managedSiteId}:access`, api.siteAdmins(managedSiteId).then((response) => response.data as unknown)),
+        settleCached(`site:${managedSiteId}:deployments`, api.siteDeployments(managedSiteId).then((response) => response.data as unknown[])),
+        settleCached(`site:${managedSiteId}:activity`, api.jobs().then((response) => response.data.filter((job) => job.siteId === managedSiteId)))
       ]);
       return { site, backups, access, deployments, activity };
     },
 
     async listOperations(): Promise<OperationsOverview> {
       const [jobs, backups, releases] = await Promise.all([
-        settleSlice(api.jobs().then((response) => response.data)),
-        settleSlice(api.backups().then((response) => response.data)),
-        settleSlice(api.releases().then((response) => response.data))
+        settleCached("operations:jobs", api.jobs().then((response) => response.data)),
+        settleCached("operations:backups", api.backups().then((response) => response.data)),
+        settleCached("operations:releases", api.releases().then((response) => response.data))
       ]);
       return { jobs, backups, releases };
     },

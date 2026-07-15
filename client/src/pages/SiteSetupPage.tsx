@@ -4,8 +4,9 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { BidiValue } from "../components/product/BidiValue";
 import { HumanStatus } from "../components/product/HumanStatus";
 import { ProductPage } from "../components/product/ProductPage";
+import { siteWorkspaceRoute } from "../config/routeManifest";
 import { hubDomain, type HubAuthUser } from "../domain/hubDomain";
-import { canMutate, presentSiteCondition } from "../domain/presentation";
+import { canMutate, isSiteSetupComplete, presentSiteCondition } from "../domain/presentation";
 import type { Site } from "../types/site";
 
 type SetupStage = "details" | "destination" | "create" | "complete";
@@ -57,9 +58,10 @@ export function SiteSetupPage({ authUser }: { authUser: HubAuthUser }) {
 
   const activeIndex = stages.findIndex((item) => item.key === stage);
   const baseValid = Boolean(form.displayName?.trim() && form.siteCode?.trim());
+  const ownerEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.ownerEmail?.trim() || "");
   const ownerValid = flow === "track-existing" || Boolean(
     form.ownerPersonalNumber?.trim() &&
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.ownerEmail?.trim() || "")
+    ownerEmailValid
   );
   const detailsValid = baseValid && ownerValid;
   const destinationValid = useMemo(() => {
@@ -105,7 +107,7 @@ export function SiteSetupPage({ authUser }: { authUser: HubAuthUser }) {
       });
       setCreatedSite(site);
       setAdvancedRoute(`/advanced/sites?edit=${encodeURIComponent(site._id)}`);
-      setStage("complete");
+      setStage(isSiteSetupComplete(site) ? "complete" : "create");
       if (flow === "track-existing") {
         try { await hubDomain.checkSite(site._id); } catch { /* The managed record remains valid when the live check is unavailable. */ }
       }
@@ -113,6 +115,7 @@ export function SiteSetupPage({ authUser }: { authUser: HubAuthUser }) {
         const continuation = await hubDomain.continueSiteSetup(site._id);
         setCreatedSite(continuation.site);
         setAdvancedRoute(continuation.advancedRoute);
+        setStage(continuation.complete ? "complete" : "create");
       } catch { /* Keep the persisted partial record visible even when refresh is unavailable. */ }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "שמירת האתר נכשלה");
@@ -143,20 +146,20 @@ export function SiteSetupPage({ authUser }: { authUser: HubAuthUser }) {
               <button className={flow === "track-existing" ? "is-selected" : ""} type="button" onClick={() => setFlow("track-existing")}><Link2 size={21} /><span><strong>אתר קיים</strong><small>הוספה לניהול בלי לשנות אותו</small></span></button>
             </div>
             <div className="normal-form-grid">
-              <label><span>שם האתר</span><input value={form.displayName || ""} onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))} required autoFocus /></label>
-              <label><span>קוד האתר</span><input dir="ltr" value={form.siteCode || ""} onChange={(event) => setForm((current) => ({ ...current, siteCode: event.target.value, builderSiteId: current.builderSiteId || event.target.value }))} placeholder="hr-portal" required /></label>
+              <label><span>שם האתר</span><input value={form.displayName || ""} onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))} aria-describedby="site-setup-details-hint" required autoFocus /></label>
+              <label><span>קוד האתר</span><input dir="ltr" value={form.siteCode || ""} onChange={(event) => setForm((current) => ({ ...current, siteCode: event.target.value, builderSiteId: current.builderSiteId || event.target.value }))} placeholder="hr-portal" aria-describedby="site-setup-details-hint" required /></label>
               <label><span>יחידה</span><input value={form.unitName || ""} onChange={(event) => setForm((current) => ({ ...current, unitName: event.target.value }))} /></label>
               <label><span>שם בעל האתר</span><input value={form.ownerName || ""} onChange={(event) => setForm((current) => ({ ...current, ownerName: event.target.value }))} /></label>
-              {flow === "create-new" ? <><label><span>מספר אישי של הבעלים</span><input dir="ltr" value={form.ownerPersonalNumber || ""} onChange={(event) => setForm((current) => ({ ...current, ownerPersonalNumber: event.target.value }))} required /></label><label><span>דוא״ל של הבעלים</span><input dir="ltr" type="email" value={form.ownerEmail || ""} onChange={(event) => setForm((current) => ({ ...current, ownerEmail: event.target.value }))} required /></label></> : null}
+              {flow === "create-new" ? <><label><span>מספר אישי של הבעלים</span><input dir="ltr" value={form.ownerPersonalNumber || ""} onChange={(event) => setForm((current) => ({ ...current, ownerPersonalNumber: event.target.value }))} aria-describedby="site-setup-details-hint" required /></label><label><span>דוא״ל של הבעלים</span><input dir="ltr" type="email" value={form.ownerEmail || ""} onChange={(event) => setForm((current) => ({ ...current, ownerEmail: event.target.value }))} aria-describedby="site-setup-details-hint" aria-invalid={Boolean(form.ownerEmail) && !ownerEmailValid} required /></label></> : null}
             </div>
-            <p className="normal-form-hint">{flow === "create-new" ? "להמשך יש למלא שם, קוד, מספר אישי ודוא״ל תקין." : "להמשך יש למלא שם וקוד אתר."}</p>
+            <p className="normal-form-hint" id="site-setup-details-hint">{flow === "create-new" ? "להמשך יש למלא שם, קוד, מספר אישי ודוא״ל תקין." : "להמשך יש למלא שם וקוד אתר."}</p>
           </div>
         ) : null}
 
         {stage === "destination" ? (
           <div className="normal-setup-stage">
             <div className="normal-form-grid normal-form-grid-wide">
-              <label><span>כתובת אתר SharePoint</span><input dir="ltr" type="url" value={form.sharePointSiteUrl || ""} onChange={(event) => setForm((current) => ({ ...current, sharePointSiteUrl: event.target.value }))} placeholder="https://portal.example/sites/hr-portal" required autoFocus /></label>
+              <label><span>כתובת אתר SharePoint</span><input dir="ltr" type="url" value={form.sharePointSiteUrl || ""} onChange={(event) => setForm((current) => ({ ...current, sharePointSiteUrl: event.target.value }))} placeholder="https://portal.example/sites/hr-portal" aria-invalid={Boolean(form.sharePointSiteUrl) && !destinationValid} aria-describedby="site-setup-destination-hint" required autoFocus /></label>
               <label><span>סביבה</span><select value={form.environment || "unknown"} onChange={(event) => setForm((current) => ({ ...current, environment: event.target.value as Site["environment"] }))}><option value="unknown">לא ידועה</option><option value="dev">פיתוח</option><option value="test">בדיקות</option><option value="staging">קדם־ייצור</option><option value="production">ייצור</option></select></label>
             </div>
             <fieldset className="normal-storage-choice">
@@ -164,7 +167,7 @@ export function SiteSetupPage({ authUser }: { authUser: HubAuthUser }) {
               <label><input type="radio" name="storage" checked={form.storageBackend === "mongo"} onChange={() => setForm((current) => ({ ...current, storageBackend: "mongo" }))} /><span><strong>מסד נתונים</strong><small>הבחירה המומלצת לאתר חדש</small></span></label>
               <label><input type="radio" name="storage" checked={form.storageBackend === "txt"} onChange={() => setForm((current) => ({ ...current, storageBackend: "txt" }))} /><span><strong>קבצים קיימים</strong><small>לתאימות עם אתרים ותיקים</small></span></label>
             </fieldset>
-            <p className="normal-form-hint">להמשך יש להזין כתובת מלאה שמתחילה ב־http או ב־https.</p>
+            <p className="normal-form-hint" id="site-setup-destination-hint">להמשך יש להזין כתובת מלאה שמתחילה ב־http או ב־https.</p>
           </div>
         ) : null}
 
@@ -178,7 +181,7 @@ export function SiteSetupPage({ authUser }: { authUser: HubAuthUser }) {
 
         {stage === "complete" ? (
           <div className="normal-setup-stage normal-setup-complete">
-            {createdSite ? (() => { const condition = presentSiteCondition(createdSite); return <><HumanStatus state={condition.state} label={condition.label} /><h2>{condition.state === "ready" ? "האתר מוכן" : flow === "track-existing" ? "האתר נוסף לניהול" : "האתר נשמר, וההקמה עדיין בתהליך"}</h2><p>{condition.state === "ready" ? "אפשר לפתוח אותו ולעבוד." : "האתר לא מסומן כהצלחה מלאה. אפשר לפתוח אותו או להמשיך את ההקמה מהמקום שנשמר."}</p><div className="normal-complete-actions"><Link className="btn btn-primary" to={`/sites/${encodeURIComponent(createdSite._id)}`}>פתיחת האתר<ArrowLeft size={16} /></Link>{condition.state !== "ready" ? <Link className="btn btn-secondary" to={advancedRoute || `/advanced/sites?edit=${encodeURIComponent(createdSite._id)}`}>המשך הקמה</Link> : null}</div></>; })() : <p>האתר נשמר.</p>}
+            {createdSite ? (() => { const condition = presentSiteCondition(createdSite); return <><HumanStatus state={condition.state} label={condition.label} /><h2>{condition.state === "ready" ? "האתר מוכן" : flow === "track-existing" ? "האתר נוסף לניהול" : "האתר נשמר, וההקמה עדיין בתהליך"}</h2><p>{condition.state === "ready" ? "אפשר לפתוח אותו ולעבוד." : "האתר לא מסומן כהצלחה מלאה. אפשר לפתוח אותו או להמשיך את ההקמה מהמקום שנשמר."}</p><div className="normal-complete-actions"><Link className="btn btn-primary" to={siteWorkspaceRoute(createdSite._id)}>פתיחת האתר<ArrowLeft size={16} /></Link>{condition.state !== "ready" ? <Link className="btn btn-secondary" to={advancedRoute || `/advanced/sites?edit=${encodeURIComponent(createdSite._id)}`}>המשך הקמה</Link> : null}</div></>; })() : <p>האתר נשמר.</p>}
           </div>
         ) : null}
 

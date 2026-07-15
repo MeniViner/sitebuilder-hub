@@ -3,11 +3,11 @@ import { DatabaseBackup, RefreshCw, Rocket, TriangleAlert } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ActivityRow } from "../components/product/ActivityRow";
 import { ProductPage, ProductSection } from "../components/product/ProductPage";
+import { siteWorkspaceRoute } from "../config/routeManifest";
 import { hubDomain, type HubAuthUser, type HubJob, type OperationsOverview } from "../domain/hubDomain";
-import { canMutate, presentBackupRecoverability, presentOperationState } from "../domain/presentation";
-import { jobTypeLabel } from "../utils/format";
+import { canMutate, presentBackupRecoverability, presentOperationState, presentOperationTitle } from "../domain/presentation";
 
-const titleForJob = (job: HubJob) => jobTypeLabel(job.type) || "פעולה";
+const titleForJob = (job: HubJob) => presentOperationTitle(job.type);
 
 export function OperationsPage({ authUser }: { authUser: HubAuthUser }) {
   const [overview, setOverview] = useState<OperationsOverview | null>(null);
@@ -39,8 +39,8 @@ export function OperationsPage({ authUser }: { authUser: HubAuthUser }) {
         <a className="normal-operation-group normal-operation-group-muted" href="#failed"><TriangleAlert size={20} /><span><strong>פעולות שנכשלו</strong><small>{groups.failed.length ? `${groups.failed.length} דורשות טיפול` : "אין כשל פעיל"}</small></span></a>
       </div>
 
-      {overview && [overview.jobs, overview.backups, overview.releases].some((slice) => slice.status === "failed") ? (
-        <div className="normal-inline-warning" role="status">חלק מהמידע לא זמין כרגע. המידע שהצליח להיטען נשאר מוצג.</div>
+      {overview && [overview.jobs, overview.backups, overview.releases].some((slice) => slice.status !== "ready") ? (
+        <div className="normal-inline-warning" role="status">חלק מהמידע החי לא זמין כרגע. מידע אחרון שנשמר נשאר מוצג כשאפשר.</div>
       ) : null}
 
       {groups.running.length ? <ProductSection title="בתהליך" description="פעולות פעילות בלבד."><div className="normal-activity-list">{groups.running.map((job) => {
@@ -52,7 +52,7 @@ export function OperationsPage({ authUser }: { authUser: HubAuthUser }) {
         <span id="failed" className="normal-anchor-target" />
         {groups.failed.length ? <div className="normal-activity-list">{groups.failed.map((job) => {
           const state = presentOperationState(job.status);
-          return <ActivityRow key={job._id} title={titleForJob(job)} detail="פתחו את האתר המתאים כדי לראות את הצעד הבא" state={state.state} stateLabel={state.label} at={job.finishedAt || job.createdAt} to={job.siteId ? `/sites/${encodeURIComponent(job.siteId)}?area=activity` : undefined} />;
+          return <ActivityRow key={job._id} title={titleForJob(job)} detail="פתחו את האתר המתאים כדי לראות את הצעד הבא" state={state.state} stateLabel={state.label} at={job.finishedAt || job.createdAt} to={job.siteId ? siteWorkspaceRoute(job.siteId, "activity") : undefined} />;
         })}</div> : <p className="normal-empty-copy">אין פעולות שנכשלו.</p>}
       </ProductSection>
 

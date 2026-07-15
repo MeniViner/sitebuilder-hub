@@ -13,3 +13,4 @@ artifacts/
 *.7z
 artifacts/
 tmp/
+.playwright-artifacts/

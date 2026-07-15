@@ -58,8 +58,9 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: { mobileOpen?: bo
   useDialogFocus(mobileOpen, panelRef, onMobileClose || (() => undefined), closeRef);
 
   if (onMobileClose) {
+    if (!mobileOpen) return null;
     return (
-      <div className={`mobile-nav-layer ${mobileOpen ? "mobile-nav-layer-open" : ""}`} aria-hidden={!mobileOpen}>
+      <div className="mobile-nav-layer mobile-nav-layer-open">
         <button className="mobile-nav-backdrop" type="button" aria-label="סגירת ניווט" onClick={onMobileClose} />
         <aside ref={panelRef} className="mobile-nav-panel" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}><SidebarContent mobile onNavigate={onMobileClose} titleId={titleId} closeRef={closeRef} /></aside>
       </div>

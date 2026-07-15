@@ -19,9 +19,27 @@ const labels: Record<HumanOperationState, string> = {
   failed: "נכשל"
 };
 
-const activeStates = new Set(["queued", "preflight", "running", "uploading", "verifying", "retrying", "waiting-external", "partial", "browser-in-progress"]);
+const activeStates = new Set(["awaiting-approval", "queued", "preflight", "running", "uploading", "verifying", "retrying", "waiting-external", "partial", "browser-required", "browser-in-progress"]);
 const successStates = new Set(["completed", "complete", "success", "succeeded", "verified", "ready"]);
-const failedStates = new Set(["failed", "error", "rejected", "cancelled", "expired", "recovery-required", "blocked-service-auth-required"]);
+const failedStates = new Set(["failed", "error", "rejected", "cancelled", "expired", "partial-failed", "partially-failed", "recovery-required", "blocked-service-auth-required"]);
+
+const operationTitles: Record<string, string> = {
+  "health-check": "בדיקת תקינות",
+  deploy: "עדכון אתר",
+  backup: "גיבוי",
+  restore: "שחזור",
+  "admin-sync": "עדכון גישה",
+  repair: "תיקון אתר",
+  "version-upgrade": "עדכון גרסה",
+  "version-rollback": "חזרה לגרסה קודמת",
+  "site-provision": "הכנת אתר",
+  "site-bootstrap": "השלמת אתר",
+  "permissions-setup": "עדכון גישה"
+};
+
+export function presentOperationTitle(type?: string | null) {
+  return operationTitles[String(type || "").trim().toLowerCase()] || "פעולה באתר";
+}
 
 export function presentOperationState(value?: string | null, options: { terminalBlocker?: boolean; reason?: string } = {}): HumanState<HumanOperationState> {
   const internalState = String(value || "unknown").trim().toLowerCase().replace(/_/g, "-");
@@ -46,36 +64,69 @@ const conditionLabels: Record<HumanSiteCondition, string> = {
   unavailable: "לא זמין"
 };
 
-export function presentSiteCondition(site: Partial<Site>): HumanState<HumanSiteCondition> {
+export const SITE_HEALTH_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+export function presentSiteCondition(site: Partial<Site>, options: { now?: Date | string | number } = {}): HumanState<HumanSiteCondition> {
   const health = site.derivedHealthStatus || "unknown";
   const lifecycle = site.lifecycleStatus || "unknown";
   const provisioning = site.provisioningStatus || "unknown";
+  const storageBackend = site.storageBackend || "unknown";
+  const now = options.now instanceof Date ? options.now.getTime() : new Date(options.now ?? Date.now()).getTime();
+  const lastHealthAt = Date.parse(site.lastHealthCheckAt || "");
+  const healthStale = !Number.isFinite(lastHealthAt) || now - lastHealthAt > SITE_HEALTH_STALE_AFTER_MS;
+  const storageIdentityUnknown = storageBackend === "unknown" || (storageBackend === "mongo" && !(site.builderSiteId && site.mongoSiteId && site.safeCollectionName));
+  const runtimeUnavailable = site.dataBackendStatus === "failed";
+  const runtimeNeedsAttention = site.dataBackendStatus === "warning" || site.runtimeConfigStatus?.readStatus === "missing" || site.runtimeConfigStatus?.readStatus === "invalid" || site.runtimeConfigStatus?.readStatus === "error";
   const archived = site.status === "archived" || lifecycle === "archived";
   const terminalFailure = lifecycle === "failed" && (health === "failed" || site.dataBackendStatus === "failed");
-  const unavailable = archived || terminalFailure;
+  const unavailable = archived || terminalFailure || runtimeUnavailable;
   const incomplete = ["draft", "planned", "provisioning", "partially-created", "failed", "unknown"].includes(lifecycle)
     || ["planned", "running", "partially-created", "failed", "unknown"].includes(provisioning);
   const versionNeedsAttention = ["outdated", "updating", "failed"].includes(site.versionStatus || "unknown");
-  const needsAttention = health !== "healthy" || incomplete || versionNeedsAttention || site.status === "warning" || site.status === "failed";
+  const needsAttention = health !== "healthy" || healthStale || storageIdentityUnknown || runtimeNeedsAttention || incomplete || versionNeedsAttention || site.status === "warning" || site.status === "failed";
   const state: HumanSiteCondition = unavailable ? "unavailable" : needsAttention ? "needs-attention" : "ready";
   const reason = archived
     ? "האתר בארכיון"
-    : terminalFailure
-      ? "האתר נכשל ואינו נגיש"
+    : terminalFailure || runtimeUnavailable
+      ? "האתר אינו זמין כרגע"
       : incomplete
         ? "ההקמה עדיין לא הושלמה"
-        : site.versionStatus === "outdated"
+        : storageIdentityUnknown
+          ? "זהות אחסון הנתונים עדיין לא אומתה"
+          : runtimeNeedsAttention
+            ? "חיבור נתוני האתר דורש בדיקה"
+            : site.versionStatus === "outdated"
           ? "קיים עדכון שטרם הותקן"
           : site.versionStatus === "updating"
             ? "עדכון האתר עדיין בתהליך"
             : site.versionStatus === "failed"
               ? "עדכון האתר דורש בדיקה"
+              : healthStale
+                ? "בדיקת התקינות אינה עדכנית"
               : health === "unknown"
                 ? "האתר עדיין לא נבדק"
                 : health === "warning" || health === "failed"
                   ? "בדיקת התקינות דורשת טיפול"
                   : "";
-  return { state, label: conditionLabels[state], internalState: `${lifecycle}/${provisioning}/${health}`, reason };
+  return { state, label: conditionLabels[state], internalState: `${lifecycle}/${provisioning}/${health}/${storageBackend}`, reason };
+}
+
+export function isSiteSetupComplete(site: Partial<Site>, options: { now?: Date | string | number } = {}) {
+  return site.lifecycleStatus === "ready"
+    && site.provisioningStatus === "succeeded"
+    && presentSiteCondition(site, options).state === "ready";
+}
+
+const environmentLabels: Record<string, string> = {
+  local: "מקומית",
+  dev: "פיתוח",
+  test: "בדיקות",
+  staging: "קדם־ייצור",
+  production: "ייצור"
+};
+
+export function presentEnvironment(value?: string | null) {
+  return environmentLabels[String(value || "").trim().toLowerCase()] || "לא ידועה";
 }
 
 export function presentVisibleRole(role?: string | null): VisibleRole {
@@ -88,7 +139,7 @@ export function canMutate(role?: string | null) {
 
 export type BackupPresentation = {
   recoverable: boolean;
-  label: "גיבוי ניתן לשחזור" | "ראיית גיבוי בלבד" | "לא אומת";
+  label: "גיבוי ניתן לשחזור" | "ראיית גיבוי בלבד" | "הגיבוי נכשל" | "לא אומת";
   reason: string;
 };
 
@@ -100,6 +151,7 @@ export function presentBackupRecoverability(backup?: Partial<Backup> | null): Ba
   const sourceEvidenceComplete = !backup.sourcePaths?.length || backup.sourcePaths.every((source) => source.exists && source.status === "verified");
   const recoverable = status === "succeeded" && verified && hasPayload && sourceEvidenceComplete;
   if (recoverable) return { recoverable: true, label: "גיבוי ניתן לשחזור", reason: "המטען נשמר ואומת" };
+  if (status === "failed") return { recoverable: false, label: "הגיבוי נכשל", reason: "הגיבוי לא הושלם ולא ניתן לשחזר ממנו" };
   if (verified || backup.storagePath || backup.sourcePaths?.length) {
     return { recoverable: false, label: "ראיית גיבוי בלבד", reason: "אין הוכחה מלאה למטען בר־שחזור" };
   }
@@ -121,12 +173,14 @@ export function lastVerifiedBackupAt(site: Partial<Site>): string | null {
 
 export type SettledSlice<T> =
   | { status: "ready"; data: T; error: "" }
+  | { status: "stale"; data: T; error: string }
   | { status: "failed"; data: null; error: string };
 
-export async function settleSlice<T>(work: Promise<T>): Promise<SettledSlice<T>> {
+export async function settleSlice<T>(work: Promise<T>, cached?: T): Promise<SettledSlice<T>> {
   try {
     return { status: "ready", data: await work, error: "" };
   } catch (error) {
-    return { status: "failed", data: null, error: error instanceof Error ? error.message : "טעינת המידע נכשלה" };
+    const message = error instanceof Error ? error.message : "טעינת המידע נכשלה";
+    return cached === undefined ? { status: "failed", data: null, error: message } : { status: "stale", data: cached, error: message };
   }
 }

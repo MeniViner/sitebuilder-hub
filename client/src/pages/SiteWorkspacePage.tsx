@@ -9,8 +9,7 @@ import { HumanStatus } from "../components/product/HumanStatus";
 import { ProductPage, ProductSection } from "../components/product/ProductPage";
 import { resolveSiteWorkspaceArea, siteWorkspaceRoute, type SiteWorkspaceArea } from "../config/routeManifest";
 import { hubDomain, type HubAuthUser, type HubBackup, type HubJob, type SiteWorkspaceData } from "../domain/hubDomain";
-import { canMutate, presentBackupRecoverability, presentOperationState, presentSiteCondition } from "../domain/presentation";
-import { jobTypeLabel } from "../utils/format";
+import { canMutate, presentBackupRecoverability, presentEnvironment, presentOperationState, presentOperationTitle, presentSiteCondition } from "../domain/presentation";
 
 const areas: Array<{ key: SiteWorkspaceArea; label: string; icon: typeof Activity }> = [
   { key: "overview", label: "סקירה", icon: Activity },
@@ -117,7 +116,7 @@ export function SiteWorkspacePage({ authUser }: { authUser: HubAuthUser }) {
   if (loading && !site) return <ProductPage title="טוען אתר" description="אוספים את המידע החי והמידע האחרון שנשמר."><div className="normal-skeleton-list"><span /><span /><span /></div></ProductPage>;
   if (error || !site || !condition) return <ProductPage title="האתר לא זמין" description="לא הצלחנו לפתוח את סביבת האתר."><div className="normal-empty-card"><h2>לא ניתן לטעון את האתר</h2><p>{error || "המזהה אינו מוכר"}</p><button className="btn btn-secondary mt-4" type="button" onClick={() => void load()}>נסה שוב</button></div></ProductPage>;
 
-  const partialFailure = [data.backups, data.access, data.deployments, data.activity].some((slice) => slice.status === "failed");
+  const partialFailure = [data.backups, data.access, data.deployments, data.activity].some((slice) => slice.status !== "ready");
   const backups = data.backups.data || [];
   const activity = data.activity.data || [];
 
@@ -155,21 +154,21 @@ export function SiteWorkspacePage({ authUser }: { authUser: HubAuthUser }) {
 
       {activeArea === "structure" ? (
         <div className="normal-workspace-grid">
-          <ProductSection title="מבנה האתר" description="המיקומים והקישורים החשובים לעבודה."><dl className="normal-key-facts"><div><dt>אתר SharePoint</dt><dd><a href={site.sharePointSiteUrl} target="_blank" rel="noreferrer">פתיחה</a></dd></div><div><dt>אפליקציה</dt><dd>{site.finalAppUrl ? <a href={site.finalAppUrl} target="_blank" rel="noreferrer">פתיחה</a> : "עדיין לא הוגדרה"}</dd></div><div><dt>סביבה</dt><dd>{site.environment && site.environment !== "unknown" ? site.environment : "לא ידועה"}</dd></div></dl></ProductSection>
+          <ProductSection title="מבנה האתר" description="המיקומים והקישורים החשובים לעבודה."><dl className="normal-key-facts"><div><dt>אתר SharePoint</dt><dd><a href={site.sharePointSiteUrl} target="_blank" rel="noreferrer">פתיחה</a></dd></div><div><dt>אפליקציה</dt><dd>{site.finalAppUrl ? <a href={site.finalAppUrl} target="_blank" rel="noreferrer">פתיחה</a> : "עדיין לא הוגדרה"}</dd></div><div><dt>סביבה</dt><dd>{presentEnvironment(site.environment)}</dd></div></dl></ProductSection>
           <ProductSection title="מוכנות"><div className="normal-next-action"><div><strong>{site.lifecycleStatus === "ready" ? "המבנה מוכן" : "ההקמה עדיין לא הושלמה"}</strong><p>{site.lifecycleStatus === "ready" ? "נתיבי האירוח נשמרו ונבדקו." : "המשיכו את ההקמה מהנקודה שנשמרה."}</p></div>{site.lifecycleStatus !== "ready" && canMutate(authUser.role) ? <Link className="btn btn-primary" to={`/advanced/sites?edit=${encodeURIComponent(site._id)}`}>המשך הקמה</Link> : null}</div></ProductSection>
-          <details className="normal-advanced-details"><summary>פרטים טכניים</summary><dl><div><dt>מזהה מנוהל</dt><dd><BidiValue>{site._id}</BidiValue></dd></div><div><dt>מזהה Builder</dt><dd>{site.builderSiteId ? <BidiValue>{site.builderSiteId}</BidiValue> : "לא הוגדר"}</dd></div><div><dt>אחסון</dt><dd><BidiValue>{site.storageBackend || "unknown"}</BidiValue></dd></div><div><dt>נתיב runtime</dt><dd>{site.runtimeConfigPath ? <BidiValue>{site.runtimeConfigPath}</BidiValue> : "לא הוגדר"}</dd></div></dl>{canMutate(authUser.role) ? <Link to={`/advanced/sites/${encodeURIComponent(site._id)}`}>פתיחת פרטים מתקדמים</Link> : null}</details>
+          {canMutate(authUser.role) ? <div className="normal-advanced-link"><Link to={`/advanced/sites/${encodeURIComponent(site._id)}`}>פרטי אתר מתקדמים</Link></div> : null}
         </div>
       ) : null}
 
       {activeArea === "backups" ? (
         <ProductSection title="גיבויים" description="רק גיבוי עם מטען ואימות מלא מסומן כניתן לשחזור." action={canMutate(authUser.role) ? <button className="btn btn-primary" type="button" onClick={() => setBackupConfirm(true)} disabled={busy}><DatabaseBackup size={16} />יצירת גיבוי</button> : undefined}>
-          <div className="normal-backup-list">{backups.map((backup) => { const recovery = presentBackupRecoverability(backup); const state = presentOperationState(backup.status); return <article key={backup._id}><div><HumanStatus compact state={recovery.recoverable ? "succeeded" : state.state} label={recovery.label} /><strong><DateValue value={backup.createdAt} /></strong><span>{recovery.reason}</span></div><div><span>{backup.filesCount || 0} קבצים</span>{recovery.recoverable && canMutate(authUser.role) ? <button className="btn btn-secondary" type="button" onClick={() => setRestoreBackup(backup)}>שחזור</button> : null}</div></article>; })}</div>
+          <div className="normal-backup-list">{backups.map((backup) => { const recovery = presentBackupRecoverability(backup); const state = presentOperationState(backup.status); return <article key={backup._id}><div><HumanStatus compact state={recovery.recoverable ? "succeeded" : state.state} label={recovery.label} /><strong><DateValue value={backup.createdAt} /></strong><span>{recovery.reason}</span></div><div><span><BidiValue>{backup.filesCount || 0}</BidiValue> קבצים</span>{recovery.recoverable && canMutate(authUser.role) ? <button className="btn btn-secondary" type="button" onClick={() => setRestoreBackup(backup)}>שחזור</button> : null}</div></article>; })}</div>
           {!backups.length ? <p className="normal-empty-copy">אין עדיין גיבויים להצגה.</p> : null}
         </ProductSection>
       ) : null}
 
       {activeArea === "activity" ? (
-        <ProductSection title="פעילות" description="פעולות ותוצאות, בלי פרטי תשתית."><div className="normal-activity-list">{activity.map((job: HubJob) => { const state = presentOperationState(job.status); return <ActivityRow key={job._id} title={jobTypeLabel(job.type)} detail={job.errorMessage && state.state === "failed" ? "הפעולה דורשת בדיקה" : undefined} state={state.state} stateLabel={state.label} at={job.finishedAt || job.startedAt || job.createdAt} />; })}</div>{!activity.length ? <p className="normal-empty-copy">אין עדיין פעילות להצגה.</p> : null}{canMutate(authUser.role) ? <div className="normal-advanced-link"><Link to={`/advanced/sites/${encodeURIComponent(site._id)}?tab=activity`}>פרטי פעילות מתקדמים</Link></div> : null}</ProductSection>
+        <ProductSection title="פעילות" description="פעולות ותוצאות, בלי פרטי תשתית."><div className="normal-activity-list">{activity.map((job: HubJob) => { const state = presentOperationState(job.status); return <ActivityRow key={job._id} title={presentOperationTitle(job.type)} detail={job.errorMessage && state.state === "failed" ? "הפעולה דורשת בדיקה" : undefined} state={state.state} stateLabel={state.label} at={job.finishedAt || job.startedAt || job.createdAt} />; })}</div>{!activity.length ? <p className="normal-empty-copy">אין עדיין פעילות להצגה.</p> : null}{canMutate(authUser.role) ? <div className="normal-advanced-link"><Link to={`/advanced/sites/${encodeURIComponent(site._id)}?tab=activity`}>פרטי פעילות מתקדמים</Link></div> : null}</ProductSection>
       ) : null}
 
       <ConfirmDialog open={backupConfirm} title="יצירת גיבוי" description="המערכת תתחיל גיבוי ותאמת אותו לפני שתציג אותו כניתן לשחזור." confirmLabel="התחלת גיבוי" onClose={() => setBackupConfirm(false)} onConfirm={() => void createBackup()} />

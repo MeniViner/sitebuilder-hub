@@ -2,14 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, DatabaseBackup, FolderOpen, Plus, RefreshCw, Rocket } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ActivityRow } from "../components/product/ActivityRow";
+import { NumberValue } from "../components/product/BidiValue";
 import { HumanStatus } from "../components/product/HumanStatus";
 import { ProductPage, ProductSection } from "../components/product/ProductPage";
+import { siteWorkspaceRoute } from "../config/routeManifest";
 import { hubDomain, type HubAuthUser, type HubJob, type OperationsOverview } from "../domain/hubDomain";
-import { canMutate, presentBackupRecoverability, presentOperationState, presentSiteCondition } from "../domain/presentation";
+import { canMutate, presentBackupRecoverability, presentOperationState, presentOperationTitle, presentSiteCondition } from "../domain/presentation";
 import type { Site } from "../types/site";
-import { jobTypeLabel } from "../utils/format";
 
-const operationTitle = (job: HubJob) => jobTypeLabel(job.type) || "פעולה באתר";
+const operationTitle = (job: HubJob) => presentOperationTitle(job.type);
 
 export function SimpleDashboardPage({ authUser }: { authUser: HubAuthUser }) {
   const [sites, setSites] = useState<Site[]>([]);
@@ -43,9 +44,9 @@ export function SimpleDashboardPage({ authUser }: { authUser: HubAuthUser }) {
       action={<button className="btn btn-secondary" type="button" onClick={() => void load()} disabled={loading}><RefreshCw size={17} />רענון</button>}
     >
       <div className="normal-metrics" aria-label="תמונת מצב">
-        <article><span>אתרים מנוהלים</span><strong>{sites.length}</strong></article>
-        <article><span>דורשים תשומת לב</span><strong>{attentionSites.length}</strong></article>
-        <article><span>גיבויים ניתנים לשחזור</span><strong>{recoverableBackups}</strong></article>
+        <article><span>אתרים מנוהלים</span><strong><NumberValue value={sites.length} /></strong></article>
+        <article><span>דורשים תשומת לב</span><strong><NumberValue value={attentionSites.length} /></strong></article>
+        <article><span>גיבויים ניתנים לשחזור</span><strong><NumberValue value={recoverableBackups} /></strong></article>
       </div>
 
       {sitesError ? <div className="normal-inline-error" role="status">רשימת האתרים לא זמינה כרגע. שאר המידע נשאר מוצג.</div> : null}
@@ -57,7 +58,7 @@ export function SimpleDashboardPage({ authUser }: { authUser: HubAuthUser }) {
               {needsAttention.map((site) => {
                 const condition = presentSiteCondition(site);
                 return (
-                  <Link to={`/sites/${encodeURIComponent(site._id)}`} className="normal-attention-row" key={site._id}>
+                  <Link to={siteWorkspaceRoute(site._id)} className="normal-attention-row" key={site._id}>
                     <div><strong>{site.displayName}</strong><span>{condition.reason || "נדרשת בדיקה"}</span></div>
                     <HumanStatus compact state={condition.state} label={condition.label} />
                     <ArrowLeft size={17} aria-hidden="true" />
@@ -91,7 +92,7 @@ export function SimpleDashboardPage({ authUser }: { authUser: HubAuthUser }) {
         </ProductSection>
       ) : null}
 
-      <ProductSection title="פעילות אחרונה" description={operations?.jobs.status === "failed" ? "הפעילות לא זמינה כרגע; שאר הדשבורד פעיל." : "חמש הפעולות האחרונות."}>
+      <ProductSection title="פעילות אחרונה" description={operations?.jobs.status !== "ready" ? "הפעילות החיה לא זמינה כרגע; המידע האחרון נשאר מוצג." : "חמש הפעולות האחרונות."}>
         {recent.length ? <div className="normal-activity-list">{recent.map((job) => {
           const state = presentOperationState(job.status);
           return <ActivityRow key={job._id} title={operationTitle(job)} detail={job.finishedAt ? "הפעולה הסתיימה" : undefined} state={state.state} stateLabel={state.label} at={job.finishedAt || job.startedAt || job.createdAt} to="/operations" />;
