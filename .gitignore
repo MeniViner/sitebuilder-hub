@@ -13,3 +13,5 @@ artifacts/
 *.7z
 artifacts/
 tmp/
+mongo-consolidation-evidence/
+mongo-consolidation-reconciliation/

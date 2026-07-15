@@ -8,7 +8,9 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "seed": "tsx src/scripts/seed.ts",
-    "migrate:sharepoint-browser-only": "tsx src/scripts/migrateLegacySharePointJobs.ts"
+    "migrate:sharepoint-browser-only": "tsx src/scripts/migrateLegacySharePointJobs.ts",
+    "mongo:site-indexes": "tsx src/scripts/migrateSiteIndexes.ts",
+    "mongo:reconcile": "tsx src/scripts/reconcileMongoConsolidation.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -16,6 +18,7 @@
     "express": "^4.21.2",
     "helmet": "^8.1.0",
     "mongoose": "^8.19.2",
+    "mongodb": "^6.20.0",
     "sitebuilder-hub": "file:..",
     "zod": "^3.25.76"
   },

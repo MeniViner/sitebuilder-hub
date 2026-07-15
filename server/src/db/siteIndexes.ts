@@ -1,97 +1,128 @@
 import { Site } from "../models/Site";
-import { buildSiteIdentityKey } from "../utils/siteIdentity";
-import { logger } from "../utils/logger";
 
-const LEGACY_SITE_CODE_INDEX = "siteCode_1";
-const SITE_IDENTITY_INDEX = "siteIdentityKey_1";
+export const HUB_SITE_INDEX_DEFINITIONS = Object.freeze([
+  { name: "siteCode_1", key: { siteCode: 1 }, required: false, options: {} },
+  {
+    name: "siteIdentityKey_1",
+    key: { siteIdentityKey: 1 },
+    required: true,
+    options: { unique: true, partialFilterExpression: { siteIdentityKey: { $exists: true } } }
+  }
+] as const);
 
-type MongoIndex = {
+export type MongoIndexDescription = {
   name?: string;
+  key?: Record<string, number>;
   unique?: boolean;
+  partialFilterExpression?: unknown;
 };
 
-const backfillSiteIdentityKeys = async () => {
-  const existingKeyRows = await Site.find(
-    { siteIdentityKey: { $exists: true, $type: "string" } },
-    { siteIdentityKey: 1 }
-  ).lean<Array<{ siteIdentityKey?: string }>>();
-  const reservedKeys = new Set(existingKeyRows.map((row) => row.siteIdentityKey).filter(Boolean));
+export type DuplicateCandidate = { field: string; groups: number; documents: number };
 
-  const sites = await Site.find(
-    { $or: [{ siteIdentityKey: { $exists: false } }, { siteIdentityKey: "" }] },
-    {
-      _id: 1,
-      siteCode: 1,
-      sharePointHost: 1,
-      sharePointSiteUrl: 1,
-      siteDbLibrary: 1,
-      usersDbLibrary: 1,
-      bootstrapLibrary: 1,
-      bootstrapFolder: 1,
-      widgetsDbTarget: 1
+export type SiteIndexInspection = {
+  status: "healthy" | "warnings" | "blockers";
+  existingIndexes: MongoIndexDescription[];
+  missingRequired: string[];
+  missingRecommended: string[];
+  mismatched: string[];
+  legacyUniqueSiteCode: boolean;
+  missingSiteIdentityKey: number;
+  duplicates: DuplicateCandidate[];
+  warnings: string[];
+  blockers: string[];
+};
+
+export type SiteIndexInspectionAdapter = {
+  listIndexes(): Promise<MongoIndexDescription[]>;
+  countMissingSiteIdentityKey(): Promise<number>;
+  findDuplicateCandidates(field: "siteIdentityKey" | "builderSiteId" | "safeCollectionName"): Promise<DuplicateCandidate>;
+};
+
+const sameJson = (left: unknown, right: unknown) => JSON.stringify(left || {}) === JSON.stringify(right || {});
+
+export const mongooseSiteIndexInspectionAdapter: SiteIndexInspectionAdapter = {
+  listIndexes: async () => {
+    try { return (await Site.collection.indexes()) as MongoIndexDescription[]; }
+    catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && Number((error as { code?: unknown }).code) === 26) return [];
+      throw error;
     }
-  ).lean<
-    Array<{
-      _id: unknown;
-      siteCode?: string;
-      sharePointHost?: string;
-      sharePointSiteUrl?: string;
-      siteDbLibrary?: string;
-      usersDbLibrary?: string;
-      bootstrapLibrary?: string;
-      bootstrapFolder?: string;
-      widgetsDbTarget?: string;
-    }>
-  >();
-
-  for (const site of sites) {
-    try {
-      const siteIdentityKey = buildSiteIdentityKey({
-        siteCode: site.siteCode,
-        sharePointHost: site.sharePointHost,
-        sharePointSiteUrl: site.sharePointSiteUrl,
-        siteDbLibrary: site.siteDbLibrary,
-        usersDbLibrary: site.usersDbLibrary,
-        bootstrapLibrary: site.bootstrapLibrary,
-        bootstrapFolder: site.bootstrapFolder,
-        widgetsDbTarget: site.widgetsDbTarget
-      });
-
-      if (reservedKeys.has(siteIdentityKey)) {
-        logger.warn("db", "Skipping duplicate site identity key backfill", {
-          siteId: String(site._id),
-          siteCode: site.siteCode,
-          siteIdentityKey
-        });
-        continue;
-      }
-
-      await Site.updateOne({ _id: site._id }, { $set: { siteIdentityKey } });
-      reservedKeys.add(siteIdentityKey);
-    } catch (error) {
-      logger.warn("db", "Failed to backfill site identity key", {
-        siteId: String(site._id),
-        siteCode: site.siteCode,
-        error
-      });
-    }
+  },
+  countMissingSiteIdentityKey: async () =>
+    Site.countDocuments({ $or: [{ siteIdentityKey: { $exists: false } }, { siteIdentityKey: "" }] }),
+  findDuplicateCandidates: async (field) => {
+    const rows = await Site.aggregate<{ _id: string; count: number }>([
+      { $match: { [field]: { $exists: true, $type: "string", $ne: "" } } },
+      { $group: { _id: `$${field}`, count: { $sum: 1 } } },
+      { $match: { count: { $gt: 1 } } }
+    ]);
+    return { field, groups: rows.length, documents: rows.reduce((sum, row) => sum + row.count, 0) };
   }
 };
 
-export const ensureSiteIndexes = async () => {
-  const indexes = (await Site.collection.indexes()) as MongoIndex[];
-  const legacySiteCodeIndex = indexes.find((index) => index.name === LEGACY_SITE_CODE_INDEX && index.unique);
+export const inspectSiteIndexes = async (
+  adapter: SiteIndexInspectionAdapter = mongooseSiteIndexInspectionAdapter
+): Promise<SiteIndexInspection> => {
+  const existingIndexes = await adapter.listIndexes();
+  const missingRequired: string[] = [];
+  const missingRecommended: string[] = [];
+  const mismatched: string[] = [];
 
-  if (legacySiteCodeIndex) {
-    logger.warn("db", "Dropping legacy unique siteCode index; siteCode is no longer globally unique");
-    await Site.collection.dropIndex(LEGACY_SITE_CODE_INDEX);
+  for (const definition of HUB_SITE_INDEX_DEFINITIONS) {
+    const existing = existingIndexes.find((index) => index.name === definition.name);
+    if (!existing) {
+      (definition.required ? missingRequired : missingRecommended).push(definition.name);
+      continue;
+    }
+    const expectedOptions = definition.options as { unique?: boolean; partialFilterExpression?: unknown };
+    if (
+      !sameJson(existing.key, definition.key) ||
+      Boolean(existing.unique) !== Boolean(expectedOptions.unique) ||
+      !sameJson(existing.partialFilterExpression, expectedOptions.partialFilterExpression)
+    ) {
+      mismatched.push(definition.name);
+    }
   }
 
-  await backfillSiteIdentityKeys();
+  const [missingSiteIdentityKey, ...duplicates] = await Promise.all([
+    adapter.countMissingSiteIdentityKey(),
+    adapter.findDuplicateCandidates("siteIdentityKey"),
+    adapter.findDuplicateCandidates("builderSiteId"),
+    adapter.findDuplicateCandidates("safeCollectionName")
+  ]);
+  const legacyUniqueSiteCode = existingIndexes.some((index) => index.name === "siteCode_1" && index.unique === true);
+  const warnings = [
+    ...missingRecommended.map((name) => `Recommended index missing: sites.${name}`),
+    ...(missingSiteIdentityKey > 0 ? [`${missingSiteIdentityKey} site records are missing siteIdentityKey`] : []),
+    ...duplicates
+      .filter((duplicate) => duplicate.field !== "siteIdentityKey" && duplicate.groups > 0)
+      .map((duplicate) => `${duplicate.groups} duplicate ${duplicate.field} candidate groups`)
+  ];
+  const blockers = [
+    ...missingRequired.map((name) => `Required index missing: sites.${name}`),
+    ...mismatched.map((name) => `Index definition mismatch: sites.${name}`),
+    ...(legacyUniqueSiteCode ? ["Legacy unique index present: sites.siteCode_1"] : []),
+    ...duplicates
+      .filter((duplicate) => duplicate.field === "siteIdentityKey" && duplicate.groups > 0)
+      .map((duplicate) => `${duplicate.groups} duplicate siteIdentityKey groups prevent a safe unique index`)
+  ];
 
-  await Site.collection.createIndex({ siteCode: 1 }, { name: LEGACY_SITE_CODE_INDEX });
-  await Site.collection.createIndex(
-    { siteIdentityKey: 1 },
-    { name: SITE_IDENTITY_INDEX, unique: true, partialFilterExpression: { siteIdentityKey: { $exists: true } } }
-  );
+  return {
+    status: blockers.length ? "blockers" : warnings.length ? "warnings" : "healthy",
+    existingIndexes,
+    missingRequired,
+    missingRecommended,
+    mismatched,
+    legacyUniqueSiteCode,
+    missingSiteIdentityKey,
+    duplicates,
+    warnings,
+    blockers
+  };
+};
+
+export const assertSiteIndexStartupPolicy = (inspection: SiteIndexInspection, nodeEnv: string) => {
+  if (nodeEnv === "production" && inspection.blockers.length > 0) {
+    throw new Error(`Mongo startup validation blocked: ${inspection.blockers.join("; ")}`);
+  }
 };

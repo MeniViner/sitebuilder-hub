@@ -76,6 +76,10 @@ export const resetTestEnv = (overrides: Record<string, string> = {}) => {
   }
 };
 
+// MONGO_URI is the sole required configuration value and configuration modules
+// are evaluated before beforeEach hooks. Keep optional selectors truly absent.
+process.env.MONGO_URI ||= deterministicEnv.MONGO_URI;
+
 beforeEach(() => {
   resetTestEnv();
 });
