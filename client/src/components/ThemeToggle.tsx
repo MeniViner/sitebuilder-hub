@@ -19,6 +19,15 @@ export function ThemeToggle() {
     localStorage.setItem(STORAGE_KEY, theme);
   }, [theme]);
 
+  useEffect(() => {
+    const onThemeChange = (event: Event) => {
+      const next = (event as CustomEvent<Theme>).detail;
+      if (next === "light" || next === "dark") setTheme(next);
+    };
+    window.addEventListener("sitebuilder-hub-theme-change", onThemeChange);
+    return () => window.removeEventListener("sitebuilder-hub-theme-change", onThemeChange);
+  }, []);
+
   const nextTheme = theme === "dark" ? "light" : "dark";
 
   return (

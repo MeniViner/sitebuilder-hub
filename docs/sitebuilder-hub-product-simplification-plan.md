@@ -31,15 +31,17 @@ Normal navigation currently exposes fourteen items and mixes objects, outcomes, 
 | `/sites/:id` | Site workspace | Sites | Normal | contextual | Admin/Viewer | lazy |
 | `/operations` | Operations | Operations | Normal | primary | Admin/Viewer | eager |
 | `/settings` | Settings | Settings | Normal | primary | Admin/Viewer | eager |
-| `/advanced/settings` | Technical settings | Settings | Diagnostics | advanced link | Admin | lazy |
-| `/releases` | Detailed releases | Operations | Advanced | contextual only | Admin/Viewer | lazy |
-| `/backups` | Detailed recovery | Operations | Advanced | contextual only | Admin/Viewer | lazy |
-| `/admins` | Detailed access | Sites | Advanced | contextual only | Admin/Viewer | lazy |
+| `/advanced/settings` | Technical settings | Settings | Advanced | advanced link | Admin | lazy |
+| `/advanced/sites` | Technical site orchestration | Sites | Advanced | setup continuation only | Admin | lazy |
+| `/advanced/sites/:id` | Technical site details | Sites | Advanced | contextual only | Admin | lazy |
+| `/releases` | Detailed releases | Operations | Advanced | contextual only | Admin | lazy |
+| `/backups` | Detailed recovery | Operations | Advanced | contextual only | Admin | lazy |
+| `/admins` | Detailed access | Sites | Advanced | contextual only | Admin | lazy |
 | `/jobs` | Raw jobs | Operations | Diagnostics | hidden | Admin | lazy |
-| `/monitoring` | Monitoring details | Operations | Advanced | contextual only | Admin/Viewer | lazy |
+| `/monitoring` | Monitoring details | Operations | Advanced | contextual only | Admin | lazy |
 | `/audit` | Audit details | Operations | Diagnostics | hidden | Admin | lazy |
-| `/health` | Health details | Sites | Advanced | contextual only | Admin/Viewer | lazy |
-| `/analytics` | Analytics | Operations | Advanced | hidden/contextual | Admin/Viewer | lazy |
+| `/health` | Health details | Sites | Advanced | contextual only | Admin | lazy |
+| `/analytics` | Analytics | Operations | Advanced | hidden/contextual | Admin | lazy |
 | `/diagnostics` | Diagnostics | Settings | Diagnostics | explicit mode only | Admin | lazy |
 | `/help` | Help | Settings | Help | explicit/contextual only | Admin/Viewer | lazy |
 | Dashboard experimental routes | Labs | none | Labs | explicit flag only | internal | lazy |

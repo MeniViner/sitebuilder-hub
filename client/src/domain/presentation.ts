@@ -55,24 +55,31 @@ export function presentSiteCondition(site: Partial<Site>): HumanState<HumanSiteC
   const unavailable = archived || terminalFailure;
   const incomplete = ["draft", "planned", "provisioning", "partially-created", "failed", "unknown"].includes(lifecycle)
     || ["planned", "running", "partially-created", "failed", "unknown"].includes(provisioning);
-  const needsAttention = health !== "healthy" || incomplete || site.status === "warning" || site.status === "failed";
+  const versionNeedsAttention = ["outdated", "updating", "failed"].includes(site.versionStatus || "unknown");
+  const needsAttention = health !== "healthy" || incomplete || versionNeedsAttention || site.status === "warning" || site.status === "failed";
   const state: HumanSiteCondition = unavailable ? "unavailable" : needsAttention ? "needs-attention" : "ready";
   const reason = archived
     ? "האתר בארכיון"
     : terminalFailure
       ? "האתר נכשל ואינו נגיש"
-      : health === "unknown"
-        ? "האתר עדיין לא נבדק"
-        : incomplete
-          ? "ההקמה עדיין לא הושלמה"
-          : health === "warning" || health === "failed"
-            ? "בדיקת התקינות דורשת טיפול"
-            : "";
+      : incomplete
+        ? "ההקמה עדיין לא הושלמה"
+        : site.versionStatus === "outdated"
+          ? "קיים עדכון שטרם הותקן"
+          : site.versionStatus === "updating"
+            ? "עדכון האתר עדיין בתהליך"
+            : site.versionStatus === "failed"
+              ? "עדכון האתר דורש בדיקה"
+              : health === "unknown"
+                ? "האתר עדיין לא נבדק"
+                : health === "warning" || health === "failed"
+                  ? "בדיקת התקינות דורשת טיפול"
+                  : "";
   return { state, label: conditionLabels[state], internalState: `${lifecycle}/${provisioning}/${health}`, reason };
 }
 
 export function presentVisibleRole(role?: string | null): VisibleRole {
-  return role === "viewer" ? "viewer" : "admin";
+  return role === "admin" || role === "operator" ? "admin" : "viewer";
 }
 
 export function canMutate(role?: string | null) {
@@ -99,6 +106,19 @@ export function presentBackupRecoverability(backup?: Partial<Backup> | null): Ba
   return { recoverable: false, label: "לא אומת", reason: "הגיבוי טרם אומת" };
 }
 
+export function lastVerifiedBackupAt(site: Partial<Site>): string | null {
+  const evidence = site.recoveryState?.lastBackupEvidence;
+  const status = String(evidence?.status || "").toLowerCase();
+  const files = Number(evidence?.filesCount || 0);
+  const verifiedFiles = Number(evidence?.verifiedFilesCount || 0);
+  const failedFiles = Number(evidence?.failedFilesCount || 0);
+  const fullyVerified = ["verified", "succeeded", "success"].includes(status)
+    && files > 0
+    && verifiedFiles === files
+    && failedFiles === 0;
+  return fullyVerified ? evidence?.recordedAt || site.lastBackupAt || null : null;
+}
+
 export type SettledSlice<T> =
   | { status: "ready"; data: T; error: "" }
   | { status: "failed"; data: null; error: string };
@@ -110,4 +130,3 @@ export async function settleSlice<T>(work: Promise<T>): Promise<SettledSlice<T>>
     return { status: "failed", data: null, error: error instanceof Error ? error.message : "טעינת המידע נכשלה" };
   }
 }
-

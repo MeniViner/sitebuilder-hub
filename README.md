@@ -74,21 +74,22 @@ window.SiteBuilderHubConfig = {
 
 If DevTools shows `/api/releases` returning HTML or `Unexpected token '<'`, the frontend is hitting the wrong host. Fix `hub-config.js` or rebuild with `VITE_API_BASE_URL=https://sitebuilderhub.idf/api`.
 
-Use `בעיות וחיבורים` in the sidebar to inspect app mode, frontend origin, API base URL, current user detection, SharePoint current user, read test, digest/contextinfo, write verification, env flags, exact failing URL/status, and resolved SharePoint paths.
+Use `הגדרות` → `הגדרות מתקדמות` for connection details. The full diagnostics route remains available only when `VITE_HUB_UI_MODE=diagnostics` is set deliberately.
 
 ## Hebrew Help Layer
 
-The Hub includes a Hebrew explanation layer for operators:
+The Hub preserves a Hebrew explanation layer for deliberate support sessions:
 
-- Inline help icons appear next to key page titles, panels, KPI cards, statuses, table columns, and important form labels.
-- The sidebar includes `מרכז הסברים` at `#/help`, with explanations for sites, releases/deploys, SharePoint connections, admins, backups, Jobs, health checks, audit, common problems, and glossary terms.
-- Help icons are enabled by default. To hide inline icons while keeping the help center route available, set:
+- Inline help icons and `#/help` are disabled in the default Normal experience.
+- The existing explanations for sites, releases/deploys, SharePoint connections, admins, backups, Jobs, health checks, audit, common problems, and glossary terms remain intact.
+- Enable contextual help only for a deliberate support session:
 
 ```bash
-VITE_HUB_HELP_ICONS_ENABLED=false
+VITE_HUB_UI_MODE=help
+VITE_HUB_HELP_ICONS_ENABLED=true
 ```
 
-Use `VITE_HUB_HELP_ICONS_ENABLED=true` or omit the variable to keep the default help icons.
+Missing or invalid values resolve to `normal`; help icons and Labs remain off.
 
 ## Commands
 

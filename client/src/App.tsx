@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 import { HashRouter, Route, Routes, useLocation } from "react-router-dom";
 import { KeyRound, LogIn, RefreshCw, ShieldCheck } from "lucide-react";
 import { Layout } from "./components/Layout";
@@ -9,23 +9,13 @@ import { MetadataOnlyBadge } from "./components/MetadataOnlyBadge";
 import { OperationalStatusProvider } from "./components/OperationalStatusProvider";
 import { PageHeader } from "./components/PageHeader";
 import { SectionCard } from "./components/SectionCard";
-import { DashboardPage } from "./pages/DashboardPage";
-import { DashboardLabPage } from "./pages/DashboardLabPage";
-import { DashboardDesignStudioPage } from "./pages/DashboardDesignStudioPage";
-import { DashboardNorthStarPage } from "./pages/DashboardNorthStarPage";
-import { AnalyticsDashboardPage } from "./pages/AnalyticsDashboardPage";
-import { SitesPage } from "./pages/SitesPage";
-import { SiteDetailsPage } from "./pages/SiteDetailsPage";
-import { ReleasesPage } from "./pages/ReleasesPage";
-import { BackupsPage } from "./pages/BackupsPage";
-import { AdminsPage } from "./pages/AdminsPage";
-import { JobsPage } from "./pages/JobsPage";
-import { AuditPage } from "./pages/AuditPage";
-import { HealthPage } from "./pages/HealthPage";
-import { MonitoringPage } from "./pages/MonitoringPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { DiagnosticsPage } from "./pages/DiagnosticsPage";
-import { HelpPage } from "./pages/HelpPage";
+import { SimpleDashboardPage } from "./pages/SimpleDashboardPage";
+import { SimpleSitesPage } from "./pages/SimpleSitesPage";
+import { OperationsPage } from "./pages/OperationsPage";
+import { SimpleSettingsPage } from "./pages/SimpleSettingsPage";
+import { HUB_FEATURE_POLICY } from "./config/uiMode";
+import { HUB_ROUTE_MANIFEST, isRouteModeEnabled, type HubRouteDefinition } from "./config/routeManifest";
+import { presentVisibleRole } from "./domain/presentation";
 import {
   AuthBootstrapStatus,
   AuthLoginResult,
@@ -38,7 +28,49 @@ import {
 } from "./api/sitesApi";
 import { clientLogger } from "./utils/logger";
 
+const LegacySitesPage = lazy(() => import("./pages/SitesPage").then((module) => ({ default: module.SitesPage })));
+const LegacySiteDetailsPage = lazy(() => import("./pages/SiteDetailsPage").then((module) => ({ default: module.SiteDetailsPage })));
+const SiteSetupPage = lazy(() => import("./pages/SiteSetupPage").then((module) => ({ default: module.SiteSetupPage })));
+const SiteWorkspacePage = lazy(() => import("./pages/SiteWorkspacePage").then((module) => ({ default: module.SiteWorkspacePage })));
+const ReleasesPage = lazy(() => import("./pages/ReleasesPage").then((module) => ({ default: module.ReleasesPage })));
+const BackupsPage = lazy(() => import("./pages/BackupsPage").then((module) => ({ default: module.BackupsPage })));
+const AdminsPage = lazy(() => import("./pages/AdminsPage").then((module) => ({ default: module.AdminsPage })));
+const JobsPage = lazy(() => import("./pages/JobsPage").then((module) => ({ default: module.JobsPage })));
+const AuditPage = lazy(() => import("./pages/AuditPage").then((module) => ({ default: module.AuditPage })));
+const HealthPage = lazy(() => import("./pages/HealthPage").then((module) => ({ default: module.HealthPage })));
+const MonitoringPage = lazy(() => import("./pages/MonitoringPage").then((module) => ({ default: module.MonitoringPage })));
+const LegacySettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
+const DiagnosticsPage = lazy(() => import("./pages/DiagnosticsPage").then((module) => ({ default: module.DiagnosticsPage })));
+const HelpPage = lazy(() => import("./pages/HelpPage").then((module) => ({ default: module.HelpPage })));
+const AnalyticsDashboardPage = lazy(() => import("./pages/AnalyticsDashboardPage").then((module) => ({ default: module.AnalyticsDashboardPage })));
+const DashboardLabPage = lazy(() => import("./pages/DashboardLabPage").then((module) => ({ default: module.DashboardLabPage })));
+const DashboardDesignStudioPage = lazy(() => import("./pages/DashboardDesignStudioPage").then((module) => ({ default: module.DashboardDesignStudioPage })));
+const DashboardNorthStarPage = lazy(() => import("./pages/DashboardNorthStarPage").then((module) => ({ default: module.DashboardNorthStarPage })));
+
 type AuthUser = NonNullable<WhoAmIResult["user"]>;
+
+function RouteUnavailable() {
+  return (
+    <div className="normal-empty-card">
+      <h2>העמוד אינו פעיל במצב הנוכחי</h2>
+      <p>אפשר להפעיל מצב תמיכה מתאים דרך הגדרת הסביבה.</p>
+    </div>
+  );
+}
+
+function routeDefinition(id: string) {
+  return HUB_ROUTE_MANIFEST.find((route) => route.id === id) as HubRouteDefinition | undefined;
+}
+
+function GatedRoute({ id, authUser, children }: { id: string; authUser: AuthUser; children: ReactNode }) {
+  const route = routeDefinition(id);
+  const visibleRole = presentVisibleRole(authUser.role);
+  const roleAllowed = Boolean(route && (route.roles.includes(visibleRole) || (route.roles.includes("internal") && visibleRole === "admin")));
+  if (!route || !isRouteModeEnabled(route.mode, HUB_FEATURE_POLICY) || !roleAllowed) {
+    return <RouteUnavailable />;
+  }
+  return <Suspense fallback={<LoadingState />}>{children}</Suspense>;
+}
 
 function authUserFromLogin(result: AuthLoginResult): AuthUser {
   return {
@@ -196,30 +228,18 @@ function AuthenticatedRoutes({
   authError: string;
 }) {
   const location = useLocation();
-  const detachedNorthStar = location.pathname === "/dashboard-northstar";
-  const detachedDesignStudio = location.pathname === "/dashboard-design-studio";
+  const detachedLab = HUB_FEATURE_POLICY.labs && (location.pathname === "/dashboard-northstar" || location.pathname === "/dashboard-design-studio");
   const routes = (
     <Routes>
-      <Route path="/" element={<DashboardPage />} />
-      <Route path="/dashboard-lab" element={<DashboardLabPage />} />
-      <Route path="/dashboard-design-studio" element={<DashboardDesignStudioPage />} />
-      <Route path="/dashboard-northstar" element={<DashboardNorthStarPage />} />
-      <Route path="/analytics" element={<AnalyticsDashboardPage />} />
-      <Route path="/sites" element={<SitesPage authUser={authUser} />} />
-      <Route path="/sites/:id" element={<SiteDetailsPage />} />
-      <Route path="/releases" element={<ReleasesPage />} />
-      <Route path="/backups" element={<BackupsPage />} />
-      <Route path="/admins" element={<AdminsPage />} />
-      <Route path="/jobs" element={<JobsPage />} />
-      <Route path="/monitoring" element={<MonitoringPage />} />
-      <Route path="/audit" element={<AuditPage />} />
-      <Route path="/health" element={<HealthPage />} />
-      <Route path="/diagnostics" element={<DiagnosticsPage />} />
-      <Route path="/help" element={<HelpPage />} />
+      <Route path="/" element={<SimpleDashboardPage authUser={authUser} />} />
+      <Route path="/sites" element={<SimpleSitesPage authUser={authUser} />} />
+      <Route path="/sites/new" element={<GatedRoute id="site-create" authUser={authUser}><SiteSetupPage authUser={authUser} /></GatedRoute>} />
+      <Route path="/sites/:id" element={<GatedRoute id="site" authUser={authUser}><SiteWorkspacePage authUser={authUser} /></GatedRoute>} />
+      <Route path="/operations" element={<OperationsPage authUser={authUser} />} />
       <Route
         path="/settings"
         element={
-          <SettingsPage
+          <SimpleSettingsPage
             authUser={authUser}
             authChecking={authChecking}
             authBootstrapStatus={authBootstrapStatus}
@@ -230,12 +250,32 @@ function AuthenticatedRoutes({
           />
         }
       />
+      <Route path="/advanced/sites" element={<GatedRoute id="advanced-sites" authUser={authUser}><LegacySitesPage authUser={authUser} /></GatedRoute>} />
+      <Route path="/advanced/sites/:id" element={<GatedRoute id="advanced-site" authUser={authUser}><LegacySiteDetailsPage /></GatedRoute>} />
+      <Route path="/releases" element={<GatedRoute id="releases" authUser={authUser}><ReleasesPage /></GatedRoute>} />
+      <Route path="/backups" element={<GatedRoute id="backups" authUser={authUser}><BackupsPage /></GatedRoute>} />
+      <Route path="/admins" element={<GatedRoute id="admins" authUser={authUser}><AdminsPage /></GatedRoute>} />
+      <Route path="/monitoring" element={<GatedRoute id="monitoring" authUser={authUser}><MonitoringPage /></GatedRoute>} />
+      <Route path="/health" element={<GatedRoute id="health" authUser={authUser}><HealthPage /></GatedRoute>} />
+      <Route path="/analytics" element={<GatedRoute id="analytics" authUser={authUser}><AnalyticsDashboardPage /></GatedRoute>} />
+      <Route path="/jobs" element={<GatedRoute id="jobs" authUser={authUser}><JobsPage /></GatedRoute>} />
+      <Route path="/audit" element={<GatedRoute id="audit" authUser={authUser}><AuditPage /></GatedRoute>} />
+      <Route path="/diagnostics" element={<GatedRoute id="diagnostics" authUser={authUser}><DiagnosticsPage /></GatedRoute>} />
+      <Route path="/help" element={<GatedRoute id="help" authUser={authUser}><HelpPage /></GatedRoute>} />
+      <Route path="/dashboard-lab" element={<GatedRoute id="dashboard-lab" authUser={authUser}><DashboardLabPage /></GatedRoute>} />
+      <Route path="/dashboard-design-studio" element={<GatedRoute id="dashboard-design-studio" authUser={authUser}><DashboardDesignStudioPage /></GatedRoute>} />
+      <Route path="/dashboard-northstar" element={<GatedRoute id="dashboard-northstar" authUser={authUser}><DashboardNorthStarPage /></GatedRoute>} />
+      <Route
+        path="/advanced/settings"
+        element={<GatedRoute id="advanced-settings" authUser={authUser}><LegacySettingsPage authUser={authUser} authChecking={authChecking} authBootstrapStatus={authBootstrapStatus} authError={authError} onLogin={onLogin} onLogout={onLogout} onRefreshAuth={onRefreshAuth} /></GatedRoute>}
+      />
+      <Route path="*" element={<RouteUnavailable />} />
     </Routes>
   );
 
   return (
     <OperationalStatusProvider serverStatus={serverStatus} authUser={authUser} authChecking={authChecking}>
-      {detachedNorthStar || detachedDesignStudio ? routes : (
+      {detachedLab ? routes : (
         <AppShell serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={onLogout}>
           {routes}
         </AppShell>

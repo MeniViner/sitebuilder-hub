@@ -9,6 +9,7 @@ import {
 } from "../client/src/config/routeManifest";
 import {
   canMutate,
+  lastVerifiedBackupAt,
   presentBackupRecoverability,
   presentOperationState,
   presentSiteCondition,
@@ -52,12 +53,15 @@ describe("route and workspace contracts", () => {
     expect(PRIMARY_ROUTES.map((route) => route.id)).toEqual(["dashboard", "sites", "operations", "settings"]);
     expect(PRIMARY_ROUTES).toHaveLength(4);
     expect(HUB_ROUTE_MANIFEST.every((route) => route.mode && route.roles.length > 0)).toBe(true);
+    expect(HUB_ROUTE_MANIFEST.filter((route) => route.mode === "advanced").every((route) => route.roles.includes("admin"))).toBe(true);
+    expect(HUB_ROUTE_MANIFEST.filter((route) => route.mode === "labs").every((route) => route.roles.includes("internal"))).toBe(true);
   });
 
   it("maps every legacy site tab into one of five visible areas", () => {
     expect(resolveSiteWorkspaceArea("health")).toBe("overview");
     expect(resolveSiteWorkspaceArea("versions")).toBe("overview");
     expect(resolveSiteWorkspaceArea("admins")).toBe("access");
+    expect(resolveSiteWorkspaceArea("structure")).toBe("structure");
     expect(resolveSiteWorkspaceArea("advanced")).toBe("structure");
     expect(resolveSiteWorkspaceArea("recovery")).toBe("backups");
     expect(resolveSiteWorkspaceArea("audit")).toBe("activity");
@@ -82,6 +86,8 @@ describe("human presentation contracts", () => {
   it("maps site persistence into three conditions without changing it", () => {
     expect(presentSiteCondition(site()).state).toBe("ready");
     expect(presentSiteCondition(site({ lifecycleStatus: "partially-created" })).state).toBe("needs-attention");
+    expect(presentSiteCondition(site({ lifecycleStatus: "partially-created" })).reason).toBe("ההקמה עדיין לא הושלמה");
+    expect(presentSiteCondition(site({ versionStatus: "outdated" }))).toMatchObject({ state: "needs-attention", reason: "קיים עדכון שטרם הותקן" });
     expect(presentSiteCondition(site({ status: "archived" })).state).toBe("unavailable");
     expect(presentSiteCondition(site({ lifecycleStatus: "failed", derivedHealthStatus: "failed" })).state).toBe("unavailable");
   });
@@ -89,8 +95,10 @@ describe("human presentation contracts", () => {
   it("presents only Admin and Viewer and never enables Viewer mutations", () => {
     expect(presentVisibleRole("operator")).toBe("admin");
     expect(presentVisibleRole("viewer")).toBe("viewer");
+    expect(presentVisibleRole("unknown-internal-role")).toBe("viewer");
     expect(canMutate("admin")).toBe(true);
     expect(canMutate("viewer")).toBe(false);
+    expect(canMutate()).toBe(false);
   });
 
   it("does not call evidence-only records recoverable backups", () => {
@@ -102,6 +110,14 @@ describe("human presentation contracts", () => {
       filesCount: 3,
       sourcePaths: [{ path: "/source/a", exists: true, status: "verified" }]
     }).recoverable).toBe(true);
+  });
+
+  it("shows a site-level backup date only when every recorded file was verified", () => {
+    expect(lastVerifiedBackupAt(site({ lastBackupAt: "2026-01-02T00:00:00.000Z" }))).toBeNull();
+    expect(lastVerifiedBackupAt(site({
+      lastBackupAt: "2026-01-02T00:00:00.000Z",
+      recoveryState: { lastBackupEvidence: { status: "verified", recordedAt: "2026-01-02T00:05:00.000Z", filesCount: 4, verifiedFilesCount: 4, failedFilesCount: 0 } }
+    }))).toBe("2026-01-02T00:05:00.000Z");
   });
 
   it("keeps successful slices visible when another load fails", async () => {

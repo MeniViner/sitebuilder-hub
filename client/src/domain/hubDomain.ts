@@ -38,6 +38,14 @@ export type OperationsOverview = {
   releases: SettledSlice<Release[]>;
 };
 
+export type SiteWorkspaceData = {
+  site: Site;
+  backups: SettledSlice<Backup[]>;
+  access: SettledSlice<unknown>;
+  deployments: SettledSlice<unknown[]>;
+  activity: SettledSlice<Job[]>;
+};
+
 export type AccessMutation =
   | { action: "add"; siteId: string; admin: Record<string, string>; reason: string }
   | { action: "remove"; siteId: string; adminId: string; source?: "txt" | "siteCollection" | "ownersGroup"; reason: string }
@@ -79,8 +87,19 @@ export function createHubDomain(api: HubApi = sitesApi) {
         site,
         complete,
         resumeRoute: `/sites/new?resume=${encodeURIComponent(site._id)}`,
-        advancedRoute: `/advanced/sites?site=${encodeURIComponent(site._id)}`
+        advancedRoute: `/advanced/sites?edit=${encodeURIComponent(site._id)}`
       };
+    },
+
+    async getSiteWorkspace(managedSiteId: string): Promise<SiteWorkspaceData> {
+      const site = (await api.getById(managedSiteId)).data;
+      const [backups, access, deployments, activity] = await Promise.all([
+        settleSlice(api.siteBackups(managedSiteId).then((response) => response.data)),
+        settleSlice(api.siteAdmins(managedSiteId).then((response) => response.data as unknown)),
+        settleSlice(api.siteDeployments(managedSiteId).then((response) => response.data as unknown[])),
+        settleSlice(api.jobs().then((response) => response.data.filter((job) => job.siteId === managedSiteId)))
+      ]);
+      return { site, backups, access, deployments, activity };
     },
 
     async listOperations(): Promise<OperationsOverview> {
@@ -125,4 +144,3 @@ export function createHubDomain(api: HubApi = sitesApi) {
 }
 
 export const hubDomain = createHubDomain();
-

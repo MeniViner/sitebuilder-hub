@@ -97,7 +97,8 @@ describe("owner-mode auth contract", () => {
 
     expect(authController).toContain("ownerMode: ownerMode.ownerMode");
     expect(authController).toContain("user = withOwnerMode");
-    expect(app).toContain("<SitesPage authUser={authUser} />");
+    expect(app).toContain("<SimpleSitesPage authUser={authUser} />");
+    expect(app).toContain("<LegacySitesPage authUser={authUser} />");
     expect(sitesPage).toContain("authUser={authUser}");
     expect(modal).toContain("deriveClientOwnerMode(authUser)");
     expect(modal).toContain("מספר אישי נוכחי");

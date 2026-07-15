@@ -1,5 +1,6 @@
 import { AlertTriangle, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useDialogFocus } from "../hooks/useDialogFocus";
 
 export function ProtectedActionDialog({
   open,
@@ -34,6 +35,12 @@ export function ProtectedActionDialog({
 }) {
   const [note, setNote] = useState(initialNote);
   const [confirmation, setConfirmation] = useState("");
+  const titleId = useId();
+  const descriptionId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  const safeClose = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
+  useDialogFocus(open, panelRef, safeClose, noteRef);
 
   useEffect(() => {
     if (!open) return;
@@ -51,15 +58,15 @@ export function ProtectedActionDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-      <div className="surface-card flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden">
+      <div ref={panelRef} className="surface-card flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} tabIndex={-1}>
         <header className="flex items-start justify-between gap-3 border-b divider px-5 py-4">
           <div className="flex items-start gap-3">
             <span className="mt-1" style={{ color: "var(--danger)" }}>
               <AlertTriangle size={20} />
             </span>
             <div>
-              <h2 className="text-lg font-bold" style={{ color: "var(--text-strong)" }}>{title}</h2>
-              <p className="mt-1 text-sm muted">{description}</p>
+              <h2 id={titleId} className="text-lg font-bold" style={{ color: "var(--text-strong)" }}>{title}</h2>
+              <p id={descriptionId} className="mt-1 text-sm muted">{description}</p>
             </div>
           </div>
           <button className="icon-btn" type="button" onClick={onClose} aria-label="סגור" disabled={busy}><X size={16} /></button>
@@ -79,6 +86,7 @@ export function ProtectedActionDialog({
             <label className="block">
               <span className="field-label">{noteLabel}</span>
               <textarea
+                ref={noteRef}
                 className="control min-h-28"
                 value={note}
                 onChange={(event) => setNote(event.target.value)}

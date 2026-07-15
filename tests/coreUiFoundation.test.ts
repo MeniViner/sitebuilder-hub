@@ -13,10 +13,11 @@ const between = (source: string, start: string, end: string) => {
 };
 
 describe("core UI foundation redesign", () => {
-  it("keeps mobile navigation as a drawer and preserves Hebrew route labels", () => {
+  it("keeps mobile navigation as a drawer and exposes exactly four primary areas", () => {
     const appShell = read("client/src/components/AppShell.tsx");
     const sidebar = read("client/src/components/Sidebar.tsx");
     const topBar = read("client/src/components/TopBar.tsx");
+    const routes = read("client/src/config/routeManifest.ts");
     const styles = read("client/src/styles/index.css");
 
     expect(appShell).toContain("onOpenNav={() => setNavOpen(true)}");
@@ -24,43 +25,24 @@ describe("core UI foundation redesign", () => {
     expect(sidebar).toContain("sidebar-shell sidebar-shell-desktop hidden");
     expect(styles).toContain("mobile-nav-panel");
     expect(topBar).toContain("hub-topbar-title");
-    expect(topBar).toContain("aria-label=\"פתח ניווט\"");
-
-    [
-      "מרכז שליטה",
-      "אתרים",
-      "פריסות",
-      "שחזור וגיבויים",
-      "תפעול",
-      "ניהול והרשאות",
-      "מערכת"
-    ].forEach((label) => expect(sidebar).toContain(label));
+    expect(topBar).toContain("aria-label=\"פתיחת ניווט\"");
+    expect(sidebar).toContain("PRIMARY_ROUTES.map");
+    ["לוח בקרה", "אתרים", "פעולות", "הגדרות"].forEach((label) => expect(routes).toContain(`label: \"${label}\"`));
+    expect(routes.match(/mode: \"normal\", visibility: \"primary\"/g)).toHaveLength(4);
   });
 
-  it("compacts global status into primary context plus a details panel", () => {
+  it("keeps global status calm and routes technical details to Settings", () => {
     const appShell = read("client/src/components/AppShell.tsx");
     const topBar = read("client/src/components/TopBar.tsx");
     const statusBar = read("client/src/components/SystemStatusBar.tsx");
-    const statusToken = read("client/src/components/StatusToken.tsx");
 
     expect(topBar).toContain("<SystemStatusBar");
     expect(appShell).not.toContain("<SystemStatusBar");
-    expect(statusBar).toContain("system-status-primary");
-    expect(statusBar).toContain("system-status-secondary");
-    expect(statusBar).toContain("system-status-details");
-    expect(statusBar).toContain("פיתוח ${personalNumber}");
-    expect(statusBar).toContain("פרטי מערכת");
-    expect(statusBar).toContain("כתיבה זמינה");
-    expect(statusBar).toContain("בדיקה ללא שינוי");
-
-    [
-      "תקין",
-      "דורש בדיקה",
-      "חסום",
-      "מידע ניהולי",
-      "כתיבה חסומה",
-      "לא ידוע"
-    ].forEach((label) => expect(statusToken).toContain(label));
+    expect(statusBar).toContain("system-status-summary-link");
+    expect(statusBar).toContain('to="/settings"');
+    expect(statusBar).toContain("מערכת זמינה");
+    expect(statusBar).toContain("נדרשת בדיקה");
+    expect(statusBar).not.toContain("connector");
   });
 
   it("turns Dashboard into a command center with no more than four primary KPI cards", () => {

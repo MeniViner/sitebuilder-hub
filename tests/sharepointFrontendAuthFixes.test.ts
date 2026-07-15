@@ -128,11 +128,14 @@ describe("SharePoint-hosted frontend auth fixes", () => {
     expect(diagnostics).not.toContain("Bearer token:");
   });
 
-  it("prefers personal number and login name over SharePoint display title in the status bar", () => {
+  it("keeps user identity out of global system status and preserves compact session controls", () => {
     const statusBar = read("client/src/components/SystemStatusBar.tsx");
+    const topBar = read("client/src/components/TopBar.tsx");
+    const settings = read("client/src/pages/SimpleSettingsPage.tsx");
 
-    expect(statusBar).toContain("extractPersonalNumber(authUser.personalNumber, authUser.loginName, authUser.email)");
-    expect(statusBar).toContain("authUser.loginName || authUser.name");
+    expect(statusBar).not.toContain("authUser");
+    expect(topBar).toContain('aria-label="יציאה"');
+    expect(settings).toContain('authUser.name || "משתמש מחובר"');
   });
 
   it("keeps backend personal-number normalization compatible with bare digits and s-prefixed values", async () => {

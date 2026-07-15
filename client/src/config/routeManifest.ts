@@ -23,12 +23,14 @@ export const HUB_ROUTE_MANIFEST = [
   { id: "operations", path: "/operations", label: "פעולות", area: "operations", mode: "normal", visibility: "primary", roles: ["admin", "viewer"], lazy: false },
   { id: "settings", path: "/settings", label: "הגדרות", area: "settings", mode: "normal", visibility: "primary", roles: ["admin", "viewer"], lazy: false },
   { id: "advanced-settings", path: "/advanced/settings", label: "הגדרות טכניות", area: "settings", mode: "advanced", visibility: "contextual", roles: ["admin"], lazy: true },
-  { id: "releases", path: "/releases", label: "גרסאות מפורטות", area: "operations", mode: "advanced", visibility: "contextual", roles: ["admin", "viewer"], lazy: true },
-  { id: "backups", path: "/backups", label: "שחזור מפורט", area: "operations", mode: "advanced", visibility: "contextual", roles: ["admin", "viewer"], lazy: true },
-  { id: "admins", path: "/admins", label: "הרשאות מפורטות", area: "sites", mode: "advanced", visibility: "contextual", roles: ["admin", "viewer"], lazy: true },
-  { id: "monitoring", path: "/monitoring", label: "ניטור מפורט", area: "operations", mode: "advanced", visibility: "contextual", roles: ["admin", "viewer"], lazy: true },
-  { id: "health", path: "/health", label: "תקינות מפורטת", area: "sites", mode: "advanced", visibility: "contextual", roles: ["admin", "viewer"], lazy: true },
-  { id: "analytics", path: "/analytics", label: "ניתוח נתונים", area: "operations", mode: "advanced", visibility: "hidden", roles: ["admin", "viewer"], lazy: true },
+  { id: "advanced-sites", path: "/advanced/sites", label: "ניהול אתרים מתקדם", area: "sites", mode: "advanced", visibility: "contextual", roles: ["admin"], lazy: true },
+  { id: "advanced-site", path: "/advanced/sites/:id", label: "פרטי אתר טכניים", area: "sites", mode: "advanced", visibility: "contextual", roles: ["admin"], lazy: true },
+  { id: "releases", path: "/releases", label: "גרסאות מפורטות", area: "operations", mode: "advanced", visibility: "contextual", roles: ["admin"], lazy: true },
+  { id: "backups", path: "/backups", label: "שחזור מפורט", area: "operations", mode: "advanced", visibility: "contextual", roles: ["admin"], lazy: true },
+  { id: "admins", path: "/admins", label: "הרשאות מפורטות", area: "sites", mode: "advanced", visibility: "contextual", roles: ["admin"], lazy: true },
+  { id: "monitoring", path: "/monitoring", label: "ניטור מפורט", area: "operations", mode: "advanced", visibility: "contextual", roles: ["admin"], lazy: true },
+  { id: "health", path: "/health", label: "תקינות מפורטת", area: "sites", mode: "advanced", visibility: "contextual", roles: ["admin"], lazy: true },
+  { id: "analytics", path: "/analytics", label: "ניתוח נתונים", area: "operations", mode: "advanced", visibility: "hidden", roles: ["admin"], lazy: true },
   { id: "jobs", path: "/jobs", label: "משימות גולמיות", area: "operations", mode: "diagnostics", visibility: "hidden", roles: ["admin"], lazy: true },
   { id: "audit", path: "/audit", label: "יומן ביקורת", area: "operations", mode: "diagnostics", visibility: "hidden", roles: ["admin"], lazy: true },
   { id: "diagnostics", path: "/diagnostics", label: "אבחון", area: "settings", mode: "diagnostics", visibility: "hidden", roles: ["admin"], lazy: true },
@@ -55,6 +57,7 @@ const legacySiteAreaMap: Record<string, SiteWorkspaceArea> = {
   versions: "overview",
   access: "access",
   admins: "access",
+  structure: "structure",
   hosting: "structure",
   advanced: "structure",
   recovery: "backups",
@@ -72,4 +75,3 @@ export function siteWorkspaceRoute(managedSiteId: string, area?: SiteWorkspaceAr
   const base = `/sites/${encodeURIComponent(managedSiteId)}`;
   return area && area !== "overview" ? `${base}?area=${area}` : base;
 }
-
