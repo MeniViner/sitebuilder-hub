@@ -1,8 +1,10 @@
 import {
   type AccessChangePlanInput,
+  type AuthBootstrapStatus,
   type Backup,
   type Job,
   type Release,
+  type WhoAmIResult,
   sitesApi
 } from "../api/sitesApi";
 import type { Site, SitesStats } from "../types/site";
@@ -11,6 +13,10 @@ import { settleSlice, type SettledSlice } from "./presentation";
 export type ManagedSiteId = string & { readonly __managedSiteId: unique symbol };
 export type BuilderLogicalSiteId = string & { readonly __builderLogicalSiteId: unique symbol };
 export type PhysicalCollectionName = string & { readonly __physicalCollectionName: unique symbol };
+export type HubAuthUser = NonNullable<WhoAmIResult["user"]>;
+export type HubAuthBootstrapStatus = AuthBootstrapStatus;
+export type HubJob = Job;
+export type HubBackup = Backup;
 
 export type SiteIdentityBoundary = {
   managedSiteId: ManagedSiteId;

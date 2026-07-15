@@ -1,19 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, DatabaseBackup, FolderOpen, Plus, RefreshCw, Rocket } from "lucide-react";
 import { Link } from "react-router-dom";
-import type { Job, WhoAmIResult } from "../api/sitesApi";
 import { ActivityRow } from "../components/product/ActivityRow";
 import { HumanStatus } from "../components/product/HumanStatus";
 import { ProductPage, ProductSection } from "../components/product/ProductPage";
-import { hubDomain, type OperationsOverview } from "../domain/hubDomain";
+import { hubDomain, type HubAuthUser, type HubJob, type OperationsOverview } from "../domain/hubDomain";
 import { canMutate, presentBackupRecoverability, presentOperationState, presentSiteCondition } from "../domain/presentation";
 import type { Site } from "../types/site";
 import { jobTypeLabel } from "../utils/format";
 
-const operationTitle = (job: Job) => jobTypeLabel(job.type) || "פעולה באתר";
-type AuthUser = NonNullable<WhoAmIResult["user"]>;
+const operationTitle = (job: HubJob) => jobTypeLabel(job.type) || "פעולה באתר";
 
-export function SimpleDashboardPage({ authUser }: { authUser: AuthUser }) {
+export function SimpleDashboardPage({ authUser }: { authUser: HubAuthUser }) {
   const [sites, setSites] = useState<Site[]>([]);
   const [operations, setOperations] = useState<OperationsOverview | null>(null);
   const [sitesError, setSitesError] = useState("");

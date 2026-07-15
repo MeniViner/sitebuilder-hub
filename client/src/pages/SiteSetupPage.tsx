@@ -1,15 +1,13 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Circle, FolderPlus, Link2, LoaderCircle } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import type { WhoAmIResult } from "../api/sitesApi";
 import { BidiValue } from "../components/product/BidiValue";
 import { HumanStatus } from "../components/product/HumanStatus";
 import { ProductPage } from "../components/product/ProductPage";
-import { hubDomain } from "../domain/hubDomain";
+import { hubDomain, type HubAuthUser } from "../domain/hubDomain";
 import { canMutate, presentSiteCondition } from "../domain/presentation";
 import type { Site } from "../types/site";
 
-type AuthUser = NonNullable<WhoAmIResult["user"]>;
 type SetupStage = "details" | "destination" | "create" | "complete";
 type SetupFlow = "create-new" | "track-existing";
 
@@ -34,7 +32,7 @@ const initialForm: Partial<Site> = {
   usersDbLibrary: "siteUsersDb"
 };
 
-export function SiteSetupPage({ authUser }: { authUser: AuthUser }) {
+export function SiteSetupPage({ authUser }: { authUser: HubAuthUser }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [stage, setStage] = useState<SetupStage>("details");

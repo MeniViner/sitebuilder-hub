@@ -1,7 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, ArrowLeft, DatabaseBackup, ExternalLink, FolderTree, MoreHorizontal, RefreshCw, Shield, UserPlus } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import type { Backup, Job, WhoAmIResult } from "../api/sitesApi";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ProtectedActionDialog } from "../components/ProtectedActionDialog";
 import { ActivityRow } from "../components/product/ActivityRow";
@@ -9,11 +8,9 @@ import { BidiValue, DateValue } from "../components/product/BidiValue";
 import { HumanStatus } from "../components/product/HumanStatus";
 import { ProductPage, ProductSection } from "../components/product/ProductPage";
 import { resolveSiteWorkspaceArea, siteWorkspaceRoute, type SiteWorkspaceArea } from "../config/routeManifest";
-import { hubDomain, type SiteWorkspaceData } from "../domain/hubDomain";
+import { hubDomain, type HubAuthUser, type HubBackup, type HubJob, type SiteWorkspaceData } from "../domain/hubDomain";
 import { canMutate, presentBackupRecoverability, presentOperationState, presentSiteCondition } from "../domain/presentation";
 import { jobTypeLabel } from "../utils/format";
-
-type AuthUser = NonNullable<WhoAmIResult["user"]>;
 
 const areas: Array<{ key: SiteWorkspaceArea; label: string; icon: typeof Activity }> = [
   { key: "overview", label: "סקירה", icon: Activity },
@@ -41,7 +38,7 @@ const asAdminRows = (value: unknown): Array<{ id: string; name: string; email: s
   });
 };
 
-export function SiteWorkspacePage({ authUser }: { authUser: AuthUser }) {
+export function SiteWorkspacePage({ authUser }: { authUser: HubAuthUser }) {
   const { id = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeArea = resolveSiteWorkspaceArea(searchParams.get("area") || searchParams.get("tab"));
@@ -51,7 +48,7 @@ export function SiteWorkspacePage({ authUser }: { authUser: AuthUser }) {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [backupConfirm, setBackupConfirm] = useState(false);
-  const [restoreBackup, setRestoreBackup] = useState<Backup | null>(null);
+  const [restoreBackup, setRestoreBackup] = useState<HubBackup | null>(null);
   const [addAccessOpen, setAddAccessOpen] = useState(false);
   const [accessForm, setAccessForm] = useState({ displayName: "", personalNumber: "", email: "", reason: "" });
 
@@ -172,7 +169,7 @@ export function SiteWorkspacePage({ authUser }: { authUser: AuthUser }) {
       ) : null}
 
       {activeArea === "activity" ? (
-        <ProductSection title="פעילות" description="פעולות ותוצאות, בלי פרטי תשתית."><div className="normal-activity-list">{activity.map((job: Job) => { const state = presentOperationState(job.status); return <ActivityRow key={job._id} title={jobTypeLabel(job.type)} detail={job.errorMessage && state.state === "failed" ? "הפעולה דורשת בדיקה" : undefined} state={state.state} stateLabel={state.label} at={job.finishedAt || job.startedAt || job.createdAt} />; })}</div>{!activity.length ? <p className="normal-empty-copy">אין עדיין פעילות להצגה.</p> : null}{canMutate(authUser.role) ? <div className="normal-advanced-link"><Link to={`/advanced/sites/${encodeURIComponent(site._id)}?tab=activity`}>פרטי פעילות מתקדמים</Link></div> : null}</ProductSection>
+        <ProductSection title="פעילות" description="פעולות ותוצאות, בלי פרטי תשתית."><div className="normal-activity-list">{activity.map((job: HubJob) => { const state = presentOperationState(job.status); return <ActivityRow key={job._id} title={jobTypeLabel(job.type)} detail={job.errorMessage && state.state === "failed" ? "הפעולה דורשת בדיקה" : undefined} state={state.state} stateLabel={state.label} at={job.finishedAt || job.startedAt || job.createdAt} />; })}</div>{!activity.length ? <p className="normal-empty-copy">אין עדיין פעילות להצגה.</p> : null}{canMutate(authUser.role) ? <div className="normal-advanced-link"><Link to={`/advanced/sites/${encodeURIComponent(site._id)}?tab=activity`}>פרטי פעילות מתקדמים</Link></div> : null}</ProductSection>
       ) : null}
 
       <ConfirmDialog open={backupConfirm} title="יצירת גיבוי" description="המערכת תתחיל גיבוי ותאמת אותו לפני שתציג אותו כניתן לשחזור." confirmLabel="התחלת גיבוי" onClose={() => setBackupConfirm(false)} onConfirm={() => void createBackup()} />

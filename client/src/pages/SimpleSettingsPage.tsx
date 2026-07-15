@@ -1,20 +1,18 @@
 import { KeyRound, MonitorCog, Moon, Sun } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import type { AuthBootstrapStatus, WhoAmIResult } from "../api/sitesApi";
 import { ProductPage, ProductSection } from "../components/product/ProductPage";
+import type { HubAuthBootstrapStatus, HubAuthUser } from "../domain/hubDomain";
 import { presentVisibleRole } from "../domain/presentation";
-
-type AuthUser = NonNullable<WhoAmIResult["user"]>;
 
 export function SimpleSettingsPage({
   authUser,
   authChecking,
   onLogout
 }: {
-  authUser: AuthUser;
+  authUser: HubAuthUser;
   authChecking: boolean;
-  authBootstrapStatus: AuthBootstrapStatus | null;
+  authBootstrapStatus: HubAuthBootstrapStatus | null;
   authError: string;
   onLogin: (personalNumber: string) => Promise<void>;
   onLogout: () => Promise<void>;

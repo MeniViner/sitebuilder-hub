@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, MoreHorizontal, Plus, Search } from "lucide-react";
 import { Link } from "react-router-dom";
-import type { WhoAmIResult } from "../api/sitesApi";
 import { BidiValue, DateValue } from "../components/product/BidiValue";
 import { HumanStatus } from "../components/product/HumanStatus";
 import { ProductPage } from "../components/product/ProductPage";
-import { hubDomain } from "../domain/hubDomain";
+import { hubDomain, type HubAuthUser } from "../domain/hubDomain";
 import { canMutate, lastVerifiedBackupAt, presentSiteCondition } from "../domain/presentation";
 import type { Site } from "../types/site";
 
-type AuthUser = NonNullable<WhoAmIResult["user"]>;
 type ConditionFilter = "all" | "needs-attention" | "unavailable";
 
-export function SimpleSitesPage({ authUser }: { authUser: AuthUser }) {
+export function SimpleSitesPage({ authUser }: { authUser: HubAuthUser }) {
   const [sites, setSites] = useState<Site[]>([]);
   const [query, setQuery] = useState("");
   const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("all");

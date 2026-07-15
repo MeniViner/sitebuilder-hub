@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DatabaseBackup, RefreshCw, Rocket, TriangleAlert } from "lucide-react";
 import { Link } from "react-router-dom";
-import type { Job, WhoAmIResult } from "../api/sitesApi";
 import { ActivityRow } from "../components/product/ActivityRow";
 import { ProductPage, ProductSection } from "../components/product/ProductPage";
-import { hubDomain, type OperationsOverview } from "../domain/hubDomain";
+import { hubDomain, type HubAuthUser, type HubJob, type OperationsOverview } from "../domain/hubDomain";
 import { canMutate, presentBackupRecoverability, presentOperationState } from "../domain/presentation";
 import { jobTypeLabel } from "../utils/format";
 
-const titleForJob = (job: Job) => jobTypeLabel(job.type) || "פעולה";
-type AuthUser = NonNullable<WhoAmIResult["user"]>;
+const titleForJob = (job: HubJob) => jobTypeLabel(job.type) || "פעולה";
 
-export function OperationsPage({ authUser }: { authUser: AuthUser }) {
+export function OperationsPage({ authUser }: { authUser: HubAuthUser }) {
   const [overview, setOverview] = useState<OperationsOverview | null>(null);
   const [loading, setLoading] = useState(true);
 
