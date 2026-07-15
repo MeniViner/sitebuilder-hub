@@ -1,11 +1,11 @@
 # Mongo consolidation production evidence summary
 
 Collected at: 2026-07-15T00:00:00.000Z
-Collector host alias: windows-host
+Collector host alias: prod-windows-sanitized-fixture
 
 | Category | Records |
 | --- | ---: |
-| Services | 3 |
+| Services/processes/tasks | 0 |
 | Listening ports | 0 |
 | Docker containers | 1 |
 | IIS sites | 0 |

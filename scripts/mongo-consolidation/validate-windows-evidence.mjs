@@ -12,7 +12,8 @@ try {
   const bundle = loadEvidenceDirectory(directory);
   const validation = validateEvidenceBundle(bundle);
   const errors = [...policyErrors, ...validation.errors];
-  if (errors.length) { console.error(errors.join('\n')); process.exitCode = 40; }
+  const policyOrSecretFailure = policyErrors.length > 0 || validation.errors.some((error) => error.includes('contains a likely secret') || error.includes('environmentNames only'));
+  if (errors.length) { console.error(errors.join('\n')); process.exitCode = policyOrSecretFailure ? 40 : 30; }
   else { fs.writeFileSync(path.join(directory, 'summary.md'), generateEvidenceMarkdown(bundle), 'utf8'); console.log(`Validated sanitized evidence at ${directory}`); }
 } catch (error) {
   console.error(`Evidence validation failed at ${directory}: ${error instanceof Error ? error.name : 'Error'}`);

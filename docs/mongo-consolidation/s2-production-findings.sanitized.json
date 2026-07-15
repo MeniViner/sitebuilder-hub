@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-15T12:00:00.000Z",
+  "evidenceStatus": "missing",
+  "environmentAlias": "sitebuilder-production-unavailable",
+  "findings": [
+    {
+      "findingCode": "PROD-EVIDENCE-001",
+      "severity": "P0",
+      "subject": "production-evidence",
+      "evidenceSources": ["access-discovery", "required-evidence-checklist"],
+      "description": "No actual Windows/Site Builder/HUB production evidence source was available.",
+      "whyItMatters": "Production mapping and safety cannot be inferred from local state or fixtures.",
+      "requiredResolution": "Collect and validate the full read-only evidence bundle from the actual environment.",
+      "owner": "production-operations",
+      "s2Impact": "Blocks all persistent S2 work.",
+      "cutoverImpact": "Blocks cutover."
+    },
+    {
+      "findingCode": "PROD-MAPPING-001",
+      "severity": "P0",
+      "subject": "all-production-installations",
+      "evidenceSources": ["absent-hub-snapshot", "absent-builder-snapshot", "absent-runtime-snapshot"],
+      "description": "No explicit production identity chain can be proven.",
+      "whyItMatters": "A binding could target the wrong installation.",
+      "requiredResolution": "Build and human-review the explicit mapping from validated compatible sources.",
+      "owner": "product-data-owner",
+      "s2Impact": "Blocks binding schema and backfill approval.",
+      "cutoverImpact": "Blocks cutover."
+    },
+    {
+      "findingCode": "PROD-TOPOLOGY-001",
+      "severity": "P0",
+      "subject": "mongo-deployment",
+      "evidenceSources": ["absent-topology-evidence", "absent-security-evidence"],
+      "description": "Mongo topology, durability and access controls are unknown.",
+      "whyItMatters": "Even additive mutation is unsafe without storage and security proof.",
+      "requiredResolution": "Collect topology/security metadata and remediate every blocker.",
+      "owner": "mongo-platform-owner",
+      "s2Impact": "May require security or deployment work first.",
+      "cutoverImpact": "Blocks cutover."
+    },
+    {
+      "findingCode": "PROD-BACKUP-001",
+      "severity": "P0",
+      "subject": "production-recovery",
+      "evidenceSources": ["absent-backup-evidence", "absent-restore-proof"],
+      "description": "No verified backup, retention/PITR or restore proof is available.",
+      "whyItMatters": "Document rollback does not replace recoverable storage.",
+      "requiredResolution": "Provide latest-success, retention and tested-restore evidence.",
+      "owner": "backup-platform-owner",
+      "s2Impact": "Blocks future apply.",
+      "cutoverImpact": "Blocks cutover."
+    }
+  ]
+}

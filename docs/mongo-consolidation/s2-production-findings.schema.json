@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sanitized S2 production findings",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "evidenceStatus", "environmentAlias", "findings"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "evidenceStatus": { "enum": ["validated", "missing", "invalid", "quarantined"] },
+    "environmentAlias": { "type": "string", "minLength": 1 },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["findingCode", "severity", "subject", "evidenceSources", "description", "whyItMatters", "requiredResolution", "owner", "s2Impact", "cutoverImpact"],
+        "properties": {
+          "findingCode": { "type": "string", "pattern": "^[A-Z0-9_.-]+$" },
+          "severity": { "enum": ["P0", "P1", "warning", "info"] },
+          "subject": { "type": "string" },
+          "evidenceSources": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "whyItMatters": { "type": "string", "minLength": 1 },
+          "requiredResolution": { "type": "string", "minLength": 1 },
+          "owner": { "type": "string", "minLength": 1 },
+          "s2Impact": { "type": "string", "minLength": 1 },
+          "cutoverImpact": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

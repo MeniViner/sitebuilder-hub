@@ -1,1 +1,1 @@
-{"schemaVersion":1,"collectedAt":"2026-07-15T00:00:00.000Z","collectorHostAlias":"windows-host","system":{"Caption":"Windows Server","Version":"10.0"}}
+{"schemaVersion":1,"collectedAt":"2026-07-15T00:00:00.000Z","collectorHostAlias":"prod-windows-sanitized-fixture","system":{"operatingSystem":{"Caption":"Windows Server","Version":"10.0"},"localTime":"2026-07-15T03:00:00.000+03:00","utcTime":"2026-07-15T00:00:00.000Z","timeZoneId":"Sanitized Standard Time"}}
