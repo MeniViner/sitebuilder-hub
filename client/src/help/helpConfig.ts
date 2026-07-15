@@ -1,5 +1,7 @@
+import { HUB_FEATURE_POLICY, isExplicitlyEnabled } from "../config/uiMode";
+
 export function isHubHelpIconsEnabled(value?: string) {
-  return String(value ?? "true").toLowerCase() !== "false";
+  return isExplicitlyEnabled(value);
 }
 
-export const HUB_HELP_ICONS_ENABLED = isHubHelpIconsEnabled(import.meta.env.VITE_HUB_HELP_ICONS_ENABLED);
+export const HUB_HELP_ICONS_ENABLED = HUB_FEATURE_POLICY.helpIcons;
