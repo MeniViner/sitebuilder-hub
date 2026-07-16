@@ -115,6 +115,18 @@ If dependencies are missing, run:
 npm run install:all
 ```
 
+## Safe local Mongo S0/S1 checks
+
+Normal mode keeps the four-area operator experience (Dashboard, Sites, Operations, Settings). Help and Labs stay off by default; use deliberate Help or Advanced/Diagnostics modes only when needed. Mongo startup is inspection-only. Index changes and reconciliation are explicit commands and never run implicitly:
+
+```bash
+MONGO_URI=mongodb://127.0.0.1:27017/sitebuilder_hub npm run mongo:site-indexes -- --dry-run
+MONGO_URI=mongodb://127.0.0.1:27017/sitebuilder_hub npm run mongo:site-indexes -- --dry-run --json
+HUB_AUDIT_MONGO_URI='<local-read-only-uri>' BUILDER_AUDIT_MONGO_URI='<local-read-only-uri>' npm run mongo:reconcile -- --format all
+```
+
+The reviewed runbook is [Mongo S0/S1 hardening and migration](docs/mongo-consolidation/s0-s1-hardening-and-migration-runbook.md). Do not use `--apply` or production credentials as part of local verification.
+
 ## Deploy MVP
 
 Deploy is a real first-class Hub capability. The UI now supports both bulk deploy and single-site deploy.
