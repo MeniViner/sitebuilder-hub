@@ -1,9 +1,9 @@
 import type { Backup, Job, Release } from "../api/sitesApi";
 import type { Site } from "../types/site";
 
-export const PRODUCT_SCENARIO_NOW = "2026-07-15T10:00:00.000Z";
-export const PRODUCT_SCENARIO_FRESH_HEALTH = "2026-07-15T09:30:00.000Z";
-export const PRODUCT_SCENARIO_STALE_HEALTH = "2026-07-12T08:00:00.000Z";
+export const PRODUCT_SCENARIO_NOW = "2026-07-16T10:00:00.000Z";
+export const PRODUCT_SCENARIO_FRESH_HEALTH = "2026-07-16T09:30:00.000Z";
+export const PRODUCT_SCENARIO_STALE_HEALTH = "2026-07-13T08:00:00.000Z";
 
 export type ScenarioEndpoint =
   | "sites"
