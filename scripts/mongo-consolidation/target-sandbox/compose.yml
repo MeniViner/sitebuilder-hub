@@ -1,0 +1,21 @@
+name: ${SANDBOX_PROJECT}
+services:
+  mongo-sandbox-1:
+    image: mongo:7.0
+    hostname: mongo-sandbox-1
+    command: ["mongod","--replSet","sbSandboxRs","--bind_ip_all","--auth","--keyFile","/run/s/keyfile","--tlsMode","requireTLS","--tlsCertificateKeyFile","/run/s/mongo-sandbox-1.pem","--tlsCAFile","/run/s/ca.pem"]
+    ports: ["${SANDBOX_PORT_1}:27017"]
+    volumes: ["mongo-sandbox-1-data:/data/db","${SANDBOX_RUNTIME}/certs:/run/s:ro"]
+  mongo-sandbox-2:
+    image: mongo:7.0
+    hostname: mongo-sandbox-2
+    command: ["mongod","--replSet","sbSandboxRs","--bind_ip_all","--auth","--keyFile","/run/s/keyfile","--tlsMode","requireTLS","--tlsCertificateKeyFile","/run/s/mongo-sandbox-2.pem","--tlsCAFile","/run/s/ca.pem"]
+    ports: ["${SANDBOX_PORT_2}:27017"]
+    volumes: ["mongo-sandbox-2-data:/data/db","${SANDBOX_RUNTIME}/certs:/run/s:ro"]
+  mongo-sandbox-3:
+    image: mongo:7.0
+    hostname: mongo-sandbox-3
+    command: ["mongod","--replSet","sbSandboxRs","--bind_ip_all","--auth","--keyFile","/run/s/keyfile","--tlsMode","requireTLS","--tlsCertificateKeyFile","/run/s/mongo-sandbox-3.pem","--tlsCAFile","/run/s/ca.pem"]
+    ports: ["${SANDBOX_PORT_3}:27017"]
+    volumes: ["mongo-sandbox-3-data:/data/db","${SANDBOX_RUNTIME}/certs:/run/s:ro"]
+volumes: {mongo-sandbox-1-data: {}, mongo-sandbox-2-data: {}, mongo-sandbox-3-data: {}}
