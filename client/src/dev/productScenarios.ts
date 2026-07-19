@@ -1,9 +1,12 @@
 import type { Backup, Job, Release } from "../api/sitesApi";
 import type { Site } from "../types/site";
 
-export const PRODUCT_SCENARIO_NOW = "2026-07-16T10:00:00.000Z";
-export const PRODUCT_SCENARIO_FRESH_HEALTH = "2026-07-16T09:30:00.000Z";
-export const PRODUCT_SCENARIO_STALE_HEALTH = "2026-07-13T08:00:00.000Z";
+// Scenario freshness is relative to the browser run, so the completion-path
+// fixture remains valid without periodically moving hard-coded dates forward.
+const productScenarioTimestamp = Date.now();
+export const PRODUCT_SCENARIO_NOW = new Date(productScenarioTimestamp).toISOString();
+export const PRODUCT_SCENARIO_FRESH_HEALTH = new Date(productScenarioTimestamp - 30 * 60 * 1000).toISOString();
+export const PRODUCT_SCENARIO_STALE_HEALTH = new Date(productScenarioTimestamp - 3 * 24 * 60 * 60 * 1000).toISOString();
 
 export type ScenarioEndpoint =
   | "sites"
