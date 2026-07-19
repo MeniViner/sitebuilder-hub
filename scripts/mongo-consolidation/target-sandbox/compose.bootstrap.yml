@@ -1,0 +1,8 @@
+# Phase 1 only: synthetic TLS bootstrap before the final keyfile/auth configuration.
+services:
+  mongo-sandbox-1:
+    command: ["mongod","--replSet","sbSandboxRs","--bind_ip_all","--tlsMode","requireTLS","--tlsCertificateKeyFile","/run/s/mongo-sandbox-1.pem","--tlsCAFile","/run/s/ca.pem"]
+  mongo-sandbox-2:
+    command: ["mongod","--replSet","sbSandboxRs","--bind_ip_all","--tlsMode","requireTLS","--tlsCertificateKeyFile","/run/s/mongo-sandbox-2.pem","--tlsCAFile","/run/s/ca.pem"]
+  mongo-sandbox-3:
+    command: ["mongod","--replSet","sbSandboxRs","--bind_ip_all","--tlsMode","requireTLS","--tlsCertificateKeyFile","/run/s/mongo-sandbox-3.pem","--tlsCAFile","/run/s/ca.pem"]
