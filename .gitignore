@@ -6,6 +6,7 @@ npm-debug.log*
 .DS_Store
 server/dist
 client/dist
+*.tsbuildinfo
 *.zip
 *.zip
 artifacts/
