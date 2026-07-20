@@ -7,7 +7,8 @@ param(
   [string]$MongoUriEnvironmentVariable = "MONGODB_URI",
   [ValidatePattern("^[a-zA-Z0-9_-]+$")][string]$HubDatabaseName = "sitebuilder_hub",
   [ValidatePattern("^[a-zA-Z0-9_-]+$")][string]$BuilderDatabaseName = "sitebuilder_site_data",
-  [switch]$IncludeFullCollectionBsonScan
+  [switch]$IncludeFullCollectionBsonScan,
+  [string]$PrecollectedMongoEvidencePath
 )
 $ErrorActionPreference = "Stop"
 $output = [IO.Path]::GetFullPath($OutputDirectory)
@@ -29,6 +30,11 @@ function Get-SafeCommand([string]$Value) {
 function Get-FirstValue($Primary, $Secondary) {
   if ($null -ne $Primary -and -not [string]::IsNullOrWhiteSpace([string]$Primary)) { return $Primary }
   return $Secondary
+}
+function Get-CompatibilityRelativePath([string]$BasePath, [string]$TargetPath) {
+  $baseUri = New-Object System.Uri(([IO.Path]::GetFullPath($BasePath).TrimEnd('\') + '\')
+  $targetUri = New-Object System.Uri([IO.Path]::GetFullPath($TargetPath))
+  return [Uri]::UnescapeDataString($baseUri.MakeRelativeUri($targetUri).ToString()).Replace('/', '\')
 }
 $collectedAt = [DateTime]::UtcNow.ToString("o")
 $system = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture
@@ -69,8 +75,13 @@ if (Get-Module -ListAvailable WebAdministration) {
 }
 Write-SafeJson "iis.json" @($iisRows)
 $mongoEvidence = @{ available=$false; databases=@(); topology=@{} }
+$usePrecollectedMongoEvidence = -not [string]::IsNullOrWhiteSpace($PrecollectedMongoEvidencePath)
+if ($usePrecollectedMongoEvidence) {
+  try { $mongoEvidence = Get-Content -LiteralPath $PrecollectedMongoEvidencePath -Raw | ConvertFrom-Json }
+  catch { throw "Precollected Mongo evidence is unreadable" }
+}
 $mongoUri = [Environment]::GetEnvironmentVariable($MongoUriEnvironmentVariable)
-if ((Get-Command mongosh -ErrorAction SilentlyContinue) -and -not [string]::IsNullOrWhiteSpace($mongoUri)) {
+if (-not $usePrecollectedMongoEvidence -and (Get-Command mongosh -ErrorAction SilentlyContinue) -and -not [string]::IsNullOrWhiteSpace($mongoUri)) {
   $mongoScript = @'
 const admin=db.getSiblingDB("admin"),hello=admin.runCommand({hello:1}),build=admin.runCommand({buildInfo:1}),parameters=admin.runCommand({getParameter:1,featureCompatibilityVersion:1}),cmd=admin.runCommand({getCmdLineOpts:1}),serverStatus=admin.runCommand({serverStatus:1}),rwConcern=admin.runCommand({getDefaultRWConcern:1}),rs=hello.setName?admin.runCommand({replSetGetStatus:1}):null,includeFullScan=__FULL_SCAN__;
 const databases=admin.runCommand({listDatabases:1,nameOnly:false}).databases.map(d=>{const target=db.getSiblingDB(d.name);const collections=target.getCollectionInfos().map(c=>{const coll=target.getCollection(c.name),stats=target.runCommand({collStats:c.name,scale:1}),scan=includeFullScan?coll.aggregate([{$project:{bsonSize:{$bsonSize:"$$ROOT"},timestamp:{$ifNull:["$updatedAt",{$ifNull:["$createdAt","$timestamp"]}]}}},{$group:{_id:null,maxObservedBsonBytes:{$max:"$bsonSize"},earliestTimestamp:{$min:"$timestamp"},latestTimestamp:{$max:"$timestamp"}}}],{allowDiskUse:false}).toArray()[0]||{}:{};return {name:c.name,options:c.options,count:coll.countDocuments({}),logicalSizeBytes:stats.size||0,storageSizeBytes:stats.storageSize||0,indexes:coll.getIndexes(),maxObservedBsonBytes:scan.maxObservedBsonBytes??null,earliestTimestamp:scan.earliestTimestamp??null,latestTimestamp:scan.latestTimestamp??null,fullBsonScanPerformed:includeFullScan};});return {name:d.name,sizeOnDisk:d.sizeOnDisk,collections};});
@@ -101,7 +112,7 @@ $runtimeRows = @(); $runtimeNames = @("sitebuilder-runtime-config.json","runtime
 foreach ($root in $RuntimeSearchRoots) {
   if (-not (Test-Path -LiteralPath $root)) { continue }
   Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $runtimeNames -contains $_.Name -or $_.Name -match "deploy.*metadata|manifest" } | ForEach-Object {
-    $relativePath = [IO.Path]::GetRelativePath([IO.Path]::GetFullPath($root), $_.FullName)
+    $relativePath = Get-CompatibilityRelativePath $root $_.FullName
     $artifactType = if ($runtimeNames -contains $_.Name) { "runtime-config" } else { "deployment-metadata" }
     $row = @{ path=$_.FullName; deploymentRelativePath=$relativePath; artifactType=$artifactType; lastModifiedUtc=$_.LastWriteTimeUtc.ToString("o"); storageBackend=""; siteId=""; backendOrigin=""; apiVersion=""; schemaVersion=""; unsafeUrlComponents=$false; findingCodes=@() }
     try {
