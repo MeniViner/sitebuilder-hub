@@ -36,52 +36,162 @@ function Get-CompatibilityRelativePath([string]$BasePath, [string]$TargetPath) {
   $targetUri = New-Object System.Uri([IO.Path]::GetFullPath($TargetPath))
   return [Uri]::UnescapeDataString($baseUri.MakeRelativeUri($targetUri).ToString()).Replace('/', '\')
 }
+function New-CollectionState([string]$Status, [string]$Reason, [string]$Message, $Items = @()) {
+  return @{ status=$Status; reason=$Reason; message=$Message; items=@($Items) }
+}
+function Get-OptionalFailureState([string]$Category, $ErrorRecord) {
+  $exception = if ($ErrorRecord -and $ErrorRecord.Exception) { $ErrorRecord.Exception } else { $null }
+  $text = if ($exception) { [string]$exception.Message } else { [string]$ErrorRecord }
+  $accessDenied = $exception -is [System.UnauthorizedAccessException] -or $text -match '(?i)access is denied|access denied|unauthorized|permission denied'
+  if ($accessDenied) { return (New-CollectionState 'access-denied' "$Category.access-denied" "Access to the $Category inventory was denied.") }
+  return (New-CollectionState 'query-failed' "$Category.query-failed" "The $Category inventory query failed.")
+}
+function Get-RootInventory([string]$OriginalRoot, [string]$Kind) {
+  $normalized = ''
+  try { $normalized = [IO.Path]::GetFullPath($OriginalRoot) } catch {
+    return @{ originalRoot=$OriginalRoot; normalizedRoot=''; status='query-failed'; reason="$Kind.invalid-root"; filesScanned=0; accessDeniedCount=0; files=@() }
+  }
+  if (-not (Test-Path -LiteralPath $normalized)) {
+    return @{ originalRoot=$OriginalRoot; normalizedRoot=$normalized; status='missing'; reason="$Kind.root-missing"; filesScanned=0; accessDeniedCount=0; files=@() }
+  }
+  $errors = @()
+  try {
+    $files = @(Get-ChildItem -LiteralPath $normalized -Recurse -File -ErrorAction SilentlyContinue -ErrorVariable +errors)
+    $accessDeniedCount = @($errors | Where-Object { $_.Exception -is [System.UnauthorizedAccessException] -or $_.Exception.Message -match '(?i)access is denied|access denied|unauthorized|permission denied' }).Count
+    $otherErrors = @($errors | Where-Object { -not ($_.Exception -is [System.UnauthorizedAccessException] -or $_.Exception.Message -match '(?i)access is denied|access denied|unauthorized|permission denied') }).Count
+    if ($accessDeniedCount -gt 0) { $status='access-denied'; $reason="$Kind.partial-access-denied" }
+    elseif ($otherErrors -gt 0) { $status='query-failed'; $reason="$Kind.enumeration-failed" }
+    else { $status='found'; $reason="$Kind.enumerated" }
+    return @{ originalRoot=$OriginalRoot; normalizedRoot=$normalized; status=$status; reason=$reason; filesScanned=@($files).Count; accessDeniedCount=$accessDeniedCount; files=@($files) }
+  } catch {
+    $state = Get-OptionalFailureState "$Kind.root" $_
+    return @{ originalRoot=$OriginalRoot; normalizedRoot=$normalized; status=$state.status; reason=$state.reason; filesScanned=0; accessDeniedCount=0; files=@() }
+  }
+}
 $collectedAt = [DateTime]::UtcNow.ToString("o")
-$system = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture
+$capabilityStates = @{}
+$system = $null
+if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+  try {
+    $system = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture
+    $capabilityStates.operatingSystem = New-CollectionState 'available' 'operating-system.cim' 'Operating system inventory was collected.' @($system)
+  } catch { $capabilityStates.operatingSystem = Get-OptionalFailureState 'operating-system' $_ }
+} else {
+  $capabilityStates.operatingSystem = New-CollectionState 'unavailable' 'operating-system.cim-unavailable' 'The CIM command is unavailable on this host.'
+}
 Write-SafeJson "system.json" @{ schemaVersion=1; collectedAt=$collectedAt; collectorHostAlias=$CollectorHostAlias; system=@{
   operatingSystem=$system; localTime=[DateTimeOffset]::Now.ToString("o"); utcTime=$collectedAt; timeZoneId=[TimeZoneInfo]::Local.Id
 } }
 $servicePattern = "mongo|site.?builder|hub|iis|nginx|apache|proxy|backup"
-$services = Get-CimInstance Win32_Service | Where-Object { $_.Name -match $servicePattern -or $_.DisplayName -match $servicePattern } | Select-Object Name, DisplayName, State, StartMode, @{n="StartupPath";e={Get-SafeCommand $_.PathName}}, StartName
-$processes = Get-CimInstance Win32_Process | Where-Object { $_.Name -match "node|mongo|w3wp|nginx|httpd" } | Select-Object Name, ProcessId, ExecutablePath
-$tasks = Get-ScheduledTask | Where-Object { $_.TaskName -match $servicePattern -or $_.TaskPath -match $servicePattern } | Select-Object TaskName, TaskPath, State, @{n="Actions";e={@($_.Actions | ForEach-Object { @{Execute=$_.Execute; Arguments=(Get-SafeCommand $_.Arguments); WorkingDirectory=$_.WorkingDirectory} })}}
+$services = @(); $processes = @()
+if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+  try {
+    $services = @(Get-CimInstance Win32_Service | Where-Object { $_.Name -match $servicePattern -or $_.DisplayName -match $servicePattern } | Select-Object Name, DisplayName, State, StartMode, @{n="StartupPath";e={Get-SafeCommand $_.PathName}}, StartName)
+    $capabilityStates.services = New-CollectionState 'available' 'services.cim' 'Service inventory was collected.' $services
+  } catch { $capabilityStates.services = Get-OptionalFailureState 'services' $_ }
+  try {
+    $processes = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match "node|mongo|w3wp|nginx|httpd" } | Select-Object Name, ProcessId, ExecutablePath)
+    $capabilityStates.processes = New-CollectionState 'available' 'processes.cim' 'Process inventory was collected.' $processes
+  } catch { $capabilityStates.processes = Get-OptionalFailureState 'processes' $_ }
+} else {
+  $capabilityStates.services = New-CollectionState 'unavailable' 'services.cim-unavailable' 'The CIM command is unavailable on this host.'
+  $capabilityStates.processes = New-CollectionState 'unavailable' 'processes.cim-unavailable' 'The CIM command is unavailable on this host.'
+}
+$tasks = @()
+if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+  try {
+    $tasks = @(Get-ScheduledTask | Where-Object { $_.TaskName -match $servicePattern -or $_.TaskPath -match $servicePattern } | Select-Object TaskName, TaskPath, State, @{n="Actions";e={@($_.Actions | ForEach-Object { @{Execute=$_.Execute; Arguments=(Get-SafeCommand $_.Arguments); WorkingDirectory=$_.WorkingDirectory} })}})
+    $capabilityStates.scheduledTasks = New-CollectionState 'available' 'scheduled-tasks.cmdlet' 'Scheduled-task inventory was collected.' $tasks
+  } catch { $capabilityStates.scheduledTasks = Get-OptionalFailureState 'scheduled-tasks' $_ }
+} else {
+  $capabilityStates.scheduledTasks = New-CollectionState 'not-installed' 'scheduled-tasks.cmdlet-missing' 'The ScheduledTasks module is not installed on this host.'
+}
 Write-SafeJson "services.json" @{ services=@($services); processes=@($processes); scheduledTasks=@($tasks) }
-Write-SafeJson "ports.json" @(Get-NetTCPConnection -State Listen | ForEach-Object {
-  $owner = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
-  @{ localAddress=$_.LocalAddress; localPort=$_.LocalPort; owningProcess=$_.OwningProcess; processName=[string]$owner.ProcessName }
-})
+$ports = @()
+if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+  try {
+    $ports = @(Get-NetTCPConnection -State Listen | ForEach-Object {
+      $owner = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
+      @{ localAddress=$_.LocalAddress; localPort=$_.LocalPort; owningProcess=$_.OwningProcess; processName=[string]$owner.ProcessName }
+    })
+    $capabilityStates.listeningPorts = New-CollectionState 'available' 'listening-ports.nettcpconnection' 'Listening-port inventory was collected.' $ports
+  } catch { $capabilityStates.listeningPorts = Get-OptionalFailureState 'listening-ports' $_ }
+}
+if ((-not $capabilityStates.ContainsKey('listeningPorts') -or $capabilityStates.listeningPorts.status -ne 'available') -and (Get-Command netstat.exe -ErrorAction SilentlyContinue)) {
+  try {
+    $lines = @(& netstat.exe -ano -p tcp 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw 'netstat failed' }
+    $ports = @($lines | ForEach-Object {
+      if ($_ -match '^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$') {
+        $owner = Get-Process -Id ([int]$Matches[3]) -ErrorAction SilentlyContinue
+        @{ localAddress=$Matches[1]; localPort=[int]$Matches[2]; owningProcess=[int]$Matches[3]; processName=[string]$owner.ProcessName }
+      }
+    } | Where-Object { $null -ne $_ })
+    $capabilityStates.listeningPorts = New-CollectionState 'available' 'listening-ports.netstat-fallback' 'Listening-port inventory was collected with the netstat fallback.' $ports
+  } catch { $capabilityStates.listeningPorts = Get-OptionalFailureState 'listening-ports' $_ }
+}
+if (-not $capabilityStates.ContainsKey('listeningPorts')) {
+  $capabilityStates.listeningPorts = New-CollectionState 'unavailable' 'listening-ports.no-supported-command' 'No supported listening-port command is available on this host.'
+}
+Write-SafeJson "ports.json" @($ports)
 $dockerRows = @()
-if (Get-Command docker -ErrorAction SilentlyContinue) {
-  $ids = @(docker ps -a --format "{{.ID}}")
-  foreach ($id in $ids) {
-    $item = docker inspect $id | ConvertFrom-Json | Select-Object -First 1
-    $mongoCandidate = $item.Name -match "mongo" -or $item.Config.Image -match "mongo" -or @($item.Mounts | Where-Object { $_.Destination -match "(?i)/data/(db|configdb)" }).Count -gt 0
-    if (-not $mongoCandidate) { continue }
-    $dockerRows += @{ id=$item.Id.Substring(0,12); name=$item.Name.TrimStart("/"); image=$item.Config.Image; status=$item.State.Status; ports=$item.NetworkSettings.Ports;
-      mounts=@($item.Mounts | Select-Object Name, Source, Destination, Type); restartPolicy=$item.HostConfig.RestartPolicy.Name;
-      environmentNames=@($item.Config.Env | ForEach-Object { ($_ -split "=",2)[0] }) }
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+  $capabilityStates.docker = New-CollectionState 'not-installed' 'docker.command-missing' 'The Docker command is not installed on this host.'
+} else {
+  try {
+    $daemonOutput = @(docker info --format "{{.ServerVersion}}" 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw ($daemonOutput -join ' ') }
+    $ids = @(docker ps -a --format "{{.ID}}" 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw ($ids -join ' ') }
+    foreach ($id in $ids) {
+      if ([string]::IsNullOrWhiteSpace($id)) { continue }
+      $inspectOutput = @(docker inspect $id 2>&1)
+      if ($LASTEXITCODE -ne 0) { throw ($inspectOutput -join ' ') }
+      $item = $inspectOutput | ConvertFrom-Json | Select-Object -First 1
+      if ($null -eq $item) { throw 'docker inspect query failed' }
+      $mongoCandidate = $item.Name -match "mongo" -or $item.Config.Image -match "mongo" -or @($item.Mounts | Where-Object { $_.Destination -match "(?i)/data/(db|configdb)" }).Count -gt 0
+      if (-not $mongoCandidate) { continue }
+      $dockerRows += @{ id=$item.Id.Substring(0,12); name=$item.Name.TrimStart("/"); image=$item.Config.Image; status=$item.State.Status; ports=$item.NetworkSettings.Ports;
+        mounts=@($item.Mounts | Select-Object Name, Source, Destination, Type); restartPolicy=$item.HostConfig.RestartPolicy.Name;
+        environmentNames=@($item.Config.Env | ForEach-Object { ($_ -split "=",2)[0] }) }
+    }
+    $capabilityStates.docker = New-CollectionState 'available' 'docker.daemon' 'Docker inventory was collected.' $dockerRows
+  } catch {
+    $capabilityStates.docker = Get-OptionalFailureState 'docker' $_
   }
 }
 Write-SafeJson "docker.json" @($dockerRows)
 $iisRows = @()
-if (Get-Module -ListAvailable WebAdministration) {
-  Import-Module WebAdministration
-  $arrEnabled = (Get-WebConfigurationProperty -PSPath "MACHINE/WEBROOT/APPHOST" -Filter "system.webServer/proxy" -Name "enabled" -ErrorAction SilentlyContinue).Value
-  foreach ($website in Get-Website) {
-    $iisRows += @{ name=$website.Name; state=$website.State; physicalPath=$website.PhysicalPath; applicationPool=$website.ApplicationPool;
-      bindings=@(Get-WebBinding -Name $website.Name | Select-Object protocol,bindingInformation);
-      rewriteRules=@(Get-WebConfiguration -PSPath "IIS:\Sites\$($website.Name)" -Filter "system.webServer/rewrite/rules/rule" -ErrorAction SilentlyContinue | Select-Object name,enabled,stopProcessing,@{n="target";e={Get-SafeCommand ([string]$_.action.url)}}); proxyEnabled=[bool]$arrEnabled }
+if (-not (Get-Module -ListAvailable WebAdministration)) {
+  $capabilityStates.iis = New-CollectionState 'not-installed' 'iis.webadministration-module-missing' 'The IIS WebAdministration module is not installed on this host.'
+} else {
+  try {
+    Import-Module WebAdministration -ErrorAction Stop
+    $arrEnabled = (Get-WebConfigurationProperty -PSPath "MACHINE/WEBROOT/APPHOST" -Filter "system.webServer/proxy" -Name "enabled" -ErrorAction Stop).Value
+    foreach ($website in @(Get-Website -ErrorAction Stop)) {
+      $iisRows += @{ name=$website.Name; state=$website.State; physicalPath=$website.PhysicalPath; applicationPool=$website.ApplicationPool;
+        bindings=@(Get-WebBinding -Name $website.Name -ErrorAction Stop | Select-Object protocol,bindingInformation);
+        rewriteRules=@(Get-WebConfiguration -PSPath "IIS:\Sites\$($website.Name)" -Filter "system.webServer/rewrite/rules/rule" -ErrorAction Stop | Select-Object name,enabled,stopProcessing,@{n="target";e={Get-SafeCommand ([string]$_.action.url)}}); proxyEnabled=[bool]$arrEnabled }
+    }
+    $capabilityStates.iis = New-CollectionState 'available' 'iis.webadministration' 'IIS inventory was collected.' $iisRows
+  } catch {
+    $capabilityStates.iis = Get-OptionalFailureState 'iis' $_
   }
 }
 Write-SafeJson "iis.json" @($iisRows)
-$mongoEvidence = @{ available=$false; databases=@(); topology=@{} }
+$mongoEvidence = @{ available=$false; status='unavailable'; reason='mongo.precollected-evidence-required'; message='Mongo evidence was not supplied by the bundled read-only Node reader.'; topology=@{} }
 $usePrecollectedMongoEvidence = -not [string]::IsNullOrWhiteSpace($PrecollectedMongoEvidencePath)
 if ($usePrecollectedMongoEvidence) {
-  try { $mongoEvidence = Get-Content -LiteralPath $PrecollectedMongoEvidencePath -Raw | ConvertFrom-Json }
-  catch { throw "Precollected Mongo evidence is unreadable" }
+  try {
+    $mongoEvidence = Get-Content -LiteralPath $PrecollectedMongoEvidencePath -Raw | ConvertFrom-Json
+    $mongoEvidence | Add-Member -NotePropertyName status -NotePropertyValue 'available' -Force
+    $mongoEvidence | Add-Member -NotePropertyName reason -NotePropertyValue 'mongo.precollected-evidence' -Force
+    $mongoEvidence | Add-Member -NotePropertyName message -NotePropertyValue 'Mongo evidence was supplied by the bundled read-only Node reader.' -Force
+  } catch {
+    $mongoEvidence = @{ available=$false; status='query-failed'; reason='mongo.precollected-evidence-unreadable'; message='Precollected Mongo evidence could not be read safely.'; topology=@{} }
+  }
 }
-$mongoUri = [Environment]::GetEnvironmentVariable($MongoUriEnvironmentVariable)
-if (-not $usePrecollectedMongoEvidence -and (Get-Command mongosh -ErrorAction SilentlyContinue) -and -not [string]::IsNullOrWhiteSpace($mongoUri)) {
+if ($false) {
   $mongoScript = @'
 const admin=db.getSiblingDB("admin"),hello=admin.runCommand({hello:1}),build=admin.runCommand({buildInfo:1}),parameters=admin.runCommand({getParameter:1,featureCompatibilityVersion:1}),cmd=admin.runCommand({getCmdLineOpts:1}),serverStatus=admin.runCommand({serverStatus:1}),rwConcern=admin.runCommand({getDefaultRWConcern:1}),rs=hello.setName?admin.runCommand({replSetGetStatus:1}):null,includeFullScan=__FULL_SCAN__;
 const databases=admin.runCommand({listDatabases:1,nameOnly:false}).databases.map(d=>{const target=db.getSiblingDB(d.name);const collections=target.getCollectionInfos().map(c=>{const coll=target.getCollection(c.name),stats=target.runCommand({collStats:c.name,scale:1}),scan=includeFullScan?coll.aggregate([{$project:{bsonSize:{$bsonSize:"$$ROOT"},timestamp:{$ifNull:["$updatedAt",{$ifNull:["$createdAt","$timestamp"]}]}}},{$group:{_id:null,maxObservedBsonBytes:{$max:"$bsonSize"},earliestTimestamp:{$min:"$timestamp"},latestTimestamp:{$max:"$timestamp"}}}],{allowDiskUse:false}).toArray()[0]||{}:{};return {name:c.name,options:c.options,count:coll.countDocuments({}),logicalSizeBytes:stats.size||0,storageSizeBytes:stats.storageSize||0,indexes:coll.getIndexes(),maxObservedBsonBytes:scan.maxObservedBsonBytes??null,earliestTimestamp:scan.earliestTimestamp??null,latestTimestamp:scan.latestTimestamp??null,fullBsonScanPerformed:includeFullScan};});return {name:d.name,sizeOnDisk:d.sizeOnDisk,collections};});
@@ -99,24 +209,26 @@ print(JSON.stringify({available:true,version:build.version,fcv:parameters.featur
 '@
   $fullScan = if ($IncludeFullCollectionBsonScan) { "true" } else { "false" }
   $mongoScript = $mongoScript.Replace("__HUB_DB__", $HubDatabaseName).Replace("__BUILDER_DB__", $BuilderDatabaseName).Replace("__FULL_SCAN__", $fullScan)
-  $mongoEvidence = mongosh $mongoUri --quiet --eval $mongoScript | ConvertFrom-Json
+  $mongoEvidence = & $unusedMongoShell $mongoUri --quiet --eval $mongoScript | ConvertFrom-Json
   $mongoEvidence | Add-Member -NotePropertyName connection -NotePropertyValue @{
     authenticationConfigured = [bool]($mongoUri -match '^mongodb(?:\+srv)?://[^/@]+@')
     tlsConfigured = [bool]($mongoUri -match '^mongodb\+srv://' -or $mongoUri -match '(?i)[?&](tls|ssl)=(true|1)')
   }
 }
+$capabilityStates.mongo = New-CollectionState $mongoEvidence.status $mongoEvidence.reason $mongoEvidence.message @()
 $mappingInput = if ($mongoEvidence.mappingInput) { $mongoEvidence.mappingInput } else { @{ hubSites=@(); registry=@(); physical=@(); orphanPhysical=@(); revisionAggregates=@(); auditAggregates=@() } }
 $mongoForOutput = $mongoEvidence | Select-Object * -ExcludeProperty mappingInput,reconciliationSnapshot
 Write-SafeJson "mongo.json" $mongoForOutput
-$runtimeRows = @(); $runtimeNames = @("sitebuilder-runtime-config.json","runtime-config.json")
+$runtimeRows = @(); $runtimeNames = @("sitebuilder-runtime-config.json","runtime-config.json"); $runtimeRootStates = @()
 foreach ($root in $RuntimeSearchRoots) {
-  if (-not (Test-Path -LiteralPath $root)) { continue }
-  Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $runtimeNames -contains $_.Name -or $_.Name -match "deploy.*metadata|manifest" } | ForEach-Object {
-    $relativePath = Get-CompatibilityRelativePath $root $_.FullName
-    $artifactType = if ($runtimeNames -contains $_.Name) { "runtime-config" } else { "deployment-metadata" }
-    $row = @{ path=$_.FullName; deploymentRelativePath=$relativePath; artifactType=$artifactType; lastModifiedUtc=$_.LastWriteTimeUtc.ToString("o"); storageBackend=""; siteId=""; backendOrigin=""; apiVersion=""; schemaVersion=""; unsafeUrlComponents=$false; findingCodes=@() }
+  $rootInventory = Get-RootInventory $root 'runtime-search'
+  $runtimeRootStates += ($rootInventory | Select-Object originalRoot,normalizedRoot,status,reason,filesScanned,accessDeniedCount)
+  foreach ($file in @($rootInventory.files | Where-Object { $runtimeNames -contains $_.Name -or $_.Name -match "deploy.*metadata|manifest" })) {
+    $relativePath = Get-CompatibilityRelativePath $rootInventory.normalizedRoot $file.FullName
+    $artifactType = if ($runtimeNames -contains $file.Name) { "runtime-config" } else { "deployment-metadata" }
+    $row = @{ path=$file.FullName; deploymentRelativePath=$relativePath; artifactType=$artifactType; lastModifiedUtc=$file.LastWriteTimeUtc.ToString("o"); storageBackend=""; siteId=""; backendOrigin=""; apiVersion=""; schemaVersion=""; unsafeUrlComponents=$false; findingCodes=@() }
     try {
-      $raw = Get-Content -LiteralPath $_.FullName -Raw
+      $raw = Get-Content -LiteralPath $file.FullName -Raw
       if ($raw -match '(?i)"(?:password|passwd|secret|token|api[-_]?key|authorization|cookie|digest|private[-_]?key|mongo.*uri)"\s*:\s*"[^"\s]+"' -or $raw -match 'mongodb(?:\+srv)?://[^\s/@:]+:[^\s/@]+@') {
         $row.findingCodes=@("runtime.raw-secret-detected")
       } elseif ($artifactType -eq "runtime-config") {
@@ -128,9 +240,25 @@ foreach ($root in $RuntimeSearchRoots) {
   }
 }
 Write-SafeJson "runtime-configs.json" @($runtimeRows)
+if (@($RuntimeSearchRoots).Count -eq 0) {
+  $capabilityStates.runtimeSearchRoots = New-CollectionState 'not-applicable' 'runtime-search.no-roots-supplied' 'No runtime search roots were supplied.'
+} else {
+  $capabilityStates.runtimeSearchRoots = @{ status='available'; reason='runtime-search.roots-processed'; message='Each supplied runtime search root has a structured inventory state.'; items=@($runtimeRootStates) }
+}
+$backupRootStates = @()
 $backupRows = @()
-foreach ($root in $BackupSearchRoots) { if (Test-Path -LiteralPath $root) { $backupRows += @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Select-Object FullName,Name,Length,LastWriteTimeUtc) } }
+foreach ($root in $BackupSearchRoots) {
+  $rootInventory = Get-RootInventory $root 'backup-search'
+  $backupRootStates += ($rootInventory | Select-Object originalRoot,normalizedRoot,status,reason,filesScanned,accessDeniedCount)
+  $backupRows += @($rootInventory.files | Select-Object FullName,Name,Length,LastWriteTimeUtc)
+}
 Write-SafeJson "backups.json" @($backupRows)
+if (@($BackupSearchRoots).Count -eq 0) {
+  $capabilityStates.backupSearchRoots = New-CollectionState 'not-applicable' 'backup-search.no-roots-supplied' 'No backup search roots were supplied.'
+} else {
+  $capabilityStates.backupSearchRoots = @{ status='available'; reason='backup-search.roots-processed'; message='Each supplied backup search root has a structured inventory state.'; items=@($backupRootStates) }
+}
+Write-SafeJson "capability-states.json" @{ schemaVersion=1; collectedAt=$collectedAt; categories=$capabilityStates }
 $mappingInput | Add-Member -NotePropertyName runtimeConfigs -NotePropertyValue @($runtimeRows) -Force
 $mappingInput | Add-Member -NotePropertyName mongoDatabases -NotePropertyValue @($mongoEvidence.databases | ForEach-Object { $_.name }) -Force
 Write-SafeJson "mapping-input.json" $mappingInput

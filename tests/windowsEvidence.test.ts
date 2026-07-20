@@ -27,6 +27,16 @@ describe("Windows evidence package", () => {
     expect(source).toContain('globalCollections=new Set(["sites","site_data_revisions","site_data_audit_logs"])');
     expect(source).not.toContain('collectorHostAlias="windows-host"');
   });
+  it("records optional capability and search-root states instead of silently treating missing data as clean", () => {
+    const source = fs.readFileSync("scripts/mongo-consolidation/collect-windows-evidence.ps1", "utf8");
+    expect(source).toContain('Write-SafeJson "capability-states.json"');
+    expect(source).toContain("function New-CollectionState");
+    expect(source).toContain("Get-OptionalFailureState 'iis'");
+    expect(source).toContain("Get-OptionalFailureState 'docker'");
+    expect(source).toContain("listening-ports.netstat-fallback");
+    expect(source).toContain("originalRoot,normalizedRoot,status,reason,filesScanned,accessDeniedCount");
+    expect(source).not.toContain("mongosh $mongoUri");
+  });
   it("normalizes representative PowerShell singleton JSON", () => {
     expect(normalizePowerShellJson("\uFEFF{\"Name\":\"MongoDB\"}", true)).toEqual([{ Name: "MongoDB" }]);
   });
