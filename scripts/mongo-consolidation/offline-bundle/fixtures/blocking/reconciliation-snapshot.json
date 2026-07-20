@@ -1,0 +1,44 @@
+{
+  "hubSites": [{
+    "_id": "hub-blocking-1",
+    "siteIdentityKey": "identity-blocking-1",
+    "siteCode": "BLOCKING",
+    "builderSiteId": "builder-blocking-1",
+    "mongoSiteId": "builder-conflicting-id",
+    "safeCollectionName": "site_missing",
+    "storageBackend": "mongo",
+    "runtimeConfigStatus": { "path": "C:\\EvidenceFixture\\blocking\\runtime.json" }
+  }],
+  "builderSites": [{
+    "siteId": "builder-blocking-1",
+    "siteSlug": "blocking",
+    "safeCollectionName": "site_missing",
+    "status": "active",
+    "schemaVersion": 1
+  }],
+  "physicalCollections": [{
+    "name": "site_missing",
+    "registrySiteId": "builder-blocking-1",
+    "exists": false,
+    "documentCount": 0,
+    "wrongSiteDocuments": 0,
+    "invalidVersions": 0,
+    "invalidDeletedAt": 0,
+    "malformedIds": 0,
+    "oversizedBackups": 0,
+    "criticalBackups": 0,
+    "unknownScopes": [],
+    "scopes": {},
+    "duplicateLogicalDocuments": 0
+  }],
+  "revisions": [],
+  "audits": [],
+  "runtimeConfigs": [{
+    "path": "C:\\EvidenceFixture\\blocking\\runtime.json",
+    "siteId": "runtime-mismatched-id",
+    "storageBackend": "mongo",
+    "backendOrigin": "https://offline-fixture.invalid"
+  }],
+  "revisionAggregates": [],
+  "auditAggregates": []
+}

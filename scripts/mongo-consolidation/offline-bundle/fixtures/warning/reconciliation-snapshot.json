@@ -1,0 +1,38 @@
+{
+  "hubSites": [
+    {
+      "_id": "hub-warning-a",
+      "siteIdentityKey": "identity-warning-a",
+      "siteCode": "DUPLICATE-CODE",
+      "builderSiteId": "builder-warning-a",
+      "safeCollectionName": "site_warning_a",
+      "storageBackend": "mongo"
+    },
+    {
+      "_id": "hub-warning-b",
+      "siteIdentityKey": "identity-warning-b",
+      "siteCode": "DUPLICATE-CODE",
+      "builderSiteId": "builder-warning-b",
+      "safeCollectionName": "site_warning_b",
+      "storageBackend": "mongo"
+    }
+  ],
+  "builderSites": [
+    { "siteId": "builder-warning-a", "siteSlug": "warning-a", "safeCollectionName": "site_warning_a", "status": "active", "schemaVersion": 1 },
+    { "siteId": "builder-warning-b", "siteSlug": "warning-b", "safeCollectionName": "site_warning_b", "status": "active", "schemaVersion": 1 },
+    { "siteId": "builder-only-registry", "siteSlug": "builder-only", "safeCollectionName": "site_builder_only", "status": "active", "schemaVersion": 1 }
+  ],
+  "physicalCollections": [
+    { "name": "site_warning_a", "registrySiteId": "builder-warning-a", "exists": true, "documentCount": 1, "wrongSiteDocuments": 0, "invalidVersions": 0, "invalidDeletedAt": 0, "malformedIds": 0, "oversizedBackups": 0, "criticalBackups": 0, "unknownScopes": [], "scopes": { "theme": 1 }, "duplicateLogicalDocuments": 0 },
+    { "name": "site_warning_b", "registrySiteId": "builder-warning-b", "exists": true, "documentCount": 1, "wrongSiteDocuments": 0, "invalidVersions": 0, "invalidDeletedAt": 0, "malformedIds": 0, "oversizedBackups": 0, "criticalBackups": 0, "unknownScopes": [], "scopes": { "theme": 1 }, "duplicateLogicalDocuments": 0 },
+    { "name": "site_builder_only", "registrySiteId": "builder-only-registry", "exists": true, "documentCount": 1, "wrongSiteDocuments": 0, "invalidVersions": 0, "invalidDeletedAt": 0, "malformedIds": 0, "oversizedBackups": 0, "criticalBackups": 0, "unknownScopes": [], "scopes": { "theme": 1 }, "duplicateLogicalDocuments": 0 }
+  ],
+  "revisions": [],
+  "audits": [],
+  "runtimeConfigs": [
+    { "path": "C:\\EvidenceFixture\\warning-a\\runtime.json", "siteId": "builder-warning-a", "storageBackend": "mongo", "backendOrigin": "https://offline-fixture.invalid" },
+    { "path": "C:\\EvidenceFixture\\warning-b\\runtime.json", "siteId": "builder-warning-b", "storageBackend": "mongo", "backendOrigin": "https://offline-fixture.invalid" }
+  ],
+  "revisionAggregates": [],
+  "auditAggregates": []
+}
