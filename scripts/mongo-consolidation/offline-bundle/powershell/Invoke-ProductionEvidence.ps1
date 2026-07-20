@@ -46,7 +46,7 @@ try {
   if ($readerExitCode -ne 0) { exit $readerExitCode }
   $env:MONGODB_URI = $null
   $plainMongoUri = $null
-  & $collector -OutputDirectory $OutputDirectory -CollectorHostAlias $CollectorHostAlias -RuntimeRoots $RuntimeRoots -BackupRoots $BackupRoots -PrecollectedMongoEvidencePath $precollectedMongo
+  & $collector -OutputDirectory $OutputDirectory -CollectorHostAlias $CollectorHostAlias -RuntimeSearchRoots $RuntimeRoots -BackupSearchRoots $BackupRoots -PrecollectedMongoEvidencePath $precollectedMongo
   $collectorExitCode = $LASTEXITCODE
   if ($collectorExitCode -ne 0) { exit $collectorExitCode }
   Write-Host 'Read-only evidence collection completed.'

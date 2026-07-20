@@ -13,7 +13,10 @@ const option = (name, fallback = "") => {
 const runnerDirectory = path.dirname(path.resolve(process.argv[1] || "."));
 const bundleRoot = path.resolve(option("--bundle-root", path.join(runnerDirectory, "..")));
 const node = path.resolve(option("--node", process.execPath));
-const reconcile = path.resolve(option("--reconcile", path.join(bundleRoot, "reconciliation", "reconcile-snapshot.cjs")));
+const defaultReconcile = fs.existsSync(path.join(bundleRoot, "reconciliation", "reconcile-evidence-snapshot.cjs"))
+  ? path.join(bundleRoot, "reconciliation", "reconcile-evidence-snapshot.cjs")
+  : path.join(bundleRoot, "reconciliation", "reconcile-snapshot.cjs");
+const reconcile = path.resolve(option("--reconcile", defaultReconcile));
 const defaultValidator = fs.existsSync(path.join(bundleRoot, "validator", "validate-windows-evidence.mjs"))
   ? path.join(bundleRoot, "validator", "validate-windows-evidence.mjs")
   : path.join(bundleRoot, "validator", "validate-windows-evidence.cjs");

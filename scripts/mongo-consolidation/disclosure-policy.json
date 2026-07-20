@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Sanitized read-only Mongo consolidation evidence",
+  "classes": {
+    "mongoCredentials": "prohibit",
+    "mongoUri": "prohibit",
+    "apiKeys": "prohibit",
+    "bearerTokens": "prohibit",
+    "cookies": "prohibit",
+    "sharePointDigest": "prohibit",
+    "connectionStrings": "prohibit",
+    "privateKeys": "prohibit",
+    "certificatePrivateMaterial": "prohibit",
+    "emails": "prohibit",
+    "phones": "prohibit",
+    "personalNumbers": "prohibit",
+    "userAdminArrays": "omit",
+    "freeTextBusinessContent": "omit",
+    "backupPayloads": "omit",
+    "revisionSnapshots": "omit",
+    "applicationDocumentPayloads": "omit",
+    "hostnames": "hash",
+    "servicePaths": "redact",
+    "filesystemPaths": "redact",
+    "databaseNames": "allow",
+    "collectionNames": "allow",
+    "sharePointUrls": "redact",
+    "runtimeOrigins": "redact",
+    "objectIds": "hash",
+    "technicalSiteId": "allow"
+  }
+}
