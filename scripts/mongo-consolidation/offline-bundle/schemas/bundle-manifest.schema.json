@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Site Builder offline Windows bundle manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "hashRule", "bundleVersion", "files"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "hashRule": { "type": "string", "minLength": 1 },
+    "bundleVersion": { "type": "string", "minLength": 1 },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["relativePath", "sizeBytes", "sha256", "category", "sourceType", "executableEntryPoint"],
+        "properties": {
+          "relativePath": { "type": "string", "pattern": "^(?!/|.*\\\\|.*(?:^|/)\\.\\.(?:/|$)).+$" },
+          "sizeBytes": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "category": { "type": "string" },
+          "sourceType": { "type": "string", "minLength": 1 },
+          "executableEntryPoint": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}
