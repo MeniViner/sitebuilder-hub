@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { ReactNode, useEffect, useId, useRef } from "react";
+import { ModalPortal } from "./ModalPortal";
 
 export function DetailsDrawer({
   open,
@@ -56,12 +57,13 @@ export function DetailsDrawer({
   if (!open) return null;
 
   return (
+    <ModalPortal>
     <div className="drawer-layer">
       <aside ref={panelRef} className="drawer-panel" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <header className="drawer-header">
-          <div>
-            <h2 id={titleId} className="text-lg font-bold" style={{ color: "var(--text-strong)" }}>{title}</h2>
-            {subtitle ? <p className="mt-1 text-sm muted">{subtitle}</p> : null}
+          <div className="drawer-title">
+            <h2 id={titleId}>{title}</h2>
+            {subtitle ? <p>{subtitle}</p> : null}
           </div>
           <button className="icon-btn" onClick={onClose} type="button" aria-label="סגור">
             <X size={17} />
@@ -70,5 +72,6 @@ export function DetailsDrawer({
         <div className="drawer-body">{children}</div>
       </aside>
     </div>
+    </ModalPortal>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, MoreHorizontal, Plus, Search } from "lucide-react";
+import { ArrowLeft, FolderKanban, MoreHorizontal, Plus, Search } from "lucide-react";
 import { Link } from "react-router-dom";
 import { BidiValue, DateValue } from "../components/product/BidiValue";
 import { HumanStatus } from "../components/product/HumanStatus";
@@ -37,6 +37,7 @@ export function SimpleSitesPage({ authUser }: { authUser: HubAuthUser }) {
 
   return (
     <ProductPage
+      icon={FolderKanban}
       title="אתרים"
       description="חיפוש, פתיחה וניהול של כל אתר."
       action={canMutate(authUser.role) ? <Link className="btn btn-primary" to="/sites/new"><Plus size={17} />יצירת אתר</Link> : undefined}

@@ -3,9 +3,11 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { API_BASE_URL, API_BASE_URL_SOURCE } from "./config/hubConfig";
 import { clientLogger } from "./utils/logger";
-import "@fontsource/assistant/hebrew-400.css";
-import "@fontsource/assistant/hebrew-600.css";
-import "@fontsource/assistant/hebrew-700.css";
+import "@fontsource/heebo/hebrew-400.css";
+import "@fontsource/heebo/hebrew-500.css";
+import "@fontsource/heebo/hebrew-600.css";
+import "@fontsource/heebo/hebrew-700.css";
+import "@fontsource/heebo/hebrew-800.css";
 import "./styles/index.css";
 
 clientLogger.installBrowserDiagnostics();

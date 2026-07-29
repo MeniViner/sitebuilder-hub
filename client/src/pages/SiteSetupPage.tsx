@@ -125,11 +125,11 @@ export function SiteSetupPage({ authUser }: { authUser: HubAuthUser }) {
   };
 
   if (!canMutate(authUser.role)) {
-    return <ProductPage title="יצירת אתר" description="התפקיד שלך מאפשר צפייה בלבד."><div className="normal-empty-card"><h2>הפעולה אינה זמינה לצופה</h2><p>אפשר לעיין באתרים קיימים בלי לבצע שינויים.</p><Link className="btn btn-secondary mt-4" to="/sites">חזרה לאתרים</Link></div></ProductPage>;
+    return <ProductPage icon={FolderPlus} title="יצירת אתר" description="התפקיד שלך מאפשר צפייה בלבד."><div className="normal-empty-card"><h2>הפעולה אינה זמינה לצופה</h2><p>אפשר לעיין באתרים קיימים בלי לבצע שינויים.</p><Link className="btn btn-secondary mt-4" to="/sites">חזרה לאתרים</Link></div></ProductPage>;
   }
 
   return (
-    <ProductPage title="יצירת אתר" description="ארבעה שלבים קצרים. אפשר לחזור ולהמשיך הקמה חלקית.">
+    <ProductPage icon={FolderPlus} title="יצירת אתר" description="ארבעה שלבים קצרים. אפשר לחזור ולהמשיך הקמה חלקית.">
       <ol className="normal-stepper" aria-label="שלבי יצירת אתר">
         {stages.map((item, index) => {
           const current = item.key === stage;

@@ -31,9 +31,16 @@ export function ThemeToggle() {
   const nextTheme = theme === "dark" ? "light" : "dark";
 
   return (
-    <button className="btn btn-secondary" type="button" onClick={() => setTheme(nextTheme)} aria-label="החלפת ערכת צבע">
-      {theme === "dark" ? <Moon size={15} /> : <Sun size={15} />}
-      {theme === "dark" ? "כהה" : "בהיר"}
+    <button
+      className="theme-toggle"
+      type="button"
+      onClick={() => setTheme(nextTheme)}
+      aria-label={nextTheme === "dark" ? "מעבר למצב כהה" : "מעבר למצב בהיר"}
+      title={nextTheme === "dark" ? "מצב כהה" : "מצב בהיר"}
+    >
+      <span className={`theme-toggle-icon theme-toggle-sun ${theme === "light" ? "is-visible" : ""}`} aria-hidden="true"><Sun size={17} /></span>
+      <span className={`theme-toggle-icon theme-toggle-moon ${theme === "dark" ? "is-visible" : ""}`} aria-hidden="true"><Moon size={17} /></span>
+      <span className="theme-toggle-label">{theme === "dark" ? "כהה" : "בהיר"}</span>
     </button>
   );
 }
