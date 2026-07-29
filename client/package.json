@@ -4,11 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "npm run generate:modern-css",
     "dev": "vite --port 5177",
+    "prebuild": "npm run generate:modern-css",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "generate:modern-css": "node ./scripts/generate-modern-css.mjs",
+    "generate:legacy-css": "node ./scripts/generate-legacy-css.mjs"
   },
   "dependencies": {
+    "@fontsource/assistant": "^5.2.9",
     "@fontsource/heebo": "^5.3.0",
     "lucide-react": "^0.511.0",
     "react": "^18.3.1",

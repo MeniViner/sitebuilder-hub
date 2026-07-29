@@ -5,6 +5,7 @@ import { PRIMARY_ROUTES } from "../config/routeManifest";
 import type { HubAuthUser } from "../domain/hubDomain";
 import { presentVisibleRole } from "../domain/presentation";
 import { useDialogFocus } from "../hooks/useDialogFocus";
+import { HubViewToggle } from "./HubViewToggle";
 import { useOperationalStatus } from "./OperationalStatusProvider";
 
 const icons = {
@@ -79,6 +80,7 @@ function SidebarContent({
           );
         })}
       </nav>
+      {mobile ? <div className="hub-view-toggle-mobile-slot"><HubViewToggle placement="mobile" /></div> : null}
       <div className="sidebar-footer">
         <span className={`sidebar-availability-dot ${available ? "is-available" : "is-attention"}`} aria-hidden="true" />
         <div><strong>{refreshing ? "בודק מערכת" : available ? "המערכת זמינה" : "נדרשת בדיקה"}</strong><span>פרטים זמינים בהגדרות</span></div>

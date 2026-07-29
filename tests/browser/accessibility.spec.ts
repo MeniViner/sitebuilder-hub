@@ -49,3 +49,44 @@ test("30 dark primary hover keeps WCAG contrast", async ({ page }) => {
   await page.getByRole("link", { name: "יצירת אתר" }).hover();
   await expectNoAxeViolations(page);
 });
+
+test("36 legacy Admin and Viewer routes have no automated WCAG A/AA violations", async ({ page }) => {
+  for (const [scenario, route] of [
+    ["admin", "/"],
+    ["admin", "/sites"],
+    ["admin", "/sites/managed-ready?area=backups"],
+    ["admin", "/operations"],
+    ["admin", "/settings"],
+    ["viewer", "/sites"],
+    ["viewer", "/sites/managed-ready"]
+  ] as const) {
+    await page.goto(`/?scenario=${scenario}&ui=legacy#${route}`);
+    await expect(page.locator("#main-content").getByRole("heading").first()).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-hub-ui-mode", "legacy");
+    await expectNoAxeViolations(page);
+  }
+});
+
+test("37 modern and legacy mobile view controls pass automated checks with reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  for (const ui of ["modern", "legacy"] as const) {
+    await page.goto(`/?scenario=admin&ui=${ui}#/`);
+    await expect(page.locator("#main-content").getByRole("heading").first()).toBeVisible();
+    await page.getByRole("button", { name: "פתיחת ניווט" }).click();
+    const dialog = page.getByRole("dialog", { name: "Site Builder Hub" });
+    await expect(dialog.getByRole("button", { name: ui === "modern" ? "תצוגה ישנה" : "חזרה לתצוגה החדשה" })).toBeVisible();
+    await expectNoAxeViolations(page);
+    await page.keyboard.press("Escape");
+  }
+});
+
+test("38 legacy dark mode remains functional and accessible", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("sitebuilder-hub-theme", "dark"));
+  await page.goto("/?scenario=viewer&ui=legacy#/sites");
+  await expect(page.locator("#main-content").getByRole("heading").first()).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-hub-ui-mode", "legacy");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expectNoAxeViolations(page);
+});

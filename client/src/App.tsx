@@ -3,6 +3,7 @@ import { HashRouter, Route, Routes, useLocation } from "react-router-dom";
 import { KeyRound, LogIn, RefreshCw, ShieldCheck } from "lucide-react";
 import { Layout } from "./components/Layout";
 import { AppShell } from "./components/AppShell";
+import { HubViewModeProvider } from "./components/HubViewMode";
 import { ErrorState } from "./components/ErrorState";
 import { LoadingState } from "./components/LoadingState";
 import { MetadataOnlyBadge } from "./components/MetadataOnlyBadge";
@@ -116,6 +117,17 @@ function RouteLogger() {
   }, [location]);
 
   return null;
+}
+
+function HubRouter({ children }: { children: ReactNode }) {
+  return (
+    <HashRouter>
+      <RouteLogger />
+      <HubViewModeProvider>
+        <Layout>{children}</Layout>
+      </HubViewModeProvider>
+    </HashRouter>
+  );
 }
 
 function FirstInitAuthPage({
@@ -444,16 +456,13 @@ export default function App() {
   }, [refreshAuth]);
 
   const appShell = (children: JSX.Element) => (
-    <HashRouter>
-      <RouteLogger />
-      <Layout>
-        <OperationalStatusProvider serverStatus={serverStatus} authUser={authUser} authChecking={authChecking}>
-          <AppShell serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={handleLogout}>
-            {children}
-          </AppShell>
-        </OperationalStatusProvider>
-      </Layout>
-    </HashRouter>
+    <HubRouter>
+      <OperationalStatusProvider serverStatus={serverStatus} authUser={authUser} authChecking={authChecking}>
+        <AppShell serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={handleLogout}>
+          {children}
+        </AppShell>
+      </OperationalStatusProvider>
+    </HubRouter>
   );
 
   if (authChecking) {
@@ -473,20 +482,17 @@ export default function App() {
   }
 
   return (
-    <HashRouter>
-      <RouteLogger />
-      <Layout>
-        <AuthenticatedRoutes
-          serverStatus={serverStatus}
-          authUser={authUser}
-          authChecking={authChecking}
-          onLogin={handleLogin}
-          onLogout={handleLogout}
-          onRefreshAuth={refreshAuth}
-          authBootstrapStatus={authBootstrapStatus}
-          authError={authError}
-        />
-      </Layout>
-    </HashRouter>
+    <HubRouter>
+      <AuthenticatedRoutes
+        serverStatus={serverStatus}
+        authUser={authUser}
+        authChecking={authChecking}
+        onLogin={handleLogin}
+        onLogout={handleLogout}
+        onRefreshAuth={refreshAuth}
+        authBootstrapStatus={authBootstrapStatus}
+        authError={authError}
+      />
+    </HubRouter>
   );
 }

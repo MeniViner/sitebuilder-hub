@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/browser",
-  outputDir: ".playwright-artifacts/test-results",
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || ".playwright-artifacts/test-results",
   fullyParallel: false,
   workers: 1,
   retries: 0,

@@ -1,6 +1,7 @@
 import { LogOut, Menu } from "lucide-react";
 import type { HubAuthUser } from "../domain/hubDomain";
 import { presentVisibleRole } from "../domain/presentation";
+import { HubViewToggle } from "./HubViewToggle";
 import { SystemStatusBar } from "./SystemStatusBar";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -34,6 +35,7 @@ export function TopBar({
         </div>
         <div className="hub-topbar-actions">
           <SystemStatusBar serverStatus={serverStatus} authChecking={authChecking} />
+          <HubViewToggle placement="desktop" />
           <ThemeToggle />
           {authUser ? (
             <div className="hub-account-chip" title={`${displayName}, ${visibleRole === "admin" ? "מנהל" : "צופה"}`}>
