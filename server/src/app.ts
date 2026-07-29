@@ -19,10 +19,16 @@ import { logger } from "./utils/logger";
 import { authMiddleware } from "./middlewares/auth";
 import { requestContextMiddleware } from "./middlewares/request-context";
 import { rateLimitMiddleware } from "./middlewares/rate-limit";
+import { loadPilotGatewayConfig } from "./config/pilotGateway";
+import { createPilotGatewayRouter } from "./services/pilotGateway.service";
 
 export const app = express();
+export const pilotGatewayConfig = loadPilotGatewayConfig(process.env);
 
 app.use(helmet());
+if (pilotGatewayConfig.enabled) {
+  app.use(pilotGatewayConfig.prefix, createPilotGatewayRouter(pilotGatewayConfig));
+}
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
