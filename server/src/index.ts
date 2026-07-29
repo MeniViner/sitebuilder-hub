@@ -1,6 +1,6 @@
 import { env } from "./config/env";
 import { connectMongo } from "./db/mongo";
-import { app } from "./app";
+import { app, pilotGatewayConfig } from "./app";
 import { logger } from "./utils/logger";
 import { startJobsWorker } from "./services/jobs.worker";
 import { startMaintenanceScheduler } from "./services/maintenanceScheduler.service";
@@ -35,6 +35,15 @@ const bootstrap = async () => {
     maintenanceSchedulerPollMs: env.MAINTENANCE_SCHEDULER_POLL_MS,
     rateLimitWindowMs: env.RATE_LIMIT_WINDOW_MS,
     rateLimitMax: env.RATE_LIMIT_MAX,
+    pilotGateway: {
+      enabled: pilotGatewayConfig.enabled,
+      mode: "PILOT_ONLY",
+      prefix: pilotGatewayConfig.prefix,
+      allowedSiteIds: Array.from(pilotGatewayConfig.allowedSiteIds),
+      allowedOrigins: Array.from(pilotGatewayConfig.allowedOrigins),
+      targetOrigin: pilotGatewayConfig.target?.origin || "",
+      credentialRefConfigured: Boolean(pilotGatewayConfig.apiKeyRef)
+    },
     sharePoint: {
       serverSharePointRestDisabled: true,
       writeEnabledIgnored: env.SHAREPOINT_WRITE_ENABLED,
