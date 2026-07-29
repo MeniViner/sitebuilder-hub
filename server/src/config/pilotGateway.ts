@@ -148,7 +148,7 @@ const validateApiKey = (environment: Environment, required: boolean) => {
   }
 
   const apiKey = String(environment[apiKeyRef] || "").trim();
-  if (required && !apiKey) {
+  if (required && (!apiKey || /^<[^>]+>$/.test(apiKey) || /^change-?me$/i.test(apiKey))) {
     throw new Error("The server secret referenced by SITE_BUILDER_PILOT_GATEWAY_API_KEY_REF is missing.");
   }
   return { apiKeyRef, apiKey };

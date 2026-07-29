@@ -45,6 +45,7 @@ describe("PILOT_ONLY Builder Gateway configuration", () => {
     ["a target path", { SITE_BUILDER_PILOT_GATEWAY_TARGET: "http://127.0.0.1:3001/other" }, "fixed loopback"],
     ["a missing secret reference", { SITE_BUILDER_PILOT_GATEWAY_API_KEY_REF: undefined }, "API_KEY_REF is required"],
     ["a missing resolved secret", { SITE_BUILDER_BACKEND_API_KEY: undefined }, "referenced"],
+    ["a placeholder resolved secret", { SITE_BUILDER_BACKEND_API_KEY: "<SET_ON_SERVER>" }, "referenced"],
     ["an invalid prefix", { SITE_BUILDER_PILOT_GATEWAY_PREFIX: "/builder-api/../admin" }, "safe absolute path"],
     ["an empty site list", { SITE_BUILDER_PILOT_GATEWAY_ALLOWED_SITE_IDS: undefined }, "ALLOWED_SITE_IDS is required"],
     ["another allowed site", { SITE_BUILDER_PILOT_GATEWAY_ALLOWED_SITE_IDS: "alphateam" }, PILOT_GATEWAY_SITE_ID],
