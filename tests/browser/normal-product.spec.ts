@@ -144,9 +144,11 @@ test("16 mobile navigation traps focus, closes with Escape, and returns focus", 
   await page.setViewportSize({ width: 390, height: 844 });
   await openScenario(page);
   const trigger = page.getByRole("button", { name: "פתיחת ניווט" });
+  expect((await trigger.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "Site Builder Hub" });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: /יציאה/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "סגירת ניווט" }).last()).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect.poll(async () => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
@@ -179,9 +181,15 @@ test("18 theme switching works", async ({ page }) => {
 
 test("19 normal routes have no page-level horizontal overflow at 390px", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const route of ["/", "/sites", "/sites/new", "/sites/managed-ready", "/sites/managed-ready?area=backups", "/operations", "/settings"]) {
+  for (const route of ["/", "/sites", "/sites/new", "/sites/managed-ready", "/sites/managed-ready?area=access", "/sites/managed-ready?area=structure", "/sites/managed-ready?area=backups", "/sites/managed-ready?area=activity", "/operations", "/settings"]) {
     await openScenario(page, "admin", route);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+  await openScenario(page, "admin", "/sites/managed-ready?area=activity");
+  for (const tab of await page.getByRole("navigation", { name: "אזורי האתר" }).getByRole("button").all()) {
+    const rect = await tab.boundingBox();
+    expect(rect?.x).toBeGreaterThanOrEqual(0);
+    expect((rect?.x || 0) + (rect?.width || 0)).toBeLessThanOrEqual(390);
   }
 });
 

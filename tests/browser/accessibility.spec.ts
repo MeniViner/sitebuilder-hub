@@ -16,7 +16,7 @@ async function expectNoAxeViolations(page: Page) {
 }
 
 test("27 normal Admin routes have no automated WCAG A/AA violations", async ({ page }) => {
-  for (const route of ["/", "/sites", "/sites/new", "/sites/managed-ready", "/sites/managed-ready?area=access", "/sites/managed-ready?area=backups", "/operations", "/settings"]) {
+  for (const route of ["/", "/sites", "/sites/new", "/sites/managed-ready", "/sites/managed-ready?area=access", "/sites/managed-ready?area=structure", "/sites/managed-ready?area=backups", "/sites/managed-ready?area=activity", "/operations", "/settings"]) {
     await openReady(page, "admin", route);
     await expectNoAxeViolations(page);
   }
@@ -24,7 +24,7 @@ test("27 normal Admin routes have no automated WCAG A/AA violations", async ({ p
 
 test("28 Viewer routes pass the same automated checks in Dark mode", async ({ page }) => {
   await page.addInitScript(() => window.localStorage.setItem("sitebuilder-hub-theme", "dark"));
-  for (const route of ["/", "/sites", "/sites/managed-ready", "/operations", "/settings"]) {
+  for (const route of ["/", "/sites", "/sites/managed-ready", "/sites/managed-ready?area=access", "/sites/managed-ready?area=structure", "/sites/managed-ready?area=backups", "/sites/managed-ready?area=activity", "/operations", "/settings"]) {
     await openReady(page, "viewer", route);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expectNoAxeViolations(page);
@@ -40,5 +40,12 @@ test("29 mobile navigation and confirmation dialog pass automated checks", async
 
   await openReady(page, "admin", "/sites/managed-ready?area=backups");
   await page.getByRole("button", { name: "יצירת גיבוי" }).click();
+  await expectNoAxeViolations(page);
+});
+
+test("30 dark primary hover keeps WCAG contrast", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("sitebuilder-hub-theme", "dark"));
+  await openReady(page, "admin", "/sites");
+  await page.getByRole("link", { name: "יצירת אתר" }).hover();
   await expectNoAxeViolations(page);
 });
