@@ -1,0 +1,459 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-14T17:53:16.828Z",
+  "auditMode": "read-only",
+  "scope": {
+    "siteBuilderRoot": "/Users/meni/dev/site-builder",
+    "hubRoot": "/Users/meni/dev/sitebuilder-hub",
+    "mongoEndpointSanitized": "mongodb://127.0.0.1:27017",
+    "productionWindowsHostInspected": false,
+    "limitations": [
+      "The reachable local Mongo deployment and local runtime/configuration were inspected; no remote or Windows production host was available in this workspace.",
+      "No application server was started because both startups create indexes and HUB startup can drop an index and backfill documents.",
+      "No restore, migration, seed, build, configuration change, or write probe was performed."
+    ]
+  },
+  "repositoryBaselines": {
+    "site-builder": {
+      "branch": "codex/latest-site-builder-updates",
+      "commit": "a64d2e90f706bc0e3d3dd5818d29516a38a6205b",
+      "workingTree": "pre-existing extensive modified and untracked files",
+      "evidenceBasis": "current working tree, not commit-only"
+    },
+    "sitebuilder-hub": {
+      "branch": "main",
+      "commit": "5685903b64ccf709fb872522e4e71683b6af9eb7",
+      "workingTreeBeforeAudit": [
+        "?? docs/sitebuilder-hub-master-rescue-planning-gap-audit-he.md"
+      ],
+      "evidenceBasis": "current working tree, not commit-only"
+    }
+  },
+  "testsRun": [
+    {
+      "project": "site-builder",
+      "command": "npm exec vitest -- run server/src/app.test.js server/src/config/env.test.js server/src/repository/SiteDataRepository.test.js server/src/repository/LegacyCompatibilityRepository.test.js server/src/routes/siteBackups.test.js server/src/migration/sharepointToMongo.test.js src/services/storage/LegacyObjectStorageAdapter.test.js src/services/storage/runtimeConfig.test.mjs scripts/deploymentArtifacts.test.mjs",
+      "result": "passed",
+      "testFiles": 9,
+      "tests": 59
+    },
+    {
+      "project": "sitebuilder-hub",
+      "command": "npm test -- --run",
+      "result": "passed",
+      "testFiles": 62,
+      "tests": 267
+    },
+    {
+      "project": "sitebuilder-hub/server",
+      "command": "npm exec tsc -- -p tsconfig.json --noEmit",
+      "result": "passed"
+    },
+    {
+      "project": "sitebuilder-hub/client",
+      "command": "npm exec tsc -- -p tsconfig.json --noEmit",
+      "result": "passed"
+    }
+  ],
+  "localRuntime": {
+    "listeningApplicationServers": [],
+    "processManagersFound": [],
+    "reverseProxiesFound": [],
+    "mongo": {
+      "runningContainer": "sitebuilder-hub-mongo",
+      "image": "mongo:7",
+      "hostBinding": "0.0.0.0:27017->27017/tcp",
+      "volume": "sitebuilder-hub_sitebuilder_hub_mongo",
+      "command": "default mongod (no replica set option)"
+    },
+    "stoppedBuilderMongoArtifacts": [
+      {
+        "container": "site-builder-mongo-local-check",
+        "hostPort": 27018,
+        "replicaSet": "rs0",
+        "volume": "site-builder-mongo-local-check-data"
+      },
+      {
+        "volume": "site-builder-dev_site-builder-mongo-dev-data",
+        "expectedContainer": "site-builder-mongo-dev",
+        "state": "container absent/stopped"
+      }
+    ],
+    "expectedPorts": {
+      "siteBuilderVite": 5173,
+      "siteBuilderApiActualLocalEnv": 3001,
+      "siteBuilderApiCodeDefault": 4000,
+      "hubClient": 5177,
+      "hubApi": 4100,
+      "mongo": 27017
+    }
+  },
+  "mongoDeployment": {
+    "version": "7.0.35",
+    "featureCompatibilityVersion": "7.0",
+    "topology": "standalone",
+    "replicaSetName": null,
+    "storageEngine": "wiredTiger",
+    "persistent": true,
+    "journal": "default-not-explicit",
+    "authorization": "not-configured",
+    "tls": "not-configured",
+    "bindIp": "*",
+    "hostPublishedAddress": "0.0.0.0",
+    "transactionsAvailable": false,
+    "changeStreamsAvailable": false,
+    "productionSuitable": false,
+    "blockingReasons": [
+      "standalone topology",
+      "no MongoDB authorization",
+      "no TLS",
+      "bindIp=* and Docker publishes on all host interfaces",
+      "Site Builder local URI requires replicaSet=rs0, which does not match the running topology"
+    ]
+  },
+  "databases": [
+    {
+      "name": "site_builder_dev",
+      "logicalOwner": "site-builder data plane",
+      "sizeOnDiskBytes": 651264,
+      "collections": [
+        {
+          "name": "sites",
+          "role": "Builder site registry",
+          "documentCount": 1,
+          "sizeBytes": 295,
+          "storageSizeBytes": 36864,
+          "maxBsonBytes": 295,
+          "idType": "ObjectId",
+          "observedFields": ["_id", "siteId", "siteSlug", "safeCollectionName", "displayName", "status", "publicRead", "schemaVersion", "createdAt", "createdBy", "updatedAt", "updatedBy"],
+          "indexes": [
+            { "name": "_id_", "key": { "_id": 1 }, "unique": true },
+            { "name": "siteId_1", "key": { "siteId": 1 }, "unique": true },
+            { "name": "safeCollectionName_1", "key": { "safeCollectionName": 1 }, "unique": true },
+            { "name": "siteSlug_1", "key": { "siteSlug": 1 }, "unique": false }
+          ]
+        },
+        {
+          "name": "site_local_dev_site_6737a6f8b4",
+          "role": "physical per-site data, including backups",
+          "documentCount": 5,
+          "sizeBytes": 81848,
+          "storageSizeBytes": 73728,
+          "maxBsonBytes": 56222,
+          "idType": "string; deterministic scope:entityId or backup:<id>",
+          "observedFields": ["_id", "siteId", "scope", "entityId", "data", "schemaVersion", "version", "hash", "deletedAt", "metadata", "createdAt", "createdBy", "updatedAt", "updatedBy"],
+          "indexes": [
+            { "name": "_id_", "key": { "_id": 1 }, "unique": true },
+            { "name": "siteId_1_scope_1_entityId_1_deletedAt_1", "key": { "siteId": 1, "scope": 1, "entityId": 1, "deletedAt": 1 }, "unique": false },
+            { "name": "siteId_1_scope_1_updatedAt_-1", "key": { "siteId": 1, "scope": 1, "updatedAt": -1 }, "unique": false },
+            { "name": "hash_1", "key": { "hash": 1 }, "unique": false }
+          ],
+          "scopeCounts": { "backups": 1, "config": 1, "gantt": 1, "legacyMeta": 2 },
+          "scopeVersions": { "backups": [1], "config": [5], "gantt": [2], "legacyMeta": [2, 5] },
+          "softDeletedDocuments": 0,
+          "documentsOver8MiB": 0,
+          "documentsOver12MiB": 0
+        },
+        {
+          "name": "site_data_revisions",
+          "role": "full before/after revision history",
+          "documentCount": 15,
+          "sizeBytes": 230735,
+          "storageSizeBytes": 126976,
+          "maxBsonBytes": 56025,
+          "idType": "ObjectId",
+          "observedFields": ["_id", "siteId", "collectionName", "documentKey", "operation", "previousVersion", "nextVersion", "previousHash", "nextHash", "previousData", "nextData", "actor", "createdAt"],
+          "indexes": [
+            { "name": "_id_", "key": { "_id": 1 }, "unique": true },
+            { "name": "siteId_1_documentKey_1_createdAt_-1", "key": { "siteId": 1, "documentKey": 1, "createdAt": -1 }, "unique": false }
+          ],
+          "retentionPolicy": null
+        },
+        {
+          "name": "site_data_audit_logs",
+          "role": "Builder mutation audit metadata",
+          "documentCount": 16,
+          "sizeBytes": 8993,
+          "storageSizeBytes": 36864,
+          "maxBsonBytes": 649,
+          "idType": "ObjectId",
+          "observedFields": ["_id", "siteId", "documentKey", "scope", "entityId", "operation", "actor", "result", "ip", "userAgent", "metadata", "createdAt"],
+          "indexes": [
+            { "name": "_id_", "key": { "_id": 1 }, "unique": true },
+            { "name": "siteId_1_documentKey_1_createdAt_-1", "key": { "siteId": 1, "documentKey": 1, "createdAt": -1 }, "unique": false }
+          ],
+          "operationCounts": { "create": 5, "legacy-write": 10, "admin-backup-create": 1 },
+          "retentionPolicy": null
+        }
+      ],
+      "integrity": {
+        "registrySites": 1,
+        "duplicateSiteIds": 0,
+        "duplicateSafeCollectionNames": 0,
+        "orphanPhysicalCollections": 0,
+        "missingPhysicalCollections": 0,
+        "wrongSiteIdDocuments": 0,
+        "missingOrInvalidVersions": 0,
+        "invalidDeletedAtValues": 0,
+        "revisionOrphans": 0,
+        "auditOrphans": 0,
+        "revisionVersionChainShapeFailures": 0,
+        "backupCount": 1,
+        "backupMaxBsonBytes": 56222,
+        "missingExpectedLegacyObjects": ["admins", "events", "navigation", "content", "design", "widgets", "externalLinks"],
+        "status": "structurally consistent but functionally partial seed"
+      }
+    },
+    {
+      "name": "sitebuilder_hub",
+      "logicalOwner": "HUB control plane",
+      "sizeOnDiskBytes": 1314816,
+      "collections": [
+        {
+          "name": "sites",
+          "model": "Site",
+          "role": "managed-site control-plane records",
+          "documentCount": 4,
+          "sizeBytes": 38778,
+          "storageSizeBytes": 45056,
+          "maxBsonBytes": 14871,
+          "idType": "ObjectId",
+          "fieldGroups": {
+            "identity": ["siteCode", "siteIdentityKey", "displayName", "environment", "builderSiteId"],
+            "storageMapping": ["storageBackend", "backendApiUrl", "builderApiKeyRef", "mongoEnvironment", "mongoDatabase", "mongoSiteId", "safeCollectionName", "dataBackendStatus", "mongoBackendStatus", "runtimeConfigStatus"],
+            "sharePoint": ["sharePointHost", "sharePointSiteUrl", "finalAppUrl", "bootstrapLibrary", "bootstrapFolder", "bootstrapUrl", "siteDbLibrary", "usersDbLibrary", "widgetsDbTarget", "resolvedPaths", "sharePointStatus", "sharePointPathEvidence"],
+            "ownershipAndAdmins": ["ownerName", "ownerPersonalNumber", "ownerEmail", "ownerPhone", "siteCollectionAdmins", "ownersGroupAdmins", "txtAdmins", "adminDifferences", "adminSourceCounts", "adminSourceStatus", "authoritativeAdminSource"],
+            "operations": ["status", "lifecycleStatus", "provisioningStatus", "health", "maintenanceSchedule", "backupStatus", "backupCount", "backupStorageMb", "lastBackupId", "version", "currentVersion", "targetVersion", "latestKnownVersion", "versionStatus", "recoveryState", "lastError"],
+            "timestamps": ["createdAt", "updatedAt", "lastHealthCheckAt", "lastRuntimeConfigCheckAt", "lastSharePointHostingVerificationAt", "lastAdminLiveReadAt", "lastAdminSyncAt", "lastBackupAt"]
+          },
+          "indexes": [
+            { "name": "_id_", "key": { "_id": 1 }, "unique": true },
+            { "name": "siteCode_1", "key": { "siteCode": 1 }, "unique": false },
+            { "name": "storageBackend_1", "key": { "storageBackend": 1 }, "unique": false },
+            { "name": "storageBackend_1_updatedAt_-1", "key": { "storageBackend": 1, "updatedAt": -1 }, "unique": false },
+            { "name": "builderSiteId_1", "key": { "builderSiteId": 1 }, "unique": false },
+            { "name": "mongoSiteId_1_safeCollectionName_1", "key": { "mongoSiteId": 1, "safeCollectionName": 1 }, "unique": false },
+            { "name": "siteIdentityKey_1", "key": { "siteIdentityKey": 1 }, "unique": true, "partialFilterExpression": { "siteIdentityKey": { "$exists": true } } },
+            { "name": "status_1_updatedAt_-1", "key": { "status": 1, "updatedAt": -1 }, "unique": false },
+            { "name": "versionStatus_1_updatedAt_-1", "key": { "versionStatus": 1, "updatedAt": -1 }, "unique": false },
+            { "name": "backupStatus_1_updatedAt_-1", "key": { "backupStatus": 1, "updatedAt": -1 }, "unique": false },
+            { "name": "maintenanceSchedule.backup.enabled_1_maintenanceSchedule.backup.nextRunAt_1", "key": { "maintenanceSchedule.backup.enabled": 1, "maintenanceSchedule.backup.nextRunAt": 1 }, "unique": false },
+            { "name": "maintenanceSchedule.healthCheck.enabled_1_maintenanceSchedule.healthCheck.nextRunAt_1", "key": { "maintenanceSchedule.healthCheck.enabled": 1, "maintenanceSchedule.healthCheck.nextRunAt": 1 }, "unique": false }
+          ]
+        },
+        {
+          "name": "auditlogs",
+          "model": "AuditLog",
+          "documentCount": 57,
+          "sizeBytes": 62370,
+          "maxBsonBytes": 10009,
+          "fields": ["action", "entityType", "entityId", "actor", "requestId", "result", "error", "before", "after", "metadata", "createdAt", "updatedAt"],
+          "indexNames": ["_id_", "action_1", "entityType_1", "createdAt_-1", "entityType_1_entityId_1_createdAt_-1"],
+          "retentionPolicy": null
+        },
+        {
+          "name": "jobs",
+          "model": "Job",
+          "documentCount": 0,
+          "fieldsFromModel": ["type", "siteId", "payload", "status", "executionMode", "connectorMode", "operationPolicy", "connectorStatusLabel", "connectorBlocker", "progressPercent", "attempt", "maxAttempts", "nextRetryAt", "startedAt", "finishedAt", "errorCode", "errorMessage", "errorDetails", "evidence", "result", "targetPaths", "requiresApproval", "approvalSummary", "approvalSnapshot", "approvalExpiresAt", "approvalRequestedAt", "approvalRequestedBy", "approvedAt", "approvedBy", "rejectedAt", "rejectedBy", "approvalResult", "createdBy", "logs", "createdAt", "updatedAt"],
+          "indexNames": ["_id_", "type_1", "siteId_1", "status_1", "requiresApproval_1", "status_1_createdAt_1", "executionMode_1", "connectorMode_1"],
+          "workerSafety": { "atomicClaim": true, "lease": false, "staleRunningRecovery": false, "maxAttemptsEnforced": false, "automaticRetryImplemented": false }
+        },
+        {
+          "name": "monitoringalerts",
+          "model": "MonitoringAlert",
+          "documentCount": 0,
+          "fieldsFromModel": ["fingerprint", "severity", "category", "status", "title", "message", "siteId", "firstDetectedAt", "lastDetectedAt", "acknowledgedAt", "acknowledgedBy", "metadata", "createdAt", "updatedAt"],
+          "indexNames": ["_id_", "fingerprint_1", "severity_1", "category_1", "status_1", "lastDetectedAt_1", "status_1_severity_1_lastDetectedAt_-1", "category_1_status_1_lastDetectedAt_-1"]
+        },
+        {
+          "name": "releases",
+          "model": "Release",
+          "documentCount": 7,
+          "sizeBytes": 5231,
+          "maxBsonBytes": 1009,
+          "fields": ["name", "version", "releaseType", "notes", "artifactRef", "artifactValidation", "status", "createdBy", "createdAt", "updatedAt"],
+          "indexNames": ["_id_", "version_1", "createdAt_-1"]
+        },
+        {
+          "name": "siteadminsnapshots",
+          "model": "SiteAdminSnapshot",
+          "documentCount": 8,
+          "sizeBytes": 59922,
+          "maxBsonBytes": 7569,
+          "fields": ["siteId", "jobId", "capturedAt", "capturedBy", "connectorMode", "siteCollectionAdmins", "ownersGroupAdmins", "txtAdmins", "uniqueAdmins", "adminDifferences", "normalizedCounts", "rawCounts", "sourceStatus", "syncStatus", "syncError", "warnings", "evidence", "targetSiteUrl", "createdAt", "updatedAt"],
+          "indexNames": ["_id_", "siteId_1", "jobId_1", "siteId_1_capturedAt_-1"],
+          "retentionPolicy": null
+        },
+        {
+          "name": "sitebackups",
+          "model": "SiteBackup",
+          "role": "HUB backup operation/evidence record; not the Builder backup payload",
+          "documentCount": 0,
+          "fieldsFromModel": ["siteId", "jobId", "backupId", "status", "restoreStatus", "lastRestoreJobId", "storageBackend", "connectorMode", "location", "sizeBytes", "checksum", "evidence", "createdBy", "createdAt", "updatedAt"],
+          "indexNames": ["_id_", "siteId_1", "jobId_1", "backupId_1", "restoreStatus_1", "lastRestoreJobId_1", "siteId_1_createdAt_-1"]
+        },
+        {
+          "name": "siteversiondeployments",
+          "model": "SiteVersionDeployment",
+          "documentCount": 1,
+          "sizeBytes": 2091,
+          "maxBsonBytes": 2091,
+          "fields": ["siteId", "releaseId", "jobId", "deploymentKind", "fromVersion", "toVersion", "status", "triggeredBy", "startedAt", "finishedAt", "rollbackReason", "verification", "logLines", "error", "createdAt", "updatedAt"],
+          "indexNames": ["_id_", "siteId_1", "releaseId_1", "jobId_1", "deploymentKind_1", "siteId_1_createdAt_-1"]
+        }
+      ],
+      "integrity": {
+        "managedSites": 4,
+        "duplicateSiteCodes": { "schedule": 2, "demo-training": 2 },
+        "duplicateSiteIdentityKeys": 0,
+        "duplicateBuilderSiteIds": 0,
+        "duplicateMongoSiteIds": 0,
+        "duplicateSafeCollectionNames": 0,
+        "sitesMissingBuilderSiteId": 4,
+        "sitesMissingMongoSiteId": 4,
+        "sitesMissingSafeCollectionName": 4,
+        "sitesMissingBackendApiUrl": 4,
+        "legacySiteDocumentsMissingStorageBackend": 2,
+        "orphanSnapshotSiteReferences": 0,
+        "orphanDeploymentSiteReferences": 0,
+        "orphanDeploymentReleaseReferences": 0,
+        "mixedBuilderRegistryDocumentsInHubSites": 0
+      }
+    }
+  ],
+  "crossDatabaseIdentityReconciliation": {
+    "builderRegistry": [{ "siteId": "local-dev-site", "safeCollectionName": "site_local_dev_site_6737a6f8b4", "database": "site_builder_dev" }],
+    "hubMappingsToBuilderRegistry": 0,
+    "unmatchedBuilderRegistrySites": ["local-dev-site"],
+    "unmatchedHubSiteRecords": 4,
+    "conclusion": "No current control-plane to Builder data-plane identity mapping exists in the reachable local data."
+  },
+  "siteBuilderDataModel": {
+    "driver": "mongodb native driver 7.2.0",
+    "configuredWriteConcern": { "w": "majority", "j": true, "retryWrites": true },
+    "databaseSelection": "MONGODB_DB_NAME explicitly selects the database even when URI contains a database",
+    "physicalCollectionNameAlgorithm": "SITE_COLLECTION_PREFIX + sanitized slug/siteId + first 10 hex chars of SHA-256; maximum 96 characters",
+    "optimisticConcurrency": "expectedVersion required; initial create expects 0; persisted versions start at 1",
+    "deleteSemantics": "soft delete in the per-site document; registry remains",
+    "writeAtomicity": "revision insert, main document mutation, registry touch and audit insert are separate operations; no transaction",
+    "batchAtomicity": "sequential best-effort; HTTP 207 for partial failure",
+    "backupStorage": "one full snapshot package in one BSON document in the site's physical collection under scope=backups; application limit 8 MiB",
+    "restoreAtomicity": "sequential legacy-object overwrites; partial restore is possible",
+    "legacyMappings": [
+      { "file": "master_config.txt", "kind": "singleton", "scope": "config", "entityId": "master" },
+      { "file": "users_data.txt", "kind": "list", "scope": "admins" },
+      { "file": "events_data.txt", "kind": "list-with-settings", "scope": "events" },
+      { "file": "nav_data.txt", "kind": "list", "scope": "navigation" },
+      { "file": "site_content.txt", "kind": "singleton", "scope": "content" },
+      { "file": "theme_data.txt", "kind": "singleton", "scope": "design" },
+      { "file": "widgets_data.txt", "kind": "singleton", "scope": "widgets" },
+      { "file": "external_links.txt", "kind": "list", "scope": "externalLinks" },
+      { "file": "gantt_data.txt", "kind": "singleton", "scope": "gantt" }
+    ]
+  },
+  "apiSurfaces": {
+    "siteBuilder": {
+      "publicHealth": ["GET /healthz", "GET /api/healthz"],
+      "authorizationBoundary": "all /api routes use one global ADMIN_API_KEY; no site-scoped authorization",
+      "routes": [
+        "GET|POST /api/sites",
+        "GET /api/sites/:siteId",
+        "GET|POST /api/sites/:siteId/backups",
+        "GET|DELETE /api/sites/:siteId/backups/:backupId",
+        "POST /api/sites/:siteId/backups/:backupId/restore",
+        "GET /api/sites/:siteId/data/:scope",
+        "GET|PUT|PATCH|DELETE /api/sites/:siteId/data/:scope/:entityId",
+        "POST /api/sites/:siteId/data/batch-read",
+        "POST /api/sites/:siteId/data/batch-write",
+        "GET|PUT /api/sites/:siteId/legacy-object",
+        "POST /api/sites/:siteId/legacy/batch-read",
+        "POST /api/sites/:siteId/legacy/batch-write"
+      ]
+    },
+    "hub": {
+      "bodyLimit": "1 MiB",
+      "routeRoots": ["/api/auth", "/api/diagnostics", "/api/sites", "/api/releases", "/api/backups", "/api/version", "/api/jobs", "/api/monitoring", "/api/audit", "/api/operations", "/api/access"],
+      "builderIntegration": "server-to-server HTTP to Site Builder API with X-API-Key resolved from an environment-variable reference",
+      "directBuilderDatabaseAccess": false
+    },
+    "routeCollision": {
+      "path": "/api/sites",
+      "severity": "critical if served on one origin without namespace",
+      "reason": "HUB managed-site documents and Builder registry documents have incompatible identity and response contracts"
+    }
+  },
+  "runtimeConfiguration": {
+    "siteBuilderLocalFrontend": { "storageBackend": "mongo", "siteId": "local-dev-site", "backendApiOrigin": "http://127.0.0.1:3001", "localFileBridge": true },
+    "siteBuilderLocalServer": { "mongoHost": "127.0.0.1:27017", "uriDatabase": "site_builder_dev", "explicitDatabase": "site_builder_dev", "uriReplicaSet": "rs0", "directConnection": true, "port": 3001, "apiKeyConfigured": true, "siteCollectionPrefix": "site_" },
+    "siteBuilderDist": { "storageBackend": "txt", "siteId": "schedule", "backendApiUrl": "", "runtimeConfigRequired": true, "sensitiveLiteralScan": "no configured local Builder key found" },
+    "hubServer": { "mongoHost": "127.0.0.1:27017", "databaseFromUri": "sitebuilder_hub", "port": 4100, "authEnabled": false, "jobWorkerEnabled": true, "maintenanceSchedulerEnabled": true, "sharePointWriteEnabled": false, "builderBackendConfigured": false },
+    "hubClient": { "port": 5177, "defaultApiBase": "http://localhost:4100/api" },
+    "importantContractDifference": "Builder backendApiUrl is an origin/base without /api because the client appends /api/sites; HUB client API base already includes /api."
+  },
+  "identityAndAuthorization": {
+    "builderRegistryIdentity": "string siteId plus unique safeCollectionName",
+    "builderDataIdentity": "siteId + scope + entityId, physically enforced by deterministic _id inside a site collection",
+    "hubManagedSiteIdentity": "ObjectId _id plus siteIdentityKey; siteCode is intentionally non-unique",
+    "hubBuilderMappingFields": ["builderSiteId", "mongoSiteId", "safeCollectionName", "mongoDatabase", "runtimeConfigStatus.builderSiteId", "mongoBackendStatus.siteId"],
+    "frontendAdminIdentity": "SharePoint current user and admin lists control UI behavior, but are not cryptographically bound to Builder API authorization",
+    "currentHubLocalAuth": "AUTH_ENABLED=false grants the local fallback admin context",
+    "currentHubEnabledAuthRisk": "browser-supplied SharePoint identity headers can grant admin and a site admin match grants HUB-wide admin; headers are not independently verified by this service",
+    "currentBuilderBrowserAuthGap": "production artifacts intentionally contain no API key, while Builder API requires ADMIN_API_KEY; direct production browser access cannot authenticate under current code unless an unverified external proxy injects authorization"
+  },
+  "collisionMatrix": [
+    { "type": "collection", "name": "sites", "current": "safe only because databases differ", "sameDatabaseImpact": "catastrophic schema/query/index collision", "target": "keep fully qualified sitebuilder_hub.sites and sitebuilder_site_data.sites" },
+    { "type": "index", "name": "siteId_1 and safeCollectionName_1", "current": "unique in Builder only", "sameDatabaseImpact": "creation fails because multiple HUB documents omit these fields", "target": "separate logical databases" },
+    { "type": "api", "name": "/api/sites", "current": "different services/origins", "sameOriginImpact": "ambiguous incompatible contracts", "target": "/api/site-data/v1 for data plane plus time-boxed compatibility mount" },
+    { "type": "identifier", "name": "siteId", "current": "Builder string versus HUB ObjectId references", "impact": "unsafe implicit joins", "target": "explicit immutable mapping record/fields, never infer from siteCode" },
+    { "type": "backup", "name": "backups", "current": "Builder stores payload; HUB stores evidence", "impact": "operators may mistake evidence for recoverable data", "target": "distinct labels and validation of restorable payload" },
+    { "type": "configuration", "name": "backendApiUrl", "current": "Builder expects no /api; HUB client expects /api", "impact": "double-/api paths or wrong origin", "target": "explicit dataApiBaseUrl and versioned namespace" },
+    { "type": "audit", "name": "audit logs", "current": "two unrelated schemas without retention", "impact": "duplicate/unbounded evidence and unclear authority", "target": "preserve both; correlate by request/operation id; define retention" }
+  ],
+  "firmTarget": {
+    "deployment": "one HUB-owned authenticated TLS three-member MongoDB replica set (or managed equivalent) with tested backups and point-in-time recovery",
+    "controlDatabase": "sitebuilder_hub",
+    "siteDataDatabase": "sitebuilder_site_data",
+    "collectionStrategy": "preserve current collection names and BSON shapes; database qualification supplies ownership and prevents the sites collision",
+    "dataAccess": "HUB owns the deployment and credentials; control-plane models use Mongoose against sitebuilder_hub; Site Builder repository code remains native-driver based against sitebuilder_site_data",
+    "api": "HUB exposes the data plane under /api/site-data/v1; old /api/sites contracts remain behind a dedicated compatibility base until all deployed runtimes are upgraded",
+    "authorization": "verified HUB identity exchanged for short-lived site-scoped data tokens; no raw Mongo or global Builder key in browsers",
+    "migrationStyle": "copy, verify, write freeze, final delta/copy, atomic route/config switch; no general dual writes",
+    "rollback": "old deployment and old API remain intact and write-sealed; rollback before new writes is a route flip, after new writes requires an audited reverse delta before any flip"
+  },
+  "evidenceFiles": {
+    "siteBuilder": [
+      "server/src/config/env.js",
+      "server/src/db/mongo.js",
+      "server/src/auth/apiKey.js",
+      "server/src/app.js",
+      "server/src/routes/siteRoutes.js",
+      "server/src/repository/SiteDataRepository.js",
+      "server/src/repository/LegacyCompatibilityRepository.js",
+      "src/services/storage/runtimeConfig.js",
+      "src/services/storage/storageBackend.js",
+      "src/services/storage/backendApiClient.js",
+      "src/services/storage/LegacyObjectStorageAdapter.js",
+      "scripts/deploymentArtifacts.mjs",
+      "scripts/build-production.mjs"
+    ],
+    "hub": [
+      "server/src/config/env.ts",
+      "server/src/db/mongo.ts",
+      "server/src/db/siteIndexes.ts",
+      "server/src/app.ts",
+      "server/src/models/Site.ts",
+      "server/src/models/Job.ts",
+      "server/src/models/AuditLog.ts",
+      "server/src/models/SiteBackup.ts",
+      "server/src/models/SiteAdminSnapshot.ts",
+      "server/src/models/SiteVersionDeployment.ts",
+      "server/src/services/builderMongoHealth.service.ts",
+      "server/src/services/mongoSiteCreation.service.ts",
+      "server/src/services/jobs.service.ts",
+      "server/src/services/jobs.worker.ts",
+      "server/src/services/runtimeConfig.service.ts",
+      "client/src/api.ts"
+    ]
+  }
+}
