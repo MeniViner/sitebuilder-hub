@@ -43,6 +43,10 @@ for (const file of ["package.json", "package-lock.json"]) {
 execFileSync("npm", ["ci", "--omit=dev", "--ignore-scripts"], { cwd: serverRoot, stdio: "inherit" });
 await rm(path.join(deployRoot, "package.json"));
 await rm(path.join(deployRoot, "package-lock.json"));
+// The source-only file:.. package is not imported by compiled server code and npm
+// represents it as a macOS symlink. It cannot be copied to Windows and is not a
+// runtime dependency, so remove that installation artifact after lockfile install.
+await rm(path.join(serverRoot, "node_modules", "sitebuilder-hub"), { recursive: true, force: true });
 
 const serverModules = await walk(path.join(serverRoot, "node_modules"));
 const forbiddenNative = serverModules.filter((file) => /\.(?:node|dylib)$/i.test(file));
