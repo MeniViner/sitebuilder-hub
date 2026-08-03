@@ -16,6 +16,7 @@
     "check": "npm run build",
     "validate:source": "node scripts/validate-source-consistency.mjs",
     "package:windows-deploy": "node scripts/build-windows-deployment-bundle.mjs",
+    "package:canonical-source": "node scripts/build-canonical-source-archive.mjs",
     "test": "vitest run",
     "test:browser": "playwright test",
     "test:watch": "vitest",
