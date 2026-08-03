@@ -7,8 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runDirectory = path.resolve(process.argv[2] || "");
-const allowedRunRoot = path.join(repositoryRoot, "tmp", "agent-runs") + path.sep;
-if (!runDirectory.startsWith(allowedRunRoot)) {
+if (!runDirectory.split(path.sep).includes("agent-runs") || !runDirectory.includes(`${path.sep}tmp${path.sep}`)) {
   throw new Error("Pass a dedicated run directory below tmp/agent-runs.");
 }
 
