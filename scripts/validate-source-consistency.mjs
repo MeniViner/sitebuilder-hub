@@ -57,7 +57,7 @@ for (const manifest of ["package.json", "server/package.json", "client/package.j
   for (const [name, script] of Object.entries(packageJson.scripts || {})) {
     for (const target of commandTargets(script)) {
       const relative = path.normalize(path.join(path.dirname(manifest), target));
-      if (relative.includes(`${path.sep}node_modules${path.sep}`)) continue;
+      if (relative.split(path.sep).includes("node_modules")) continue;
       if (!await exists(path.join(root, relative))) failures.push(`Missing npm script target (${manifest}:${name}): ${relative}`);
     }
   }
