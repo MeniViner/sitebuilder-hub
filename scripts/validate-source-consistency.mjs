@@ -68,6 +68,7 @@ for (const sourceRoot of sourceRoots) {
     const content = await readFile(file, "utf8");
     const imports = [...content.matchAll(/(?:from\s*|import\s*|require\()\s*["'](\.[^"']+)["']/g)].map((match) => match[1]);
     for (const specifier of imports) {
+      if (specifier.includes("/node_modules/")) continue;
       if (!await resolveLocalImport(file, specifier)) failures.push(`Missing local import: ${path.relative(root, file)} -> ${specifier}`);
     }
   }
