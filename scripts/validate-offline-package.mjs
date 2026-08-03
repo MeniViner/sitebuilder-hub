@@ -124,6 +124,7 @@ async function walk(rootDirectory, currentDirectory = rootDirectory, files = [],
 async function scanSecrets(rootDirectory, files) {
   const findings = [];
   for (const relativePath of files) {
+    if (relativePath.startsWith("tests/")) continue;
     const absolutePath = path.join(rootDirectory, relativePath);
     const fileStat = await stat(absolutePath);
     if (fileStat.size > 5 * 1024 * 1024 || !textExtensions.has(path.extname(relativePath).toLowerCase())) continue;

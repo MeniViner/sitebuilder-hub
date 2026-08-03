@@ -29,6 +29,9 @@ await rm(sourceTar, { force: true });
 execFileSync("git", ["archive", "--format=tar", "--output", sourceTar, sourceCommit], { cwd: repositoryRoot });
 execFileSync("tar", ["-xf", sourceTar, "-C", sourceRoot]);
 await rm(sourceTar, { force: true });
+await rm(path.join(sourceRoot, "dev-monitoring.err.log"), { force: true });
+await rm(path.join(sourceRoot, "dev-monitoring.out.log"), { force: true });
+await rm(path.join(sourceRoot, "mds", "artifacts"), { recursive: true, force: true });
 await cp(path.join(repositoryRoot, "client", "dist"), path.join(sourceRoot, "client", "dist"), { recursive: true });
 await cp(path.join(repositoryRoot, "server", "dist"), path.join(sourceRoot, "server", "dist"), { recursive: true });
 
