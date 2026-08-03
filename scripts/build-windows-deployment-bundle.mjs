@@ -35,6 +35,9 @@ await rm(deployRoot, { recursive: true, force: true });
 await mkdir(serverRoot, { recursive: true });
 await cp(path.join(repositoryRoot, "client", "dist"), path.join(deployRoot, "client-dist"), { recursive: true });
 await cp(path.join(repositoryRoot, "server", "dist"), path.join(serverRoot, "dist"), { recursive: true });
+for (const relative of [".env.example", "client/.env.example", "server/.env.example"]) {
+  await cp(path.join(repositoryRoot, relative), path.join(deployRoot, "environment-examples", relative));
+}
 for (const file of ["package.json", "package-lock.json"]) {
   await cp(path.join(repositoryRoot, "server", file), path.join(serverRoot, file));
   await cp(path.join(repositoryRoot, file), path.join(deployRoot, file));
@@ -75,7 +78,7 @@ const compatibility = {
 };
 await writeFile(path.join(deployRoot, "SOURCE-COMMIT.txt"), `${sourceCommit}\n`, "utf8");
 await writeFile(path.join(deployRoot, "WINDOWS-COMPATIBILITY.json"), `${JSON.stringify(compatibility, null, 2)}\n`, "utf8");
-await writeFile(path.join(deployRoot, "README-FIRST.md"), `# HUB Windows deployment\n\nCopy every listed file exactly as mapped in \`REPLACE-MANIFEST.json\`. The client is already built; do not run npm, Vite, TypeScript, Rollup, esbuild, or a client build on Windows. The server is already compiled and includes locked production runtime dependencies for Node 18.12.1.\n\nBefore starting the server, copy values from the included environment examples separately and set the deployed server environment. Do not copy a real .env from this package because none is included.\n`, "utf8");
+await writeFile(path.join(deployRoot, "README-FIRST.md"), `# HUB Windows deployment\n\nCopy every listed file exactly as mapped in \`REPLACE-MANIFEST.json\`. The client is already built; do not run npm, Vite, TypeScript, Rollup, esbuild, or a client build on Windows. The server is already compiled and includes locked production runtime dependencies for Node 18.12.1.\n\nThe three templates are under \`environment-examples/\`. Copy only their required settings into the deployed server environment. No real .env is included.\n`, "utf8");
 const generatedFiles = await walk(deployRoot);
 const manifest = [];
 for (const file of generatedFiles.sort()) {
