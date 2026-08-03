@@ -15,6 +15,7 @@
     "build:client": "npm --prefix client run build",
     "check": "npm run build",
     "validate:source": "node scripts/validate-source-consistency.mjs",
+    "package:windows-deploy": "node scripts/build-windows-deployment-bundle.mjs",
     "test": "vitest run",
     "test:browser": "playwright test",
     "test:watch": "vitest",
