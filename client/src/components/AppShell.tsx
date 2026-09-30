@@ -1,5 +1,7 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useLayoutEffect, useState } from "react";
 import type { HubAuthUser } from "../domain/hubDomain";
+import { useHubViewMode } from "./HubViewMode";
+import { LegacyAppShell } from "./LegacyAppShell";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 
@@ -16,18 +18,39 @@ export function AppShell({
   authChecking?: boolean;
   onLogout?: () => void;
 }) {
+  const { mode } = useHubViewMode();
   const [navOpen, setNavOpen] = useState(false);
   const backgroundInteractionState = navOpen ? { inert: "" } : {};
+
+  useLayoutEffect(() => {
+    setNavOpen(false);
+  }, [mode]);
+
+  if (mode === "legacy") {
+    return (
+      <LegacyAppShell
+        serverStatus={serverStatus}
+        authUser={authUser}
+        authChecking={authChecking}
+        onLogout={onLogout}
+      >
+        {children}
+      </LegacyAppShell>
+    );
+  }
+
   return (
-    <div className="app-shell-bg normal-product" dir="rtl">
-      <div aria-hidden={navOpen || undefined} {...backgroundInteractionState}>
-        <TopBar serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={onLogout} onOpenNav={() => setNavOpen(true)} />
-        <div className="app-content-shell mx-auto flex w-full max-w-[1440px] gap-6 px-4 py-6 lg:min-h-[calc(100vh-68px)] lg:px-8">
-          <Sidebar />
-          <main className="app-main-content min-w-0 flex-1 pb-8" id="main-content">{children}</main>
+    <div className="app-shell-bg normal-product" dir="rtl" data-hub-shell="modern">
+      <div className="app-shell-frame" aria-hidden={navOpen || undefined} {...backgroundInteractionState}>
+        <Sidebar authUser={authUser} onLogout={onLogout} />
+        <div className="app-workspace-shell">
+          <TopBar serverStatus={serverStatus} authUser={authUser} authChecking={authChecking} onLogout={onLogout} onOpenNav={() => setNavOpen(true)} />
+          <div className="app-content-shell">
+            <main className="app-main-content" id="main-content">{children}</main>
+          </div>
         </div>
       </div>
-      <Sidebar mobileOpen={navOpen} onMobileClose={() => setNavOpen(false)} />
+      <Sidebar authUser={authUser} onLogout={onLogout} mobileOpen={navOpen} onMobileClose={() => setNavOpen(false)} />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { DatabaseBackup, RefreshCw, Rocket, TriangleAlert } from "lucide-react";
+import { DatabaseBackup, RefreshCw, Rocket, TriangleAlert, Workflow } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ActivityRow } from "../components/product/ActivityRow";
 import { ProductPage, ProductSection } from "../components/product/ProductPage";
@@ -32,7 +32,7 @@ export function OperationsPage({ authUser }: { authUser: HubAuthUser }) {
   const releases = overview?.releases.data || [];
 
   return (
-    <ProductPage title="פעולות" description="עדכונים, גיבויים, שחזורים ופעולות שדורשות מעקב." action={<button className="btn btn-secondary" type="button" onClick={() => void load()} disabled={loading}><RefreshCw size={17} />רענון</button>}>
+    <ProductPage icon={Workflow} title="פעולות" description="עדכונים, גיבויים, שחזורים ופעולות שדורשות מעקב." action={<button className="btn btn-secondary" type="button" onClick={() => void load()} disabled={loading}><RefreshCw size={17} />רענון</button>}>
       <div className="normal-operation-groups">
         <Link className="normal-operation-group" to="/sites"><Rocket size={20} /><span><strong>עדכונים ופריסות</strong><small>{releases.length ? `${releases.length} גרסאות מוכרות` : "פתיחת אתר לעדכון"}</small></span></Link>
         <Link className="normal-operation-group" to="/sites"><DatabaseBackup size={20} /><span><strong>גיבויים ושחזורים</strong><small>{recoverable ? `${recoverable} גיבויים מאומתים לשחזור` : "אין כרגע גיבוי מאומת לשחזור"}</small></span></Link>

@@ -2,6 +2,9 @@
   "name": "sitebuilder-hub",
   "private": true,
   "version": "0.1.1",
+  "engines": {
+    "node": "18.12.1"
+  },
   "scripts": {
     "install:all": "npm install && npm --prefix server install && npm --prefix client install",
     "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
@@ -11,6 +14,9 @@
     "build:server": "npm --prefix server run build",
     "build:client": "npm --prefix client run build",
     "check": "npm run build",
+    "validate:source": "node scripts/validate-source-consistency.mjs",
+    "package:windows-deploy": "node scripts/build-windows-deployment-bundle.mjs",
+    "package:canonical-source": "node scripts/build-canonical-source-archive.mjs",
     "test": "vitest run",
     "test:browser": "playwright test",
     "test:watch": "vitest",

@@ -1,0 +1,42 @@
+.hub-view-toggle {
+  align-items: center;
+  gap: 0.42rem;
+  min-height: 2.5rem;
+  min-width: 7.5rem;
+  white-space: nowrap;
+  transition-property: background-color, border-color, color, transform;
+  transition-duration: 140ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.hub-view-toggle:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.hub-view-toggle-mobile-slot {
+  padding: 0 0.85rem 0.85rem;
+}
+
+.hub-view-toggle-mobile {
+  justify-content: center;
+  min-height: 2.75rem;
+  width: 100%;
+}
+
+@media (max-width: 1023px) {
+  .hub-view-toggle-desktop {
+    display: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  html[data-hub-ui-mode="legacy"] .hub-mobile-menu {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-view-toggle {
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,6 +1,7 @@
 import { AlertTriangle, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useDialogFocus } from "../hooks/useDialogFocus";
+import { ModalPortal } from "./ModalPortal";
 
 export function ProtectedActionDialog({
   open,
@@ -60,22 +61,23 @@ export function ProtectedActionDialog({
     !busy;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-      <div ref={panelRef} className="surface-card flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} tabIndex={-1}>
-        <header className="flex items-start justify-between gap-3 border-b divider px-5 py-4">
-          <div className="flex items-start gap-3">
-            <span className="mt-1" style={{ color: "var(--danger)" }}>
+    <ModalPortal>
+    <div className="dialog-layer">
+      <div ref={panelRef} className="dialog-panel dialog-panel-protected" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} tabIndex={-1}>
+        <header className="dialog-header dialog-header-split">
+          <div className="dialog-title-group">
+            <span className="dialog-status-icon" style={{ color: "var(--danger)" }}>
               <AlertTriangle size={20} />
             </span>
             <div>
-              <h2 id={titleId} className="text-lg font-bold" style={{ color: "var(--text-strong)" }}>{title}</h2>
-              <p id={descriptionId} className="mt-1 text-sm muted">{description}</p>
+              <h2 id={titleId}>{title}</h2>
+              <p id={descriptionId}>{description}</p>
             </div>
           </div>
           <button className="icon-btn" type="button" onClick={onClose} aria-label="סגור" disabled={busy}><X size={16} /></button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        <div className="dialog-body">
           {risks.length ? (
             <div className="mb-4 rounded-lg border p-3" style={{ background: "var(--danger-soft)", borderColor: "color-mix(in srgb, var(--danger) 38%, var(--border))" }}>
               <p className="field-label" style={{ color: "var(--danger)" }}>סיכונים לפני אישור</p>
@@ -107,7 +109,7 @@ export function ProtectedActionDialog({
           </div>
         </div>
 
-        <footer className="flex flex-wrap items-center justify-between gap-3 border-t divider px-5 py-4" style={{ background: "var(--surface)" }}>
+        <footer className="dialog-footer dialog-footer-split">
           <div className="min-w-0">
             <button className="btn btn-secondary" type="button" onClick={onClose} disabled={busy}>ביטול</button>
             {confirmDisabledReason ? (
@@ -120,5 +122,6 @@ export function ProtectedActionDialog({
         </footer>
       </div>
     </div>
+    </ModalPortal>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, DatabaseBackup, FolderOpen, Plus, RefreshCw, Rocket } from "lucide-react";
+import { ArrowLeft, DatabaseBackup, FolderOpen, Gauge, Plus, RefreshCw, Rocket } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ActivityRow } from "../components/product/ActivityRow";
 import { NumberValue } from "../components/product/BidiValue";
@@ -39,6 +39,7 @@ export function SimpleDashboardPage({ authUser }: { authUser: HubAuthUser }) {
 
   return (
     <ProductPage
+      icon={Gauge}
       title="לוח בקרה"
       description="מה דורש תשומת לב ומה אפשר לעשות עכשיו."
       action={<button className="btn btn-secondary" type="button" onClick={() => void load()} disabled={loading}><RefreshCw size={17} />רענון</button>}

@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, ArrowLeft, DatabaseBackup, ExternalLink, FolderTree, MoreHorizontal, RefreshCw, Shield, UserPlus } from "lucide-react";
+import { Activity, ArrowLeft, Building2, DatabaseBackup, ExternalLink, FolderTree, MoreHorizontal, RefreshCw, Shield, UserPlus } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ProtectedActionDialog } from "../components/ProtectedActionDialog";
@@ -113,8 +113,8 @@ export function SiteWorkspacePage({ authUser }: { authUser: HubAuthUser }) {
     finally { setBusy(false); }
   };
 
-  if (loading && !site) return <ProductPage title="טוען אתר" description="אוספים את המידע החי והמידע האחרון שנשמר."><div className="normal-skeleton-list"><span /><span /><span /></div></ProductPage>;
-  if (error || !site || !condition) return <ProductPage title="האתר לא זמין" description="לא הצלחנו לפתוח את סביבת האתר."><div className="normal-empty-card"><h2>לא ניתן לטעון את האתר</h2><p>{error || "המזהה אינו מוכר"}</p><button className="btn btn-secondary mt-4" type="button" onClick={() => void load()}>נסה שוב</button></div></ProductPage>;
+  if (loading && !site) return <ProductPage icon={Building2} title="טוען אתר" description="אוספים את המידע החי והמידע האחרון שנשמר."><div className="normal-skeleton-list"><span /><span /><span /></div></ProductPage>;
+  if (error || !site || !condition) return <ProductPage icon={Building2} title="האתר לא זמין" description="לא הצלחנו לפתוח את סביבת האתר."><div className="normal-empty-card"><h2>לא ניתן לטעון את האתר</h2><p>{error || "המזהה אינו מוכר"}</p><button className="btn btn-secondary mt-4" type="button" onClick={() => void load()}>נסה שוב</button></div></ProductPage>;
 
   const partialFailure = [data.backups, data.access, data.deployments, data.activity].some((slice) => slice.status !== "ready");
   const backups = data.backups.data || [];
@@ -122,6 +122,7 @@ export function SiteWorkspacePage({ authUser }: { authUser: HubAuthUser }) {
 
   return (
     <ProductPage
+      icon={Building2}
       title={site.displayName}
       description={condition.reason || "האתר מוכן לעבודה."}
       eyebrow="אתר מנוהל"

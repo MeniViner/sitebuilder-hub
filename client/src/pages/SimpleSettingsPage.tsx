@@ -1,4 +1,4 @@
-import { KeyRound, MonitorCog, Moon, Sun } from "lucide-react";
+import { KeyRound, MonitorCog, Moon, Settings2, Sun } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ProductPage, ProductSection } from "../components/product/ProductPage";
@@ -28,7 +28,7 @@ export function SimpleSettingsPage({
   };
 
   return (
-    <ProductPage title="הגדרות" description="מראה, תפקיד וחיבור המשתמש הנוכחי.">
+    <ProductPage icon={Settings2} title="הגדרות" description="מראה, תפקיד וחיבור המשתמש הנוכחי.">
       <div className="normal-settings-grid">
         <ProductSection title="מראה">
           <div className="normal-theme-options" role="group" aria-label="בחירת ערכת נושא">

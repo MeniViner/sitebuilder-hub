@@ -1,0 +1,10 @@
+# PILOT_ONLY. Add to the existing HUB server .env with the Gateway disabled first.
+SITE_BUILDER_PILOT_GATEWAY_ENABLED=false
+SITE_BUILDER_PILOT_GATEWAY_PREFIX=/builder-api
+SITE_BUILDER_PILOT_GATEWAY_TARGET=http://127.0.0.1:3001
+SITE_BUILDER_PILOT_GATEWAY_ALLOWED_SITE_IDS=alphateam-mongo-pilot
+SITE_BUILDER_PILOT_GATEWAY_ALLOWED_ORIGINS=https://portal.army.idf
+SITE_BUILDER_PILOT_GATEWAY_API_KEY_REF=SITE_BUILDER_BACKEND_API_KEY
+
+# Server-only secret. Preserve the existing value or set it securely on the server.
+SITE_BUILDER_BACKEND_API_KEY=<SET_ON_SERVER_DO_NOT_COPY_TO_FRONTEND>

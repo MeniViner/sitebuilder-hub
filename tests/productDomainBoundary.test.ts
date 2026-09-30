@@ -17,6 +17,12 @@ const normalUiFiles = [
   ...normalBusinessPages,
   "client/src/pages/SimpleSettingsPage.tsx",
   "client/src/components/AppShell.tsx",
+  "client/src/components/HubViewMode.tsx",
+  "client/src/components/HubViewToggle.tsx",
+  "client/src/components/LegacyAppShell.tsx",
+  "client/src/components/LegacySidebar.tsx",
+  "client/src/components/LegacyTopBar.tsx",
+  "client/src/components/LegacyThemeToggle.tsx",
   "client/src/components/TopBar.tsx",
   "client/src/components/product/ActivityRow.tsx",
   "client/src/components/product/BidiValue.tsx",
@@ -100,11 +106,11 @@ describe("normal-product domain boundary", () => {
 });
 
 describe("normal-product CSS boundary", () => {
-  it("ships only declared Assistant weights and avoids synthetic font weights", () => {
+  it("ships the declared local Heebo weights and avoids synthetic font weights", () => {
     const main = read("client/src/main.tsx");
     const styles = read("client/src/styles/index.css");
-    expect(main.match(/@fontsource\/assistant\/hebrew-(400|600|700)\.css/g)).toHaveLength(3);
-    expect(main).not.toContain("assistant/hebrew-500.css");
+    expect(main.match(/@fontsource\/heebo\/hebrew-(400|500|600|700|800)\.css/g)).toHaveLength(5);
+    expect(main).not.toContain("heebo/hebrew-900.css");
     expect(styles).not.toMatch(/font-weight:\s*650/);
   });
 
