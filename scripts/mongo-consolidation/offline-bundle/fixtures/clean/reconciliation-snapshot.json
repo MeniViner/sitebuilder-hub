@@ -1,0 +1,47 @@
+{
+  "hubSites": [{
+    "_id": "hub-clean-1",
+    "siteIdentityKey": "identity-clean-1",
+    "siteCode": "CLEAN",
+    "builderSiteId": "builder-clean-1",
+    "safeCollectionName": "site_clean",
+    "storageBackend": "mongo"
+  }],
+  "builderSites": [{
+    "siteId": "builder-clean-1",
+    "siteSlug": "clean",
+    "safeCollectionName": "site_clean",
+    "status": "active",
+    "schemaVersion": 1,
+    "physicalCollectionExists": true
+  }],
+  "physicalCollections": [{
+    "name": "site_clean",
+    "registrySiteId": "builder-clean-1",
+    "exists": true,
+    "documentCount": 1,
+    "wrongSiteDocuments": 0,
+    "invalidVersions": 0,
+    "invalidDeletedAt": 0,
+    "malformedIds": 0,
+    "oversizedBackups": 0,
+    "criticalBackups": 0,
+    "unknownScopes": [],
+    "scopes": { "theme": 1 },
+    "duplicateLogicalDocuments": 0,
+    "minimumVersion": 1,
+    "maximumVersion": 1,
+    "backupDocumentCount": 0,
+    "maximumBackupBsonSize": 0
+  }],
+  "revisions": [],
+  "audits": [],
+  "runtimeConfigs": [{
+    "path": "C:\\EvidenceFixture\\clean\\runtime.json",
+    "siteId": "builder-clean-1",
+    "storageBackend": "mongo",
+    "backendOrigin": "https://offline-fixture.invalid"
+  }],
+  "revisionAggregates": [],
+  "auditAggregates": []
+}

@@ -158,6 +158,21 @@ export function reconcileSnapshot(snapshot: ReconciliationSnapshot, generatedAt 
     if (!audit.siteId || !registryIds.has(audit.siteId)) add("blocker", "audit.site.orphan", subject, "Audit entry references a missing registry site");
     if (!audit.documentKey && !["create-site", "backup", "restore", "admin"].includes(audit.operation || "")) add("warning", "audit.key.missing", subject, "Non-administrative audit entry is missing documentKey");
   });
+  (snapshot.revisionAggregates || []).forEach((aggregate) => {
+    const subject = aggregate.siteId || "[missing-siteId]";
+    if (aggregate.orphanCount) add("blocker", "revision.site.orphan", subject, `${aggregate.orphanCount} revisions reference a missing registry site`);
+    if (aggregate.invalidVersionTransitions) add("blocker", "revision.version.invalid", subject, `${aggregate.invalidVersionTransitions} revisions have invalid version transitions`);
+    if (aggregate.missingDocumentKeys || aggregate.malformedDocumentKeys) add("blocker", "revision.key.invalid", subject, `${aggregate.missingDocumentKeys + aggregate.malformedDocumentKeys} revisions have missing or malformed document keys`);
+    if (aggregate.physicalDocumentsMissing) add("warning", "revision.document.missing", subject, `${aggregate.physicalDocumentsMissing} latest non-delete revisions have no physical document`);
+    if (aggregate.physicalDocumentCheckComplete === false) add("warning", "revision.documentCheck.incomplete", subject, "Physical-document reconciliation was not collected for this aggregate snapshot");
+    if (aggregate.duplicateOperationIds) add("blocker", "revision.operationId.duplicate", subject, `${aggregate.duplicateOperationIds} duplicate revision operation/request IDs were detected`);
+  });
+  (snapshot.auditAggregates || []).forEach((aggregate) => {
+    const subject = aggregate.siteId || "[missing-siteId]";
+    if (aggregate.orphanCount) add("blocker", "audit.site.orphan", subject, `${aggregate.orphanCount} audit entries reference a missing registry site`);
+    if (aggregate.missingDocumentKeys || aggregate.malformedDocumentKeys) add("warning", "audit.key.invalid", subject, `${aggregate.missingDocumentKeys + aggregate.malformedDocumentKeys} audit entries have missing or malformed document keys`);
+    if (aggregate.duplicateOperationIds) add("blocker", "audit.operationId.duplicate", subject, `${aggregate.duplicateOperationIds} duplicate audit operation/request IDs were detected`);
+  });
   const auditCounts = counts(snapshot.audits.filter((row) => row.documentKey).map((row) => `${row.siteId}:${row.documentKey}`));
   const revisionCounts = counts(snapshot.revisions.filter((row) => row.documentKey).map((row) => `${row.siteId}:${row.documentKey}`));
   for (const [key, count] of revisionCounts) if ((auditCounts.get(key) || 0) === 0 && count > 0) add("warning", "revision.audit.inconsistent", key, "Revisions exist without a corresponding document audit entry");

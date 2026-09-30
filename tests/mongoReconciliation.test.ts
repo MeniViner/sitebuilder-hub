@@ -52,6 +52,19 @@ describe("read-only Mongo reconciliation", () => {
     const codes = reconcileSnapshot(snapshot).findings.map((item) => item.code);
     expect(codes).toEqual(expect.arrayContaining(["physical.wrongSite", "physical.version.invalid", "physical.deletedAt.invalid", "physical.id.invalid", "physical.identity.duplicate", "revision.site.orphan", "revision.version.invalid", "revision.document.missing", "audit.site.orphan", "audit.key.missing"]));
   });
+  it("applies revision and audit aggregate findings from validated snapshots", () => {
+    const snapshot = clean();
+    snapshot.revisions = [];
+    snapshot.audits = [];
+    snapshot.revisionAggregates = [{ siteId: "builder-1", count: 4, orphanCount: 0, invalidVersionTransitions: 1, missingDocumentKeys: 1, malformedDocumentKeys: 0, physicalDocumentsMissing: 1, physicalDocumentCheckComplete: false, duplicateOperationIds: 1 }];
+    snapshot.auditAggregates = [{ siteId: "missing", count: 3, orphanCount: 3, missingDocumentKeys: 0, malformedDocumentKeys: 1, duplicateOperationIds: 1 }];
+    const report = reconcileSnapshot(snapshot);
+    expect(report.findings.map((item) => item.code)).toEqual(expect.arrayContaining([
+      "revision.version.invalid", "revision.key.invalid", "revision.document.missing", "revision.documentCheck.incomplete", "revision.operationId.duplicate",
+      "audit.site.orphan", "audit.key.invalid", "audit.operationId.duplicate"
+    ]));
+    expect(report.summary.exitCode).toBe(20);
+  });
   it("detects runtime mismatch/unsafe URL while TXT-only runtime remains informational", () => {
     const snapshot = clean();
     snapshot.hubSites[0].runtimeConfigStatus = { path: "/runtime/runtime-config.json" };

@@ -21,9 +21,23 @@ export function validateEvidenceBundle(bundle) {
   const errors = [];
   if (!bundle || bundle.schemaVersion !== 1) errors.push('$.schemaVersion must equal 1');
   if (!bundle?.collectedAt || Number.isNaN(Date.parse(bundle.collectedAt))) errors.push('$.collectedAt must be an ISO timestamp');
-  for (const section of ['system', 'services', 'ports', 'docker', 'iis', 'mongo', 'runtimeConfigs', 'backups', 'mappingInput']) {
+  if (!bundle?.collectorHostAlias || bundle.collectorHostAlias === 'windows-host') errors.push('$.collectorHostAlias must be an explicit safe environment alias');
+  for (const section of ['system', 'services', 'ports', 'docker', 'iis', 'mongo', 'runtimeConfigs', 'backups', 'mappingInput', 'reconciliationSnapshot']) {
     if (!(section in (bundle || {}))) errors.push(`$.${section} is required`);
   }
+  for (const section of ['hubSites', 'builderSites', 'physicalCollections', 'revisions', 'audits', 'runtimeConfigs']) {
+    if (!Array.isArray(bundle?.reconciliationSnapshot?.[section])) errors.push(`$.reconciliationSnapshot.${section} must be an array`);
+  }
+  if (bundle?.mongo?.available !== true) errors.push('$.mongo.available must be true for a complete production bundle');
+  const numericPhysicalFields = ['documentCount', 'wrongSiteDocuments', 'invalidVersions', 'invalidDeletedAt', 'malformedIds', 'oversizedBackups', 'criticalBackups', 'duplicateLogicalDocuments'];
+  if (Array.isArray(bundle?.reconciliationSnapshot?.physicalCollections)) bundle.reconciliationSnapshot.physicalCollections.forEach((entry, index) => {
+    if (!entry || typeof entry.name !== 'string' || typeof entry.exists !== 'boolean') errors.push(`$.reconciliationSnapshot.physicalCollections[${index}] has invalid identity fields`);
+    numericPhysicalFields.forEach((field) => { if (!Number.isInteger(entry?.[field]) || entry[field] < 0) errors.push(`$.reconciliationSnapshot.physicalCollections[${index}].${field} must be a non-negative integer`); });
+    if (!Array.isArray(entry?.unknownScopes) || !entry?.scopes || typeof entry.scopes !== 'object') errors.push(`$.reconciliationSnapshot.physicalCollections[${index}] has invalid scope aggregates`);
+  });
+  if (Array.isArray(bundle?.reconciliationSnapshot?.runtimeConfigs)) bundle.reconciliationSnapshot.runtimeConfigs.forEach((entry, index) => {
+    if (!entry || typeof entry.path !== 'string' || !entry.path) errors.push(`$.reconciliationSnapshot.runtimeConfigs[${index}].path is required`);
+  });
   for (const location of findSecretViolations(bundle)) errors.push(`${location} contains a likely secret`);
   if (Array.isArray(bundle?.docker)) bundle.docker.forEach((entry, index) => {
     if ('environment' in entry || 'envValues' in entry) errors.push(`$.docker[${index}] must contain environmentNames only`);
@@ -47,9 +61,10 @@ export function scanPowerShellPolicy(source) {
 
 export function generateEvidenceMarkdown(bundle) {
   const count = (value) => Array.isArray(value) ? value.length : value && typeof value === 'object' ? Object.keys(value).length : 0;
+  const serviceCount = ['services', 'processes', 'scheduledTasks'].reduce((sum, key) => sum + count(bundle.services?.[key]), 0);
   return ['# Mongo consolidation production evidence summary', '', `Collected at: ${bundle.collectedAt}`,
     `Collector host alias: ${bundle.collectorHostAlias || 'unavailable'}`, '', '| Category | Records |', '| --- | ---: |',
-    `| Services | ${count(bundle.services)} |`, `| Listening ports | ${count(bundle.ports)} |`,
+    `| Services/processes/tasks | ${serviceCount} |`, `| Listening ports | ${count(bundle.ports)} |`,
     `| Docker containers | ${count(bundle.docker)} |`, `| IIS sites | ${count(bundle.iis)} |`,
     `| Mongo databases | ${count(bundle.mongo?.databases)} |`, `| Runtime configs | ${count(bundle.runtimeConfigs)} |`,
     `| Backup artifacts | ${count(bundle.backups)} |`, '',
@@ -62,9 +77,10 @@ export function normalizePowerShellJson(text, array = false) {
 }
 
 export function loadEvidenceDirectory(directory) {
-  const read = (name) => normalizePowerShellJson(fs.readFileSync(path.join(directory, name), 'utf8'));
+  const read = (name, array = false) => normalizePowerShellJson(fs.readFileSync(path.join(directory, name), 'utf8'), array);
   const meta = read('system.json');
   return { schemaVersion: 1, collectedAt: meta.collectedAt, collectorHostAlias: meta.collectorHostAlias, system: meta.system,
-    services: read('services.json'), ports: read('ports.json'), docker: read('docker.json'), iis: read('iis.json'),
-    mongo: read('mongo.json'), runtimeConfigs: read('runtime-configs.json'), backups: read('backups.json'), mappingInput: read('mapping-input.json') };
+    services: read('services.json'), ports: read('ports.json', true), docker: read('docker.json', true), iis: read('iis.json', true),
+    mongo: read('mongo.json'), runtimeConfigs: read('runtime-configs.json', true), backups: read('backups.json', true),
+    mappingInput: read('mapping-input.json'), reconciliationSnapshot: read('reconciliation-snapshot.json') };
 }
